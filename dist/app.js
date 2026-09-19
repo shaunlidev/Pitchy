@@ -1,97 +1,35 @@
-const form = document.querySelector('#companyForm');
-const slideEl = document.querySelector('#slide');
-const thumbsEl = document.querySelector('#thumbs');
-const pageCount = document.querySelector('#pageCount');
-const qualityScore = document.querySelector('#qualityScore');
-const qualityBar = document.querySelector('#qualityBar');
-const qualityHint = document.querySelector('#qualityHint');
-let current = 0;
-let deck = [];
-
-const escapeHTML = (value = '') => value.replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
-const clean = value => value.trim().replace(/[。；;]+$/, '');
-const splitFacts = value => value.split(/[；;\n]/).map(clean).filter(Boolean);
-const short = (value, fallback = '待补充') => clean(value) || fallback;
-
-function values() {
-  return Object.fromEntries(new FormData(form).entries());
-}
-
-function buildDeck(data) {
-  const traction = splitFacts(data.traction);
-  const uses = splitFacts(data.use);
-  const ask = short(data.ask);
-  const market = short(data.market);
-  return [
-    { theme: 'cover', kicker: 'Company pitch · Draft', title: short(data.name), lead: short(data.oneLiner), body: '<div class="accent-line"></div>' },
-    { theme: 'light', kicker: '客户问题', title: '工厂需要更确定的用能成本', lead: short(data.problem), body: '<div class="accent-line"></div>' },
-    { theme: '', kicker: '解决方案', title: short(data.solution), lead: `面向 ${escapeHTML(short(data.customer))}`, body: '<div class="accent-line"></div>' },
-    { theme: 'teal', kicker: '产品路径', title: '从部署到持续优化', lead: '', body: '<div class="steps"><div class="step"><b>01 快速部署</b><span>标准化硬件减少现场改造</span></div><div class="step"><b>02 实时监测</b><span>追踪能耗、设备与节省金额</span></div><div class="step"><b>03 持续优化</b><span>基于负荷变化调整运行策略</span></div></div>' },
-    { theme: 'light', kicker: '商业模式', title: short(data.model), lead: `客户：${escapeHTML(short(data.customer))}`, body: '<div class="accent-line"></div>' },
-    { theme: '', kicker: '市场机会', title: market === '待补充' ? '<span class="missing">待补充市场</span>' : market, lead: '市场规模与增长率需要可信来源。正式版本应补充 TAM、SAM、SOM 及计算口径。', body: '<div class="accent-line"></div>' },
-    { theme: 'teal', kicker: '业务进展', title: '已有客户正在使用并续约', lead: '', body: `<div class="fact-grid">${(traction.length ? traction : ['待补充客户数量','待补充收入','待补充留存']).slice(0,4).map((x,i) => `<div class="fact"><strong>${i < traction.length ? escapeHTML(x.match(/[\d,.+%MWh万元亿]+/)?.[0] || '已验证') : '待补充'}</strong><span>${escapeHTML(x)}</span></div>`).join('')}</div>` },
-    { theme: 'cover', kicker: '融资计划', title: ask, lead: `${escapeHTML(short(data.team))}<br><br>资金用途：${escapeHTML(uses.join('；') || '待补充')}`, body: '<div class="accent-line"></div>' }
-  ];
-}
-
-function render() {
-  const item = deck[current];
-  slideEl.className = `slide ${item.theme}`;
-  slideEl.innerHTML = `<div class="slide-content"><span class="slide-number">${String(current + 1).padStart(2,'0')}</span><p class="slide-kicker">${item.kicker}</p><h3>${item.title}</h3>${item.lead ? `<p class="lead">${item.lead}</p>` : ''}${item.body}</div>`;
-  pageCount.textContent = `${current + 1} / ${deck.length}`;
-  [...thumbsEl.children].forEach((thumb, i) => thumb.classList.toggle('active', i === current));
-}
-
-function renderThumbs() {
-  thumbsEl.innerHTML = '';
-  deck.forEach((item, i) => {
-    const button = document.createElement('button');
-    button.className = `thumb${i === current ? ' active' : ''}`;
-    button.dataset.number = String(i + 1).padStart(2,'0');
-    button.type = 'button';
-    button.innerHTML = `<strong>${item.kicker}</strong>`;
-    button.addEventListener('click', () => { current = i; render(); });
-    thumbsEl.appendChild(button);
-  });
-}
-
-function regenerate() {
-  deck = buildDeck(values());
-  current = 0;
-  renderThumbs();
-  render();
-}
-
-function updateQuality() {
-  const data = values();
-  const keys = ['name','oneLiner','customer','problem','solution','model','market','traction','team','ask','use'];
-  const filled = keys.filter(key => clean(data[key] || '')).length;
-  const score = Math.round(filled / keys.length * 100);
-  qualityScore.textContent = `${score}%`;
-  qualityBar.style.width = `${score}%`;
-  qualityHint.textContent = score >= 85 ? '信息足够生成一版投资人演示稿。' : score >= 60 ? '可以生成，但部分页面会显示“待补充”。' : '建议至少补充客户问题、方案和业务进展。';
-}
-
-form.addEventListener('input', updateQuality);
-form.addEventListener('submit', event => { event.preventDefault(); regenerate(); document.querySelector('.preview-panel').scrollIntoView({behavior:'smooth'}); });
-document.querySelector('#prevButton').addEventListener('click', () => { current = (current - 1 + deck.length) % deck.length; render(); });
-document.querySelector('#nextButton').addEventListener('click', () => { current = (current + 1) % deck.length; render(); });
-document.addEventListener('keydown', event => {
-  if (['INPUT','TEXTAREA'].includes(document.activeElement.tagName)) return;
-  if (event.key === 'ArrowLeft') document.querySelector('#prevButton').click();
-  if (event.key === 'ArrowRight') document.querySelector('#nextButton').click();
-});
-document.querySelector('#presentButton').addEventListener('click', async () => {
-  try { await slideEl.requestFullscreen(); } catch (_) { /* Fullscreen may be blocked by embedded previews. */ }
-});
-document.querySelector('#copyButton').addEventListener('click', async event => {
-  const text = deck.map((item, i) => `${i + 1}. ${item.kicker}\n${item.title.replace(/<[^>]+>/g,'')}\n${item.lead.replace(/<br>/g,'\n')}`).join('\n\n');
-  await navigator.clipboard.writeText(text);
-  const old = event.currentTarget.textContent;
-  event.currentTarget.textContent = '已复制';
-  setTimeout(() => event.currentTarget.textContent = old, 1300);
-});
-document.querySelector('#sampleButton').addEventListener('click', () => { form.reset(); updateQuality(); regenerate(); });
-
-updateQuality();
-regenerate();
+const state={step:0,unlocked:0,name:'澄光能源',goal:'融资 Pre-A',audience:'机构投资人',question:0,answers:[],currentSlide:0,story:[
+{key:'opening',title:'一句话定位',note:'先让听众知道你是谁，不解释功能',time:'0:30'},{key:'traction',title:'业务已经发生',note:'用签约、收入和续约建立可信度',time:'1:30'},{key:'problem',title:'客户为什么必须改变',note:'用真实购买场景说明成本与紧迫性',time:'1:20'},{key:'product',title:'产品如何解决问题',note:'只讲与客户价值直接相关的能力',time:'1:30'},{key:'why',title:'为什么是现在',note:'说明市场窗口，而不是罗列宏观趋势',time:'1:00'},{key:'model',title:'增长如何形成',note:'连接获客、收入与可复制交付',time:'1:10'},{key:'market',title:'从哪里开始扩大',note:'用可执行的切入市场替代空泛 TAM',time:'1:00'},{key:'team',title:'为什么是这支团队',note:'证明团队拥有解决这个问题的独特经历',time:'0:50'},{key:'ask',title:'资金带来的下一阶段',note:'明确金额、用途和 18 个月里程碑',time:'1:10'}]};
+const questions=['客户在购买你们之前，通常用什么办法解决这个问题？为什么那个办法不够好？','过去两年发生了什么变化，让客户现在比以前更愿意购买？','如果拿到这轮资金，18 个月后哪三个结果能证明公司进入下一阶段？'];
+const sampleAnswers=['客户以前主要靠错峰生产和人工调整设备，实际节省无法量化；大型定制储能项目又需要半年以上，很多工厂承担不起试错成本。','峰谷电价差扩大，同时工厂开始要求供应链披露碳排放。节省电费从可选项变成了管理层每月追踪的指标。','18 个月内把在运容量提升到 120MWh，年度经常性软件收入达到 1,200 万元，并将标准项目交付周期压缩到四周。'];
+const facts=['客户是中小型制造工厂','六周完成标准化部署','已签约 18 家工厂','在运容量 32MWh','过去 12 个月收入 3,600 万元','客户续约率 94%','团队累计交付 120+ 项目'];
+const slides=[
+{key:'opening',theme:'',label:'澄光能源',title:'让制造工厂获得可预测的能源成本',body:'模块化储能系统，六周部署，持续展示真实节省',note:'用一句话说清客户、价值和差异，不要先介绍技术架构。'},
+{key:'traction',theme:'yellow',label:'业务进展',title:'客户已经用续约证明价值',metric:'94%',body:'18 家签约工厂，32MWh 在运容量，过去 12 个月收入 3,600 万元',note:'先报续约，再解释这些客户为什么留下。'},
+{key:'problem',theme:'paper',label:'客户问题',title:'工厂既承受电价波动，也无法判断改造回报',body:'人工错峰不可持续；传统项目周期长，节省效果不透明',note:'讲一个真实客户在购买前的具体场景，不要泛讲行业痛点。'},
+{key:'product',theme:'',label:'产品',title:'标准硬件缩短部署，软件持续证明收益',body:'储能柜完成现场执行，预测软件决定何时充放电，并按月核算节省',note:'把功能对应到客户结果，避免逐项念产品模块。'},
+{key:'why',theme:'paper',label:'窗口期',title:'能源成本与碳披露同时进入工厂管理层视野',body:'这使储能从工程采购变成可量化的经营决策',note:'需要补充一项可信的行业数据或政策来源。'},
+{key:'model',theme:'yellow',label:'增长模型',title:'设备收入建立项目基础，软件订阅扩大客户价值',body:'现有事实足够解释收入来源；获客成本与回收周期仍待补充',note:'投资人会追问毛利率和现金占用，现场主动说明口径。'},
+{key:'market',theme:'',label:'市场切入',title:'先覆盖华东高耗能制造工厂',body:'从明确客户画像和可复制交付出发，再扩展区域与行业',note:'不要只给一个巨大 TAM 数字，要解释如何拿到第一批市场。'},
+{key:'team',theme:'paper',label:'团队',title:'120+ 项目经验形成交付优势',body:'团队来自宁德时代、远景能源和施耐德',note:'每位核心成员只讲一项与当前挑战直接相关的能力。'},
+{key:'ask',theme:'',label:'本轮计划',title:'2,000 万元把验证过的模式扩大三倍',body:'扩大华东交付团队，完成第二代认证，补充项目周转资金',note:'最后明确下一步：希望进入尽调，还是安排技术与业务团队会谈。'}];
+const scenes=[...document.querySelectorAll('.scene')],journey=[...document.querySelectorAll('.journey-step')],projectName=document.querySelector('#projectName'),toast=document.querySelector('#toast');
+function showToast(message){toast.textContent=message;toast.classList.add('show');setTimeout(()=>toast.classList.remove('show'),1800)}
+function goTo(step){if(step>state.unlocked)return;state.step=step;scenes.forEach((scene,i)=>scene.classList.toggle('active',i===step));journey.forEach((item,i)=>{item.classList.toggle('active',i===step);item.classList.toggle('done',i<step);item.disabled=i>state.unlocked});window.scrollTo({top:0,behavior:'smooth'})}
+function unlock(step){state.unlocked=Math.max(state.unlocked,step);goTo(step)}
+document.querySelector('#briefForm').addEventListener('submit',event=>{event.preventDefault();const data=new FormData(event.currentTarget);state.name=data.get('name').trim()||'未命名项目';state.goal=data.get('goal');state.audience=data.get('audience');projectName.textContent=state.name;unlock(1)});
+journey.forEach((button,index)=>button.addEventListener('click',()=>goTo(index)));document.querySelector('#homeButton').addEventListener('click',()=>goTo(0));
+const sourceText=document.querySelector('#sourceText'),charCount=document.querySelector('#charCount');function updateChars(){charCount.textContent=`${sourceText.value.trim().length} 字`}sourceText.addEventListener('input',updateChars);updateChars();
+document.querySelectorAll('.source-tab').forEach(tab=>tab.addEventListener('click',()=>{const source=tab.dataset.source;document.querySelectorAll('.source-tab').forEach(item=>item.classList.toggle('active',item===tab));document.querySelectorAll('.source-panel').forEach(panel=>panel.classList.toggle('active',panel.dataset.sourcePanel===source))}));
+const fileInput=document.querySelector('#fileInput');document.querySelector('#uploadButton').addEventListener('click',()=>fileInput.click());fileInput.addEventListener('change',()=>{document.querySelector('#fileList').innerHTML=[...fileInput.files].map(file=>`<li>${file.name} · ${Math.ceil(file.size/1024)} KB</li>`).join('')});
+function renderFacts(){document.querySelector('#factsList').innerHTML=facts.map(fact=>`<li>${fact}</li>`).join('')}
+document.querySelector('#analyzeButton').addEventListener('click',()=>{if(sourceText.value.trim().length<=40&&!fileInput.files.length)return showToast('至少提供一段公司材料');const overlay=document.querySelector('#analysisOverlay'),status=document.querySelector('#analysisStatus'),stages=['读取业务信息','提取可验证事实','定位叙事缺口'];overlay.classList.add('active');overlay.setAttribute('aria-hidden','false');let index=0;const timer=setInterval(()=>{status.textContent=stages[++index]||stages[2]},480);setTimeout(()=>{clearInterval(timer);overlay.classList.remove('active');overlay.setAttribute('aria-hidden','true');renderFacts();startInterview();unlock(2)},1550)});
+function addBubble(role,text){const bubble=document.createElement('div');bubble.className=`bubble ${role}`;bubble.innerHTML=`<small>${role==='ai'?'Pitch 顾问':'你'}</small>${text}`;document.querySelector('#chatLog').appendChild(bubble);bubble.scrollIntoView({block:'nearest'})}
+function startInterview(){document.querySelector('#chatLog').innerHTML='';state.question=0;state.answers=[];const form=document.querySelector('#answerForm');form.querySelector('button').disabled=false;document.querySelector('#answerInput').disabled=false;addBubble('ai',`我找到了 ${facts.length} 条可用事实。现在补齐三个会改变故事顺序的问题。<br><br>${questions[0]}`);document.querySelector('#questionProgress').textContent='问题 1 / 3'}
+document.querySelector('#answerForm').addEventListener('submit',event=>{event.preventDefault();const input=document.querySelector('#answerInput'),answer=input.value.trim();if(!answer)return showToast('先回答当前问题');addBubble('user',answer);state.answers.push(answer);input.value='';state.question+=1;if(state.question<questions.length){setTimeout(()=>addBubble('ai',questions[state.question]),250);document.querySelector('#questionProgress').textContent=`问题 ${state.question+1} / 3`}else{document.querySelector('#questionProgress').textContent='访谈完成';event.currentTarget.querySelector('button').disabled=true;input.disabled=true;setTimeout(()=>{addBubble('ai','足够了。你的强项是已经有业务证据，所以我会把 Traction 放在前面，而不是从市场规模讲起。');renderStory();unlock(3)},380)}});
+function renderStory(){document.querySelector('#storyline').innerHTML=state.story.map((beat,index)=>`<article class="beat" data-index="${index}"><span class="beat-index">${index+1}</span><div><h3>${beat.title}</h3><p>${beat.note}</p></div><span class="beat-time">${beat.time}</span><div class="beat-actions"><button type="button" data-move="up" aria-label="上移 ${beat.title}">↑</button><button type="button" data-move="down" aria-label="下移 ${beat.title}">↓</button></div></article>`).join('')}
+document.querySelector('#storyline').addEventListener('click',event=>{const button=event.target.closest('[data-move]');if(!button)return;const index=Number(button.closest('.beat').dataset.index),next=button.dataset.move==='up'?index-1:index+1;if(next<0||next>=state.story.length)return;[state.story[index],state.story[next]]=[state.story[next],state.story[index]];renderStory()});
+function orderedSlides(){return state.story.map(beat=>slides.find(slide=>slide.key===beat.key)).filter(Boolean)}
+function renderDeck(){const deck=orderedSlides(),item=deck[state.currentSlide];document.querySelector('#deckTitle').textContent=state.name;document.querySelector('#deckThumbs').innerHTML=deck.map((slide,index)=>`<button class="deck-thumb${index===state.currentSlide?' active':''}" type="button" data-slide="${index}"><span>${String(index+1).padStart(2,'0')}</span>${slide.label}</button>`).join('');const slideEl=document.querySelector('#slide');slideEl.className=`slide ${item.theme}`;slideEl.innerHTML=`<div class="slide-inner"><span class="slide-label">${item.label}</span>${item.metric?`<strong class="metric">${item.metric}</strong>`:''}<h2>${item.title}</h2><p>${item.body}</p></div>`;document.querySelector('#speakerNote').textContent=item.note;document.querySelector('#slideCount').textContent=`${state.currentSlide+1} / ${deck.length}`}
+document.querySelector('#buildDeckButton').addEventListener('click',()=>{state.currentSlide=0;unlock(4);renderDeck()});document.querySelector('#deckThumbs').addEventListener('click',event=>{const button=event.target.closest('[data-slide]');if(!button)return;state.currentSlide=Number(button.dataset.slide);renderDeck()});document.querySelector('#prevSlide').addEventListener('click',()=>{const n=orderedSlides().length;state.currentSlide=(state.currentSlide-1+n)%n;renderDeck()});document.querySelector('#nextSlide').addEventListener('click',()=>{const n=orderedSlides().length;state.currentSlide=(state.currentSlide+1)%n;renderDeck()});document.querySelector('#backToStory').addEventListener('click',()=>goTo(3));
+document.querySelector('#sampleButton').addEventListener('click',()=>{document.querySelector('#briefForm [name="name"]').value='澄光能源';state.name='澄光能源';projectName.textContent=state.name;sourceText.value=sourceText.defaultValue;state.answers=[...sampleAnswers];updateChars();renderFacts();renderStory();state.unlocked=4;state.currentSlide=0;renderDeck();goTo(3);showToast('示例项目已准备好，可调整故事顺序')});renderStory();
