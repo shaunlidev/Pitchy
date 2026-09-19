@@ -8,18 +8,29 @@
   <button class="journey-step active" data-step="0" type="button"><span>1</span>设定任务</button><button class="journey-step" data-step="1" type="button" disabled><span>2</span>读材料</button><button class="journey-step" data-step="2" type="button" disabled><span>3</span>选主叙事</button><button class="journey-step" data-step="3" type="button" disabled><span>4</span>编排故事</button><button class="journey-step" data-step="4" type="button" disabled><span>5</span>排练 Deck</button>
 </nav>
 <main id="app">
-<section class="scene active" data-scene="0"><div class="scene-copy"><p class="chapter">先确定这次要说服谁</p><h1>十分钟后，<br>你希望听众相信什么？</h1><p>不用先写商业计划书。先定义这次 Pitch 的目的，系统会据此决定应该问什么、哪些页值得保留。</p></div>
-<form class="brief-sheet" id="briefForm"><label>项目或公司名称<input name="name" value="澄光能源" required></label><fieldset><legend>这次 Pitch 的目标</legend><label class="choice"><input type="radio" name="goal" value="融资 Pre-A" checked><span><b>融资 Pre-A</b><small>证明业务已跑通，并说明资金如何放大增长</small></span></label><label class="choice"><input type="radio" name="goal" value="产品展示"><span><b>产品展示</b><small>让潜在客户或合作方快速理解产品价值</small></span></label></fieldset><fieldset><legend>现场最重要的听众</legend><div class="segmented"><label><input type="radio" name="audience" value="机构投资人" checked><span>机构投资人</span></label><label><input type="radio" name="audience" value="产业投资人"><span>产业投资人</span></label><label><input type="radio" name="audience" value="潜在客户"><span>潜在客户</span></label></div></fieldset><button class="action" type="submit">开始准备材料</button></form></section>
+<section class="scene intent-scene active" data-scene="0">
+  <div class="intent-heading"><p class="chapter">先定义这场 Pitch 要完成的改变</p><h1>你希望对方<br>重新认识什么？</h1><p>不需要先想一句漂亮口号。用你自己的话，告诉我们听众现在可能怎么理解你，以及你希望他们最后相信什么。</p></div>
+  <form class="intent-sheet" id="briefForm">
+    <div class="intent-meta"><label>项目名称<input name="name" value="澄光能源" required></label><label>听众<select name="audience"><option>机构投资人</option><option>产业投资人</option><option>潜在客户</option></select></label><label>希望下一步<select name="next"><option>进入下一轮沟通</option><option>安排产品演示</option><option>讨论合作方案</option></select></label></div>
+    <div class="mindshift">
+      <label class="mind-side before"><span>他们现在可能认为</span><textarea name="currentView" rows="4">我们是一家做储能项目的工程公司</textarea></label>
+      <div class="shift-mark" aria-hidden="true"><span></span></div>
+      <label class="mind-side after"><span>十分钟后，我希望他们相信</span><textarea name="desiredBelief" rows="4">我们能用标准化硬件进入工厂，再通过软件持续创造价值</textarea></label>
+    </div>
+    <label class="founder-note"><span>还有哪一点是你特别想卖出去的？</span><textarea name="founderIntent" rows="2" placeholder="例如：我最想让投资人记住我们六周就能交付">我最想让投资人记住，我们能在六周内完成部署</textarea></label>
+    <button class="action" type="submit">带着这个目标去读材料</button>
+  </form>
+</section>
 
 <section class="scene" data-scene="1"><div class="scene-copy compact"><p class="chapter">把已有的都交给我</p><h1>不用整理，<br>原样放进来</h1><p>产品介绍、会议纪要、财务摘要都可以。系统先提取事实，再决定访谈问题。</p></div><div class="material-desk"><div class="source-tabs"><button class="source-tab active" type="button" data-source="paste">粘贴文字</button><button class="source-tab" type="button" data-source="upload">上传文件</button></div><div class="source-panel active" data-source-panel="paste"><textarea id="sourceText" aria-label="公司现有材料">我们为中小型制造工厂提供模块化储能系统。标准储能柜搭配能耗预测软件，六周内完成部署，按月展示节省金额和设备状态。已签约 18 家工厂，在运容量 32MWh，过去 12 个月收入 3,600 万元，客户续约率 94%。创始团队来自宁德时代、远景能源和施耐德，累计交付 120 多个工商业能源项目。本轮希望融资 2,000 万元，用于扩大华东交付团队、完成第二代产品认证和项目周转。</textarea><div class="material-meta"><span id="charCount">0 字</span><span>材料只在本次项目中使用</span></div></div><div class="source-panel upload-panel" data-source-panel="upload"><input id="fileInput" type="file" accept=".txt,.md,.csv,.json" multiple hidden><button class="dropzone" id="uploadButton" type="button"><b>选择资料</b><span>Demo 支持 TXT、Markdown、CSV、JSON</span></button><ul id="fileList" class="file-list"></ul></div><button class="action" id="analyzeButton" type="button">分析材料</button></div></section>
 
 <section class="scene direction-scene" data-scene="2">
   <div class="direction-intro"><p class="chapter">我找到了三种可以成立的讲法</p><h1>同一家公司，<br>可以留下不同记忆</h1><p>选择这次最想卖的方向。它会决定开场、页面顺序和哪些素材值得展开。</p></div>
   <div class="direction-workbench">
-    <div class="raw-note"><span>你原来的说法</span><p>“模块化储能柜配合能耗预测软件，六周完成部署。”</p></div>
+    <div class="raw-note"><span>你希望完成的认知变化</span><p id="intentRecap">从“储能工程公司”变成“通过软件持续创造价值的能源科技公司”</p></div>
     <div class="direction-nav" id="directionNav" aria-label="主叙事方向"></div>
     <div class="reframe-stage" id="reframeStage" aria-live="polite"></div>
-    <button class="action choose-direction" id="chooseDirection" type="button">用这个方向编排 Pitch</button>
+    <div class="direction-actions"><button class="direction-link" id="editDirection" type="button">修改这句话</button><button class="direction-link" id="combineDirection" type="button">组合两个方向</button><button class="action choose-direction" id="chooseDirection" type="button">用这个方向编排 Pitch</button></div>
   </div>
 </section>
 
