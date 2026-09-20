@@ -5,7 +5,7 @@
 <link rel="stylesheet" href="./styles.css"></head><body>
 <header class="masthead"><button class="wordmark" id="homeButton" type="button"><span class="logo">P</span><span>Pitchroom</span></button><div class="session-title"><span id="projectName">未命名项目</span><small>10 分钟现场 Pitch</small></div><button class="quiet-button" id="sampleButton" type="button">打开示例项目</button></header>
 <nav class="journey" aria-label="制作进度">
-  <button class="journey-step active" data-step="0" type="button"><span>1</span>设定任务</button><button class="journey-step" data-step="1" type="button" disabled><span>2</span>读材料</button><button class="journey-step" data-step="2" type="button" disabled><span>3</span>选主叙事</button><button class="journey-step" data-step="3" type="button" disabled><span>4</span>编排故事</button><button class="journey-step" data-step="4" type="button" disabled><span>5</span>排练 Deck</button>
+  <button class="journey-step active" data-step="0" type="button"><span>1</span>设定任务</button><button class="journey-step" data-step="1" type="button" disabled><span>2</span>读材料</button><button class="journey-step" data-step="2" type="button" disabled><span>3</span>选主叙事</button><button class="journey-step" data-step="3" type="button" disabled><span>4</span>编排故事</button><button class="journey-step" data-step="4" type="button" disabled><span>5</span>迭代 Deck</button>
 </nav>
 <main id="app">
 <section class="scene intent-scene active" data-scene="0">
@@ -36,6 +36,27 @@
 
 <section class="scene story-scene" data-scene="3"><div class="story-heading"><div><p class="chapter">主叙事已选定</p><h1 id="storyHeading">围绕“六周验证回报”展开</h1></div><p id="storyReason">先用交付速度制造兴趣，再用续约率和收入证明这不是一次性的工程能力。</p></div><div class="storyboard"><div class="storyline" id="storyline"></div><aside class="story-note"><span>10:00</span><h2>还可以补强</h2><p id="missingPrompt">行业通常需要多久完成部署？如果暂时无法提供，我们会用现有的六周事实继续生成。</p><button class="skip-link" id="skipMissing" type="button">暂时无法提供</button><button class="action" id="buildDeckButton" type="button">生成排练 Deck</button></aside></div></section>
 
-<section class="scene deck-scene" data-scene="4"><aside class="runlist"><div><p class="chapter">排练模式</p><h1 id="deckTitle">澄光能源</h1><p>点击页面查看讲稿重点</p></div><div id="deckThumbs" class="deck-thumbs"></div><button class="quiet-button full" id="backToStory" type="button">返回调整故事</button></aside><div class="stage-area"><div id="slide" class="slide" tabindex="0"></div><div class="speaker-strip"><div><span>讲这一页时</span><p id="speakerNote"></p></div><div class="deck-controls"><button id="prevSlide" type="button">←</button><span id="slideCount"></span><button id="nextSlide" type="button">→</button></div></div></div></section>
+<section class="scene deck-scene" data-scene="4">
+  <aside class="runlist">
+    <div><p class="chapter">项目工作台</p><h1 id="deckTitle">澄光能源</h1><p>同一套事实，可以继续长出不同版本。</p></div>
+    <div class="version-stack" id="versionStack"><span>版本</span><button class="version-item active" type="button"><b>v1</b><span>投资人 · 初稿</span><small>刚刚生成</small></button></div>
+    <div id="deckThumbs" class="deck-thumbs"></div>
+    <button class="quiet-button full" id="backToStory" type="button">返回调整故事</button>
+  </aside>
+  <div class="stage-area">
+    <div class="deck-bar"><div><span id="versionLabel">v1 · 投资人初稿</span><small id="versionIntent">目标：进入下一轮沟通</small></div><button id="editSlide" type="button">直接改这一页</button></div>
+    <div id="slide" class="slide" tabindex="0"></div>
+    <div class="speaker-strip"><div><span>讲这一页时</span><p id="speakerNote"></p></div><div class="deck-controls"><button id="prevSlide" type="button" aria-label="上一页">←</button><span id="slideCount"></span><button id="nextSlide" type="button" aria-label="下一页">→</button></div></div>
+  </div>
+  <aside class="iteration-panel">
+    <div class="iteration-head"><span>下一版怎么变好</span><b id="iterationTitle">先听听创意总监的判断</b><p id="iterationIntro">第一版不是终点。可以让 AI 主动审阅，也可以把现场反馈带回来。</p></div>
+    <div class="iteration-start" id="iterationStart">
+      <button class="iteration-choice primary" id="reviewDeck" type="button"><b>AI 审一遍</b><span>找出记忆点、误解风险和缺口</span></button>
+      <button class="iteration-choice" id="feedbackMode" type="button"><b>带回现场反馈</b><span>告诉我对方追问或质疑了什么</span></button>
+      <button class="iteration-choice" id="audienceMode" type="button"><b>换一个听众</b><span>保留事实，派生客户或产业方版本</span></button>
+    </div>
+    <div class="iteration-flow" id="iterationFlow" hidden></div>
+  </aside>
+</section>
 </main>
 <div class="analysis-overlay" id="analysisOverlay" aria-hidden="true"><div class="analysis-card"><div class="scan-line"></div><span>正在区分事实、判断和缺口</span><b id="analysisStatus">读取业务信息</b></div></div><div class="toast" id="toast" role="status"></div><script src="./app.js"></script></body></html>
