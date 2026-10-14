@@ -17,12 +17,12 @@ This file separates implementation evidence from planned or authorized-later wor
 | Case artifact + replay | PASS | all 15 cases traversed the bounded controller/tool path (user correction uses its distinct input/version path), produced redacted bundles, and replayed to `review_required`; total local size 360 KiB |
 | Vercel AI SDK adapter | IMPLEMENTED, NOT LIVE-VALIDATED | bounded `ToolLoopAgent`, structured output, real tools, abort propagation, tool/result/elapsed budgets, persisted trace/usage metadata, and fail-closed config |
 | Live eval command | IMPLEMENTED, NOT RUN | five-category smoke then full synthetic set; explicit transfer acknowledgement, pinned model, critical-failure stop, immutable batch artifacts |
-| Live model eval | NOT RUN | requires explicit external data/model authorization and credentials |
+| Live model eval | NOT RUN | calls, transfer, and cost are authorized; `OPENAI_API_KEY` and pinned `OPENAI_MODEL` are absent |
 | Browser functional QA | PASS | isolated synthetic project covered material → run → review → answer/correction/keep-unknown → accept/reset; accessibility tree and console were inspected; one duplicate-submission defect was fixed and reverified |
 | Repeatable browser E2E | PASS | 5 Playwright journeys in system Chrome: acceptance, Markdown conflict, invalid-file recovery, stale two-tab write, and event-stream disconnect/reload |
 | Responsive visual QA | PASS | production fixture inspected at 1280×720, 768×1024, and 375×812; no overlap, clipping, horizontal overflow, or console errors; local screenshots and QA report retained under `.gstack/qa-reports/` |
 | Human acceptance | NOT RUN | requires user review of the running interaction |
-| Deployment | NOT RUN | requires separate deployment authorization and production auth/privacy decisions |
+| Deployment | NOT RUN | authorized on 2026-10-14; production identity, privacy/retention, database/backup, hosting, and rollback decisions remain open |
 
 ## Current command gates
 

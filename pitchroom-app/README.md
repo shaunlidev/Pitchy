@@ -78,7 +78,8 @@ pnpm harness:replay -- eval-supported-growth
 - `pnpm harness:replay`: verifies event ordering and reconstructs the terminal
   phase without calling a model.
 
-After separate authorization, the synthetic-only live eval gates are:
+Real calls, external transfer, and API cost were authorized on 2026-10-14. Once
+the key and pinned model are present, the synthetic-only live eval gates are:
 
 ```sh
 PITCHROOM_LIVE_EVAL_ACK=synthetic-only OPENAI_API_KEY=... OPENAI_MODEL=... pnpm eval:live:smoke
@@ -88,5 +89,6 @@ PITCHROOM_LIVE_EVAL_ACK=synthetic-only OPENAI_API_KEY=... OPENAI_MODEL=... pnpm 
 Smoke selects five categories before the full model set. A critical failure
 stops the batch, and each batch keeps its own artifacts.
 
-Live model evaluation, recorded browser QA, deployment, and real-user
-acceptance remain separate authorization and evidence gates.
+Recorded browser QA is complete for the synthetic slice. Live model evaluation,
+deployment readiness, and real-user acceptance remain separate evidence gates;
+their authorization must not be mistaken for a pass.

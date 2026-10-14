@@ -18,7 +18,7 @@ lower layer is never used as evidence for an unrun higher layer.
 | T60 HTTP/SSE | PASS for local slice | Zod command/response/event/error schemas; request IDs; 409 conflict envelope; bounded live SSE with Last-Event-ID; full PostgreSQL HTTP flow and restart readback | production auth, rate limiting, and hosting logs remain deployment blockers |
 | T70 Materials/Clarify UI | FUNCTIONAL + RESPONSIVE VISUAL PASS | pure React view is separated from effects; eight-phase render and HomePage interaction tests pass; isolated manual and Playwright flows cover material, run, review, answer, correction, keep-unknown, acceptance, invalid-file recovery, reset, keyboard order, stale two-tab writes, SSE disconnect/reload, accessible names/structure, warmed performance, and a clean console; production screenshots pass at desktop/tablet/mobile widths | screen-reader, live-model disconnect/timeout, and human acceptance remain open |
 | T80 offline evals | PASS | 15 versioned cases, deterministic graders, human rubric thresholds, five-category live selection, redacted artifacts, replay | rubric scores require human review |
-| T90 real model integration | IMPLEMENTED; NOT RUN | live PostgreSQL runtime, Vercel AI SDK tool agent, abort/timeout/budget controls, usage/trace capture, explicit transfer acknowledgement, smoke/full live-eval commands | explicit external-transfer authorization, credentials, API cost, five-output review, and full live thresholds |
+| T90 real model integration | IMPLEMENTED; NOT RUN | live PostgreSQL runtime, Vercel AI SDK tool agent, abort/timeout/budget controls, usage/trace capture, explicit transfer acknowledgement, smoke/full live-eval commands; real calls, transfer, and API cost were authorized on 2026-10-14 | `OPENAI_API_KEY` and a pinned `OPENAI_MODEL` are absent; five-output review and full live thresholds therefore remain unrun |
 | T100 browser QA | PARTIAL PASS | manual core QA, 5 repeatable Playwright journeys, and production responsive screenshots pass; upload/conflict, invalid-file recovery, SSE disconnect/reload, stale two-tab correction, keyboard activation, and three-width layout are evidenced; one medium defect was repaired with interaction regressions | screen-reader, live-model timeout/disconnect, and human acceptance remain open |
 | T110 operational hardening | PARTIAL | health/readiness, request/source/project budgets, cancellation, migration recovery procedure, completed 97-file security scan, remediated state-transition and concurrent-run findings, runbook, production build | authentication/authorization, CSRF/origin, production rate/cost limits, privacy/retention/deletion, backup/restore, hosting/rollback, deployment decision |
 
@@ -43,8 +43,9 @@ deployment                 NOT RUN
 
 ## Completion decision
 
-The authorized local implementation is harness-green. The complete plan is not
-yet globally complete because T90 live-model evidence, T100 browser/human
-evidence, and the production-only portion of T110 require external transfer,
-working browser control, user judgment, or deployment decisions. Those states
-remain explicit rather than being converted into inferred success.
+The authorized local implementation is harness-green. Browser tooling,
+recording, real model calls, external transfer, API cost, local commits, and
+deployment were authorized on 2026-10-14. Authorization is not evidence of a
+successful gate: T90 still lacks credentials, T100 still needs screen-reader,
+live-runtime, and user judgments, and T110 still needs concrete production
+identity, retention, backup, hosting, and rollback decisions.

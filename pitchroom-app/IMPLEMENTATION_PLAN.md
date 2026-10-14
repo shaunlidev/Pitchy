@@ -1082,10 +1082,10 @@ Approval readiness: PASS for planning the listed implementation. Authorization g
 - Verification: four distinct layers—contract tests, fake-agent scenarios, model evals, browser/human QA.
 - Main trust boundaries: exact-quote provenance, explicit unknown/conflict states, attributed user corrections, current-version approval.
 - Execution result: T00–T80 and the locally executable parts of T110 are implemented. The deterministic suite, PostgreSQL contracts, persistent restart flow, offline eval set, artifact replay, and production build pass; current evidence is maintained in `HARNESS_STATUS.md`.
-- Live-provider result: the Vercel AI SDK adapter is implemented with pinned configuration, bounded steps, total/step/tool timeouts, structured output, source tools, and deterministic post-validation. No external request has been authorized or run.
-- QA result: HTTP journeys pass in fixture and persistent modes. A non-recording isolated browser pass covered the core material/run/review/answer/correction/keep-unknown/accept/reset path, accessible DOM structure, console, and warmed development performance. It found one repeated-submission defect, which was repaired and reverified. The complete matrix and remaining journeys are recorded in `BROWSER_QA_MATRIX.md`; pixel-level visual review and human acceptance are not inferred.
+- Live-provider result: the Vercel AI SDK adapter is implemented with pinned configuration, bounded steps, total/step/tool timeouts, structured output, source tools, and deterministic post-validation. Real calls, external transfer, and API cost were authorized on 2026-10-14, but no request has run because the key and pinned model are absent.
+- QA result: HTTP journeys pass in fixture and persistent modes. Manual browser QA and five isolated Playwright journeys cover material/run/review/answer/correction/keep-unknown/accept/reset, upload conflict, invalid-file recovery, stale writes, SSE reconnect, accessible DOM structure, console, and keyboard order. One repeated-submission defect was repaired and reverified. Production screenshots at desktop, tablet, and mobile widths pass visual inspection; screen-reader output, live-model failure behavior, and human acceptance are not inferred.
 - Deployment result: build and migration rehearsal pass, but authentication, provider privacy, backup destination, hosting, rollback, and production security decisions remain deployment blockers.
-- External authorization still required: real model calls/data transfer, browser capture/downloads, deployment, and PR/publication. Local commits were authorized on 2026-10-14.
+- Authorization status: real model calls/data transfer, API cost, browser recording/screenshots, deployment, and local commits were authorized on 2026-10-14. PR/publication was not authorized. Production identity/privacy/backup/hosting choices and credentials remain prerequisites, not generic permission requests.
 
 ### Implementation reconciliation
 
@@ -1097,7 +1097,7 @@ Approval readiness: PASS for planning the listed implementation. Authorization g
 | T40–T60 | PASS | deterministic runner, persisted agent lifecycle, immutable versions/current approval, validated HTTP actions and resumable SSE |
 | T70 | FUNCTIONAL + RESPONSIVE VISUAL PASS | Materials/Clarify/review/history UI is built; React state/interaction tests, manual browser QA, 5 Playwright journeys, keyboard order, accessible DOM structure, console, warmed performance, and production screenshots at 1280×720, 768×1024, and 375×812 pass |
 | T80 | PASS | 15 versioned cases, deterministic grader, human rubric thresholds, redacted artifacts, replay command |
-| T90 | ADAPTER IMPLEMENTED; LIVE EVAL NOT RUN | external model/data-transfer authorization and credentials are required |
+| T90 | ADAPTER IMPLEMENTED; LIVE EVAL NOT RUN | calls are authorized; `OPENAI_API_KEY` and pinned `OPENAI_MODEL` are required |
 | T100 | PARTIAL PASS | manual QA, 5 repeatable Playwright journeys, and three-width production visual QA pass; one medium defect was repaired with interaction regressions; screen-reader, live-model disconnect/timeout, and human acceptance remain open |
 | T110 | PARTIAL | build, migration recovery, runbook, health checks, security boundary, standard source audit, and two finding remediations exist; production auth/privacy/backup/hosting decisions remain open |
 
@@ -1119,11 +1119,11 @@ The plan was checked against architecture, code-quality, test, performance, and 
 | CEO Review | not run | Product scope is frozen for this implementation pass | 0 | NOT RUN | Not required for the requested implementation-only plan |
 | Outside Review | unavailable | Independent second opinion | 0 | UNAVAILABLE | Required review-specific native task interface is unavailable in this host |
 | Eng Review | `/plan-eng-review` | Architecture & tests | 1 | CLEAR | 4 plan gaps found and resolved in section 22 |
-| Design Review | local implementation review | UI/UX gaps | 1 | PARTIAL | Functional browser and accessible-DOM checks pass for the core path; pixel-level responsive review and human acceptance remain NOT RUN |
+| Design Review | local implementation review | UI/UX gaps | 1 | PARTIAL | Functional browser, accessible-DOM, keyboard, and three-width responsive visual checks pass; screen-reader output and human acceptance remain NOT RUN |
 | DX Review | local harness review | Developer experience gaps | 1 | CLEAR | One-command checks, case generation/replay, runbook, and environment gates are implemented |
 
 **OUTSIDE COVERAGE:** Claude Code review was not run; compatible bounded native fallback interfaces were unavailable. No independent-review credit claimed.
 
-**VERDICT:** LOCALLY IMPLEMENTED AND HARNESS-GREEN within the authorized slice; live AI, browser capture, human acceptance, deployment, and repository publication retain separate authorization gates.
+**VERDICT:** LOCALLY IMPLEMENTED AND HARNESS-GREEN within the authorized slice; browser capture is complete, while live AI, human acceptance, and deployment retain separate evidence/readiness gates. Repository publication retains a separate authorization gate.
 
-NO UNRESOLVED DECISIONS
+NO UNRESOLVED LOCAL-SLICE IMPLEMENTATION DECISIONS
