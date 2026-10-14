@@ -20,7 +20,7 @@ evidence does not substitute for visual review or human acceptance.
 | Disconnect/reconnect during a run | NOT RUN | SSE reconnect contract tests pass | Synthetic browser run completes too quickly for a meaningful manual disconnect |
 | Two-tab stale correction and approval | NOT RUN | PostgreSQL/API stale revision contracts pass | Browser two-tab race was not executed |
 | Agent timeout and retry | PARTIAL | Controller timeout/retry and UI failure/retry states have deterministic tests | Browser timeout journey was not executed |
-| Keyboard and status semantics | PARTIAL | DOM inspection found logical focusable order, no duplicate IDs, all visible form labels bound to targets, one `h1` followed by `h2`/`h3`, and a polite live project-state region | Full keyboard traversal and screen-reader output were not recorded |
+| Keyboard and status semantics | PARTIAL | Actual Tab traversal moved from reset → answer → correction → keep-unknown → accept, correctly skipped disabled actions, and Enter activated acceptance. DOM inspection also found no duplicate IDs, bound labels, one `h1` followed by `h2`/`h3`, and a polite live project-state region | Native file-picker traversal and screen-reader output were not recorded |
 | Console and warmed performance | PASS | No application errors were observed; warmed local load measured 322 ms TTFB, 342 ms DOM ready, and 980 ms total in development mode | These figures are diagnostic, not a production performance claim |
 | Reset and terminal boundaries | PASS | Reset restored an empty synthetic project; accepted state removed review controls and stopped the agent | None for the functional fixture path |
 
