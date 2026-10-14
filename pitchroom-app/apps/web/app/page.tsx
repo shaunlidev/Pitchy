@@ -53,6 +53,12 @@ export default function HomePage() {
       const result = await response.json();
       if (!response.ok) throw new Error(result.error ?? "The action failed.");
       setState(result);
+      if (body.action === "answer") setAnswer("");
+      if (body.action === "correct") setCorrection("");
+      if (body.action === "reset") {
+        setAnswer("");
+        setCorrection("");
+      }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "The action failed.");
     } finally {
