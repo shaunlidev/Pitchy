@@ -20,11 +20,10 @@ export default defineConfig({
     use: { ...devices["Desktop Chrome"], channel: "chrome" },
   }],
   webServer: {
-    command: `pnpm exec next dev --webpack --hostname 127.0.0.1 --port ${port}`,
+    command: `pnpm exec next build && pnpm exec next start --hostname 127.0.0.1 --port ${port}`,
     url: `http://127.0.0.1:${port}`,
     reuseExistingServer: false,
     timeout: 120_000,
     env: { PITCHROOM_RUNTIME: "fixture" },
   },
 });
-
