@@ -1,0 +1,35 @@
+import { afterEach, describe, expect, it } from "vitest";
+import { GET } from "./route";
+
+const original = { runtime: process.env.PITCHROOM_RUNTIME, key: process.env.OPENAI_API_KEY, model: process.env.OPENAI_MODEL, database: process.env.DATABASE_URL, ack: process.env.PITCHROOM_LIVE_TRANSFER_ACK };
+afterEach(() => {
+  for (const [key, value] of Object.entries({ PITCHROOM_RUNTIME: original.runtime, OPENAI_API_KEY: original.key, OPENAI_MODEL: original.model, DATABASE_URL: original.database, PITCHROOM_LIVE_TRANSFER_ACK: original.ack })) {
+    if (value === undefined) delete process.env[key]; else process.env[key] = value;
+  }
+});
+
+describe("health readiness", () => {
+  it("is ready in isolated fixture mode", async () => {
+    process.env.PITCHROOM_RUNTIME = "fixture";
+    const response = GET();
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ status: "ready", runtime: "fixture" });
+  });
+
+  it("fails closed when live configuration is incomplete", async () => {
+    process.env.PITCHROOM_RUNTIME = "live";
+    delete process.env.OPENAI_API_KEY; delete process.env.OPENAI_MODEL; delete process.env.DATABASE_URL;
+    const response = GET();
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({ status: "not_ready", checks: { configuration: false, liveModel: false } });
+  });
+
+  it("requires an explicit transfer acknowledgement in live mode", async () => {
+    process.env.PITCHROOM_RUNTIME = "live";
+    process.env.OPENAI_API_KEY = "test-key"; process.env.OPENAI_MODEL = "pinned-model"; process.env.DATABASE_URL = "postgres://local/test";
+    delete process.env.PITCHROOM_LIVE_TRANSFER_ACK;
+    expect(GET().status).toBe(503);
+    process.env.PITCHROOM_LIVE_TRANSFER_ACK = "authorized";
+    expect(GET().status).toBe(200);
+  });
+});

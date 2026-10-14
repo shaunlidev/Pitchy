@@ -1,0 +1,26 @@
+const baseUrl = process.env.PITCHROOM_BASE_URL ?? "http://127.0.0.1:3001";
+const post = async (body, expectedStatus = 200) => {
+  const response = await fetch(`${baseUrl}/api/workspace`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+  const payload = await response.json();
+  if (response.status !== expectedStatus) throw new Error(`Expected HTTP ${expectedStatus}, received ${response.status}: ${JSON.stringify(payload)}`);
+  return payload;
+};
+const initialResponse = await fetch(`${baseUrl}/api/workspace`);
+if (!initialResponse.ok) throw new Error(`Workspace GET failed: ${initialResponse.status}`);
+const initial = await initialResponse.json();
+if (initial.mode !== "postgres-fake") throw new Error(`Expected postgres-fake mode, received ${initial.mode}`);
+if (initial.project.phase !== "empty") throw new Error(`QA requires a fresh atelier project; current phase is ${initial.project.phase}.`);
+const material = await post({ action: "add_material", commandId: "qa-material-v1", name: "qa.md", mediaType: "text/markdown", text: "Revenue grew 40 percent in 2026. Customer count is unknown." });
+if (material.project.phase !== "materials_ready") throw new Error("Material did not advance the project.");
+const reviewed = await post({ action: "run", commandId: "qa-run-v1" });
+if (reviewed.project.phase !== "review_required" || reviewed.versions.length !== 1) throw new Error("Agent did not stop at the first review boundary.");
+const corrected = await post({ action: "correct", commandId: "qa-correction-v1", expectedRevision: reviewed.project.revision, text: "Finance owner says revenue grew 35 percent." });
+const correctedClaim = corrected.versions.at(-1).proposal.themes[0].claims[0];
+if (correctedClaim.evidenceState !== "user_asserted" || correctedClaim.evidence.length !== 0) throw new Error("Correction attribution is invalid.");
+const conflict = await post({ action: "accept", commandId: "qa-stale-approval", expectedRevision: reviewed.project.revision }, 409);
+if (conflict.code !== "CONFLICT") throw new Error(`Expected a stable CONFLICT envelope, received ${JSON.stringify(conflict)}`);
+const accepted = await post({ action: "accept", commandId: "qa-approval-v1", expectedRevision: corrected.project.revision });
+if (accepted.project.phase !== "accepted") throw new Error("Current version was not accepted.");
+const readback = await (await fetch(`${baseUrl}/api/workspace`)).json();
+if (readback.project.phase !== "accepted" || readback.versions.length !== 2) throw new Error("Persistent state could not be read back.");
+console.log(JSON.stringify({ status: "PASS", mode: readback.mode, projectId: readback.project.id, finalPhase: readback.project.phase, versions: readback.versions.length, events: readback.events.length, staleApprovalRejected: true }, null, 2));

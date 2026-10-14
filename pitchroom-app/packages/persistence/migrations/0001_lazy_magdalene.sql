@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "user_inputs_project_idempotency_unique" ON "user_inputs" USING btree ("project_id","idempotency_key");
