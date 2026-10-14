@@ -7,7 +7,7 @@ This file separates implementation evidence from planned or authorized-later wor
 | Layer | Status | Evidence |
 |---|---|---|
 | Type safety | PASS | `pnpm typecheck` across domain, agent, persistence, evals, testkit, and web |
-| Deterministic tests | PASS | 67 tests across domain, persisted-agent service, tool/wall-clock/output/failure budgets, web API/SSE/health/UI state, source reconstruction, eval grader/rubric/live-selection gates, artifacts, and terminal-state material guards |
+| Deterministic tests | PASS | 75 tests across domain, persisted-agent service, tool/wall-clock/output/failure budgets, web API/SSE/health/UI state and eight-phase React render matrix, source reconstruction, eval grader/rubric/live-selection gates, artifacts, and terminal-state material guards |
 | PostgreSQL integration | PASS | full empty-database migration rehearsal plus 7 repository contract tests against local PostgreSQL 17, including concurrent-run serialization, concurrent idempotent replay, and stale-terminal-write protection |
 | Security regression | PASS | material cannot reopen review/accepted projects; only one concurrent run acquires project ownership; a completed run cannot later clobber project phase |
 | Production build | PASS | Next.js build with `/`, `/api/workspace`, and event stream route |

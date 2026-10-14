@@ -15,7 +15,7 @@ evidence does not substitute for visual review or human acceptance.
 | Keep an unknown and create a version | PASS | `Keep unknown` created version 3 and retained the unresolved gap without inferred evidence | Human usefulness judgment remains open |
 | Correct a claim and inspect attribution/history | PASS | Corrected claim became `user asserted`, source attribution was removed, and version history advanced | Expanded history presentation was not visually reviewed |
 | Answer the open question | PASS | Answer created an attributed user claim while preserving the source-backed claim | Human usefulness judgment remains open |
-| Repeated answer/correction submission | PASS after repair | Browser reproduced stale draft text creating duplicate versions; successful answer/correction now clear their drafts and disable their submit buttons | Covered by browser revalidation; no component DOM runner is installed |
+| Repeated answer/correction submission | PASS after repair | Browser reproduced stale draft text creating duplicate versions; successful answer/correction now clear their drafts and disable their submit buttons | Covered by browser revalidation; static component tests separately cover disabled empty-draft actions |
 | Malformed input and recovery | PARTIAL | Empty submit is disabled and deterministic/API invalid-input tests pass | Browser file-decoding error recovery was not executed |
 | Disconnect/reconnect during a run | NOT RUN | SSE reconnect contract tests pass | Synthetic browser run completes too quickly for a meaningful manual disconnect |
 | Two-tab stale correction and approval | NOT RUN | PostgreSQL/API stale revision contracts pass | Browser two-tab race was not executed |
