@@ -20,6 +20,7 @@
     "env:check": "node scripts/check-env.mjs",
     "qa:persistent-http": "node scripts/qa-persistent-http.mjs",
     "qa:persistent-readback": "node scripts/qa-persistent-readback.mjs",
+    "qa:e2e": "pnpm --filter @pitchroom/web test:e2e",
     "db:generate": "pnpm --filter @pitchroom/persistence db:generate",
     "db:migrate": "pnpm --filter @pitchroom/persistence db:migrate"
   }

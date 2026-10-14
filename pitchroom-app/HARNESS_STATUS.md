@@ -7,7 +7,7 @@ This file separates implementation evidence from planned or authorized-later wor
 | Layer | Status | Evidence |
 |---|---|---|
 | Type safety | PASS | `pnpm typecheck` across domain, agent, persistence, evals, testkit, and web |
-| Deterministic tests | PASS | 75 tests across domain, persisted-agent service, tool/wall-clock/output/failure budgets, web API/SSE/health/UI state and eight-phase React render matrix, source reconstruction, eval grader/rubric/live-selection gates, artifacts, and terminal-state material guards |
+| Deterministic tests | PASS | 77 tests across domain, persisted-agent service, tool/wall-clock/output/failure budgets, web API/SSE/health/UI state, interaction regressions, and eight-phase React render matrix, source reconstruction, eval grader/rubric/live-selection gates, artifacts, and terminal-state material guards |
 | PostgreSQL integration | PASS | full empty-database migration rehearsal plus 7 repository contract tests against local PostgreSQL 17, including concurrent-run serialization, concurrent idempotent replay, and stale-terminal-write protection |
 | Security regression | PASS | material cannot reopen review/accepted projects; only one concurrent run acquires project ownership; a completed run cannot later clobber project phase |
 | Production build | PASS | Next.js build with `/`, `/api/workspace`, and event stream route |
@@ -19,6 +19,7 @@ This file separates implementation evidence from planned or authorized-later wor
 | Live eval command | IMPLEMENTED, NOT RUN | five-category smoke then full synthetic set; explicit transfer acknowledgement, pinned model, critical-failure stop, immutable batch artifacts |
 | Live model eval | NOT RUN | requires explicit external data/model authorization and credentials |
 | Browser functional QA | PASS | isolated synthetic project covered material → run → review → answer/correction/keep-unknown → accept/reset; accessibility tree and console were inspected; one duplicate-submission defect was fixed and reverified |
+| Repeatable browser E2E | PASS | 5 Playwright journeys in system Chrome: acceptance, Markdown conflict, invalid-file recovery, stale two-tab write, and event-stream disconnect/reload |
 | Visual pixel QA | NOT RUN | screenshots/recordings were not authorized, so responsive layout and pixel-level appearance remain unverified |
 | Human acceptance | NOT RUN | requires user review of the running interaction |
 | Deployment | NOT RUN | requires separate deployment authorization and production auth/privacy decisions |
@@ -29,6 +30,7 @@ This file separates implementation evidence from planned or authorized-later wor
 pnpm check
 pnpm test:server
 pnpm eval:offline
+pnpm qa:e2e
 pnpm eval:live:smoke # explicit acknowledgement, key, and pinned model required
 pnpm harness:case -- supported-growth
 pnpm harness:replay -- eval-supported-growth

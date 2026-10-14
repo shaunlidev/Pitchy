@@ -58,6 +58,7 @@ the accepted state and version history survived the process.
 pnpm check
 pnpm test:server
 pnpm eval:offline
+pnpm qa:e2e
 pnpm harness:case -- supported-growth
 pnpm harness:replay -- eval-supported-growth
 ```
@@ -69,6 +70,9 @@ pnpm harness:replay -- eval-supported-growth
   rejection, user-input attribution, and current-version acceptance.
 - `pnpm eval:offline`: validates the 15-case taxonomy, rubric gate, and seeded
   grader failures. It is not evidence of live-model quality.
+- `pnpm qa:e2e`: starts an isolated fixture server and runs the critical browser
+  journeys in an existing system Chrome. Playwright browser downloads are not
+  required.
 - `pnpm harness:case`: runs one scripted fake-model case through the real bounded
   tool/controller path and writes a redacted bundle under `.artifacts/agent-runs/`.
 - `pnpm harness:replay`: verifies event ordering and reconstructs the terminal
