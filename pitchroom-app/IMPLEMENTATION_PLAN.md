@@ -1083,9 +1083,9 @@ Approval readiness: PASS for planning the listed implementation. Authorization g
 - Main trust boundaries: exact-quote provenance, explicit unknown/conflict states, attributed user corrections, current-version approval.
 - Execution result: T00–T80 and the locally executable parts of T110 are implemented. The deterministic suite, PostgreSQL contracts, persistent restart flow, offline eval set, artifact replay, and production build pass; current evidence is maintained in `HARNESS_STATUS.md`.
 - Live-provider result: the Vercel AI SDK adapter is implemented with pinned configuration, bounded steps, total/step/tool timeouts, structured output, source tools, and deterministic post-validation. No external request has been authorized or run.
-- QA result: HTTP journeys pass in fixture and persistent modes. Browser visual/accessibility inspection could not start because the local computer-control runtime failed before page inspection; human acceptance is not inferred.
+- QA result: HTTP journeys pass in fixture and persistent modes. A non-recording isolated browser pass covered the core material/run/review/answer/correction/keep-unknown/accept/reset path, accessible DOM structure, console, and warmed development performance. It found one repeated-submission defect, which was repaired and reverified. The complete matrix and remaining journeys are recorded in `BROWSER_QA_MATRIX.md`; pixel-level visual review and human acceptance are not inferred.
 - Deployment result: build and migration rehearsal pass, but authentication, provider privacy, backup destination, hosting, rollback, and production security decisions remain deployment blockers.
-- External authorization still required: real model calls/data transfer, browser capture/downloads, deployment, commits/PRs.
+- External authorization still required: real model calls/data transfer, browser capture/downloads, deployment, and PR/publication. Local commits were authorized on 2026-10-14.
 
 ### Implementation reconciliation
 
@@ -1095,10 +1095,10 @@ Approval readiness: PASS for planning the listed implementation. Authorization g
 | T10–T11 | PASS | local PostgreSQL 17, clean and upgrade migrations, transactional repository and concurrency tests |
 | T20–T30 | PASS | stable ingestion/chunking, project-scoped tools, schema/provenance validation, step/tool/repeat/wall-clock budgets |
 | T40–T60 | PASS | deterministic runner, persisted agent lifecycle, immutable versions/current approval, validated HTTP actions and resumable SSE |
-| T70 | IMPLEMENTED; VISUAL QA NOT RUN | Materials/Clarify/review/history UI is built; HTTP behavior passes, visual and accessibility inspection still requires a working browser harness |
+| T70 | FUNCTIONALLY QA'D; VISUAL QA NOT RUN | Materials/Clarify/review/history UI is built; the core isolated browser path, accessible DOM structure, console, and warmed performance pass; remaining journeys are explicit in `BROWSER_QA_MATRIX.md` |
 | T80 | PASS | 15 versioned cases, deterministic grader, human rubric thresholds, redacted artifacts, replay command |
 | T90 | ADAPTER IMPLEMENTED; LIVE EVAL NOT RUN | external model/data-transfer authorization and credentials are required |
-| T100 | NOT RUN | browser runtime failed before inspection; human acceptance belongs to the user |
+| T100 | PARTIAL PASS | non-recording isolated browser QA completed for the core path and repaired one medium defect; upload/conflict, disconnect, two-tab, full keyboard/screen-reader, screenshot-based visual QA, and human acceptance remain open |
 | T110 | PARTIAL | build, migration recovery, runbook, health checks, security boundary, standard source audit, and two finding remediations exist; production auth/privacy/backup/hosting decisions remain open |
 
 ## 22. Engineering review notes
@@ -1119,7 +1119,7 @@ The plan was checked against architecture, code-quality, test, performance, and 
 | CEO Review | not run | Product scope is frozen for this implementation pass | 0 | NOT RUN | Not required for the requested implementation-only plan |
 | Outside Review | unavailable | Independent second opinion | 0 | UNAVAILABLE | Required review-specific native task interface is unavailable in this host |
 | Eng Review | `/plan-eng-review` | Architecture & tests | 1 | CLEAR | 4 plan gaps found and resolved in section 22 |
-| Design Review | local implementation review | UI/UX gaps | 1 | PARTIAL | Evidence workbench is implemented; browser visual/accessibility QA remains NOT RUN |
+| Design Review | local implementation review | UI/UX gaps | 1 | PARTIAL | Functional browser and accessible-DOM checks pass for the core path; pixel-level responsive review and human acceptance remain NOT RUN |
 | DX Review | local harness review | Developer experience gaps | 1 | CLEAR | One-command checks, case generation/replay, runbook, and environment gates are implemented |
 
 **OUTSIDE COVERAGE:** Claude Code review was not run; compatible bounded native fallback interfaces were unavailable. No independent-review credit claimed.
