@@ -13,7 +13,8 @@ Status values are `PASS`, `FAIL`, or `NOT RUN`. This document is not deployment 
 | External provider privacy review | NOT RUN | provider transfer not authorized |
 | Live model eval thresholds | NOT RUN | no authorized live calls |
 | Browser functional QA | PARTIAL | isolated non-recording core journey passed; remaining journeys are tracked in `BROWSER_QA_MATRIX.md` |
-| Browser visual/accessibility acceptance | NOT RUN | screenshot-based responsive review, full keyboard/screen-reader review, and user acceptance remain separate gates |
+| Browser responsive visual QA | PASS | production fixture inspected at desktop, tablet, and mobile widths with no console errors |
+| Assistive-technology/human acceptance | NOT RUN | bound labels and keyboard flow pass; screen-reader interpretation and user acceptance remain separate gates |
 | Backup/restore rehearsal | NOT RUN | operator backup destination not selected |
 | Hosting and rollback | NOT RUN | deployment destination not authorized |
 | Human acceptance | NOT RUN | user must review the live interaction |

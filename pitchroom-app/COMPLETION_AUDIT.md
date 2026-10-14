@@ -16,10 +16,10 @@ lower layer is never used as evidence for an unrun higher layer.
 | T40 fake agent loop | PASS | scripted `StepAgent` cases traverse real tools/controller; transient failure recovery, prompt injection, long-tail retrieval, conflicts, exact quotes, and replay are covered | fake output is not model-quality evidence |
 | T50 review/version/approval | PASS | immutable agent/user versions, answer vs correction, keep-unknown, user attribution, stale/current approval, retry-safe inputs | human comprehension is not inferred |
 | T60 HTTP/SSE | PASS for local slice | Zod command/response/event/error schemas; request IDs; 409 conflict envelope; bounded live SSE with Last-Event-ID; full PostgreSQL HTTP flow and restart readback | production auth, rate limiting, and hosting logs remain deployment blockers |
-| T70 Materials/Clarify UI | FUNCTIONALLY QA'D; VISUAL QA NOT RUN | pure React view is separated from effects; eight-phase render and HomePage interaction tests pass; isolated manual and Playwright flows cover material, run, review, answer, correction, keep-unknown, acceptance, invalid-file recovery, reset, keyboard order, stale two-tab writes, SSE disconnect/reload, accessible names/structure, warmed performance, and a clean console | screenshot-based responsive/pixel review, screen-reader, live-model disconnect/timeout, and human acceptance remain open |
+| T70 Materials/Clarify UI | FUNCTIONAL + RESPONSIVE VISUAL PASS | pure React view is separated from effects; eight-phase render and HomePage interaction tests pass; isolated manual and Playwright flows cover material, run, review, answer, correction, keep-unknown, acceptance, invalid-file recovery, reset, keyboard order, stale two-tab writes, SSE disconnect/reload, accessible names/structure, warmed performance, and a clean console; production screenshots pass at desktop/tablet/mobile widths | screen-reader, live-model disconnect/timeout, and human acceptance remain open |
 | T80 offline evals | PASS | 15 versioned cases, deterministic graders, human rubric thresholds, five-category live selection, redacted artifacts, replay | rubric scores require human review |
 | T90 real model integration | IMPLEMENTED; NOT RUN | live PostgreSQL runtime, Vercel AI SDK tool agent, abort/timeout/budget controls, usage/trace capture, explicit transfer acknowledgement, smoke/full live-eval commands | explicit external-transfer authorization, credentials, API cost, five-output review, and full live thresholds |
-| T100 browser QA | PARTIAL PASS | manual core QA plus 5 repeatable Playwright journeys pass; upload/conflict, invalid-file recovery, SSE disconnect/reload, stale two-tab correction, and keyboard activation are now evidenced; one medium defect was repaired with interaction regressions | screenshot-based visual QA, screen-reader, live-model timeout/disconnect, and human acceptance remain open |
+| T100 browser QA | PARTIAL PASS | manual core QA, 5 repeatable Playwright journeys, and production responsive screenshots pass; upload/conflict, invalid-file recovery, SSE disconnect/reload, stale two-tab correction, keyboard activation, and three-width layout are evidenced; one medium defect was repaired with interaction regressions | screen-reader, live-model timeout/disconnect, and human acceptance remain open |
 | T110 operational hardening | PARTIAL | health/readiness, request/source/project budgets, cancellation, migration recovery procedure, completed 97-file security scan, remediated state-transition and concurrent-run findings, runbook, production build | authentication/authorization, CSRF/origin, production rate/cost limits, privacy/retention/deletion, backup/restore, hosting/rollback, deployment decision |
 
 ## Current verified commands
@@ -36,7 +36,7 @@ qa:persistent-readback     PASS (accepted state survives process restart)
 empty database migration   PASS (0000–0005; cancelled enum inspected)
 live model eval            NOT RUN
 browser functional/a11y QA PASS (non-recording isolated synthetic flow)
-browser visual pixel QA    NOT RUN
+browser responsive visual  PASS (production desktop/tablet/mobile screenshots)
 human acceptance           NOT RUN
 deployment                 NOT RUN
 ```

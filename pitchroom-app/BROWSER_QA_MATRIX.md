@@ -11,8 +11,8 @@ evidence does not substitute for visual review or human acceptance.
 
 | Journey | Status | Evidence | Remaining boundary |
 |---|---|---|---|
-| Paste supported source, run, inspect citation, accept | PASS | Source inventory, stable chunk reference, exact quote, ordered trace, explicit acceptance, and terminal stopped state were observed | Pixel-level presentation not reviewed |
-| Upload `.md`, create conflicting sources, preserve conflict | PASS | Two local Markdown fixtures were uploaded; the agent read both chunks, produced one `conflicting` claim with two exact quotes, asked the user which source is current, and `Keep unknown` created a new version without selecting a winner | Pixel-level presentation not reviewed |
+| Paste supported source, run, inspect citation, accept | PASS | Source inventory, stable chunk reference, exact quote, ordered trace, explicit acceptance, terminal stopped state, and production screenshots at three widths were inspected | Human comprehension judgment remains open |
+| Upload `.md`, create conflicting sources, preserve conflict | PASS | Two local Markdown fixtures were uploaded; the agent read both chunks, produced one `conflicting` claim with two exact quotes, asked the user which source is current, and `Keep unknown` created a new version without selecting a winner | Human usefulness judgment remains open |
 | Keep an unknown and create a version | PASS | `Keep unknown` created version 3 and retained the unresolved gap without inferred evidence | Human usefulness judgment remains open |
 | Correct a claim and inspect attribution/history | PASS | Corrected claim became `user asserted`, source attribution was removed, and version history advanced | Expanded history presentation was not visually reviewed |
 | Answer the open question | PASS | Answer created an attributed user claim while preserving the source-backed claim | Human usefulness judgment remains open |
@@ -44,5 +44,5 @@ evidence does not substitute for visual review or human acceptance.
 
 ## Unclosed gates
 
-Screenshot-based responsive/pixel review, full assistive-technology review, a
-live-model timeout/disconnect journey, and user acceptance remain separate.
+Full assistive-technology review, a live-model timeout/disconnect journey, and
+human acceptance remain separate.

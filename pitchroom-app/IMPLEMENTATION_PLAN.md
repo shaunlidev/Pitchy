@@ -1095,10 +1095,10 @@ Approval readiness: PASS for planning the listed implementation. Authorization g
 | T10–T11 | PASS | local PostgreSQL 17, clean and upgrade migrations, transactional repository and concurrency tests |
 | T20–T30 | PASS | stable ingestion/chunking, project-scoped tools, schema/provenance validation, step/tool/repeat/wall-clock budgets |
 | T40–T60 | PASS | deterministic runner, persisted agent lifecycle, immutable versions/current approval, validated HTTP actions and resumable SSE |
-| T70 | FUNCTIONALLY QA'D; VISUAL QA NOT RUN | Materials/Clarify/review/history UI is built; an eight-phase React server-render matrix covers state semantics; the core isolated browser path, keyboard order, accessible DOM structure, console, and warmed performance pass; remaining journeys are explicit in `BROWSER_QA_MATRIX.md` |
+| T70 | FUNCTIONAL + RESPONSIVE VISUAL PASS | Materials/Clarify/review/history UI is built; React state/interaction tests, manual browser QA, 5 Playwright journeys, keyboard order, accessible DOM structure, console, warmed performance, and production screenshots at 1280×720, 768×1024, and 375×812 pass |
 | T80 | PASS | 15 versioned cases, deterministic grader, human rubric thresholds, redacted artifacts, replay command |
 | T90 | ADAPTER IMPLEMENTED; LIVE EVAL NOT RUN | external model/data-transfer authorization and credentials are required |
-| T100 | PARTIAL PASS | non-recording isolated browser QA completed for the core path and repaired one medium defect; upload/conflict, disconnect, two-tab, full keyboard/screen-reader, screenshot-based visual QA, and human acceptance remain open |
+| T100 | PARTIAL PASS | manual QA, 5 repeatable Playwright journeys, and three-width production visual QA pass; one medium defect was repaired with interaction regressions; screen-reader, live-model disconnect/timeout, and human acceptance remain open |
 | T110 | PARTIAL | build, migration recovery, runbook, health checks, security boundary, standard source audit, and two finding remediations exist; production auth/privacy/backup/hosting decisions remain open |
 
 ## 22. Engineering review notes

@@ -20,7 +20,7 @@ This file separates implementation evidence from planned or authorized-later wor
 | Live model eval | NOT RUN | requires explicit external data/model authorization and credentials |
 | Browser functional QA | PASS | isolated synthetic project covered material → run → review → answer/correction/keep-unknown → accept/reset; accessibility tree and console were inspected; one duplicate-submission defect was fixed and reverified |
 | Repeatable browser E2E | PASS | 5 Playwright journeys in system Chrome: acceptance, Markdown conflict, invalid-file recovery, stale two-tab write, and event-stream disconnect/reload |
-| Visual pixel QA | NOT RUN | screenshots/recordings were not authorized, so responsive layout and pixel-level appearance remain unverified |
+| Responsive visual QA | PASS | production fixture inspected at 1280×720, 768×1024, and 375×812; no overlap, clipping, horizontal overflow, or console errors; local screenshots and QA report retained under `.gstack/qa-reports/` |
 | Human acceptance | NOT RUN | requires user review of the running interaction |
 | Deployment | NOT RUN | requires separate deployment authorization and production auth/privacy decisions |
 
