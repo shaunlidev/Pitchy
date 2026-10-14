@@ -18,7 +18,8 @@ This file separates implementation evidence from planned or authorized-later wor
 | Vercel AI SDK adapter | IMPLEMENTED, NOT LIVE-VALIDATED | bounded `ToolLoopAgent`, structured output, real tools, abort propagation, tool/result/elapsed budgets, persisted trace/usage metadata, and fail-closed config |
 | Live eval command | IMPLEMENTED, NOT RUN | five-category smoke then full synthetic set; explicit transfer acknowledgement, pinned model, critical-failure stop, immutable batch artifacts |
 | Live model eval | NOT RUN | requires explicit external data/model authorization and credentials |
-| Visual browser QA | NOT RUN | in-app browser runtime failed before page inspection; no recording was created |
+| Browser functional QA | PASS | isolated synthetic project covered material → run → review → answer/correction/keep-unknown → accept/reset; accessibility tree and console were inspected; one duplicate-submission defect was fixed and reverified |
+| Visual pixel QA | NOT RUN | screenshots/recordings were not authorized, so responsive layout and pixel-level appearance remain unverified |
 | Human acceptance | NOT RUN | requires user review of the running interaction |
 | Deployment | NOT RUN | requires separate deployment authorization and production auth/privacy decisions |
 
@@ -69,3 +70,7 @@ prove grader mechanics and case coverage, not model quality.
    bounded stream open, emits new ordered events, and retains one-shot replay.
 10. Stale approval now maps to HTTP 409 with `CONFLICT`; the HTTP QA contract was
     updated from its former generic-400 expectation.
+11. Successful answer and correction actions left their draft text in the form,
+    allowing an accidental second click to create a duplicate version. Successful
+    submissions and synthetic reset now clear those drafts; browser revalidation
+    confirmed both submit buttons return to disabled.

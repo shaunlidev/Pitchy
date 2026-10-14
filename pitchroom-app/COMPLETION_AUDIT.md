@@ -16,10 +16,10 @@ lower layer is never used as evidence for an unrun higher layer.
 | T40 fake agent loop | PASS | scripted `StepAgent` cases traverse real tools/controller; transient failure recovery, prompt injection, long-tail retrieval, conflicts, exact quotes, and replay are covered | fake output is not model-quality evidence |
 | T50 review/version/approval | PASS | immutable agent/user versions, answer vs correction, keep-unknown, user attribution, stale/current approval, retry-safe inputs | human comprehension is not inferred |
 | T60 HTTP/SSE | PASS for local slice | Zod command/response/event/error schemas; request IDs; 409 conflict envelope; bounded live SSE with Last-Event-ID; full PostgreSQL HTTP flow and restart readback | production auth, rate limiting, and hosting logs remain deployment blockers |
-| T70 Materials/Clarify UI | IMPLEMENTED; VISUAL QA NOT RUN | paste and fatal-UTF-8 `.txt/.md` input, multi-source inventory, chunk inspector, reading/structuring/failure/cancel/retry/review/accepted states, all themes/claims/evidence, answers/corrections/unknowns/history; production build | browser visual, keyboard, screen-reader, two-tab, disconnect, and human acceptance evidence is missing |
+| T70 Materials/Clarify UI | FUNCTIONALLY QA'D; VISUAL QA NOT RUN | isolated browser flow covered material, run, review, answer, correction, keep-unknown, acceptance, reset, accessible names/structure, warmed performance, and a clean console; repeated-review draft bug was fixed and reverified; production build passes | screenshot-based responsive/pixel review, full keyboard/screen-reader, two-tab, disconnect, and human acceptance evidence is missing |
 | T80 offline evals | PASS | 15 versioned cases, deterministic graders, human rubric thresholds, five-category live selection, redacted artifacts, replay | rubric scores require human review |
 | T90 real model integration | IMPLEMENTED; NOT RUN | live PostgreSQL runtime, Vercel AI SDK tool agent, abort/timeout/budget controls, usage/trace capture, explicit transfer acknowledgement, smoke/full live-eval commands | explicit external-transfer authorization, credentials, API cost, five-output review, and full live thresholds |
-| T100 browser QA | NOT RUN | two earlier computer-control attempts failed before inspection; no recording was created | working browser-control runtime plus explicit recording/QA authorization and user acceptance |
+| T100 browser QA | PARTIAL PASS | non-recording black-box QA completed in an isolated synthetic worktree; core workflow, terminal accepted state, accessible tree, console, and warmed performance were checked; one medium review-form defect was repaired and reverified | screenshots/recordings were not authorized, so responsive/pixel visual QA and user acceptance remain open |
 | T110 operational hardening | PARTIAL | health/readiness, request/source/project budgets, cancellation, migration recovery procedure, completed 97-file security scan, remediated state-transition and concurrent-run findings, runbook, production build | authentication/authorization, CSRF/origin, production rate/cost limits, privacy/retention/deletion, backup/restore, hosting/rollback, deployment decision |
 
 ## Current verified commands
@@ -34,7 +34,8 @@ qa:persistent-http         PASS (10 durable events; stale approval rejected)
 qa:persistent-readback     PASS (accepted state survives process restart)
 empty database migration   PASS (0000–0005; cancelled enum inspected)
 live model eval            NOT RUN
-browser visual/a11y QA     NOT RUN
+browser functional/a11y QA PASS (non-recording isolated synthetic flow)
+browser visual pixel QA    NOT RUN
 human acceptance           NOT RUN
 deployment                 NOT RUN
 ```
