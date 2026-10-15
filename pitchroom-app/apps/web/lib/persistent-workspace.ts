@@ -5,16 +5,21 @@ import type { FixtureState } from "./fixture-store";
 
 const globals = globalThis as typeof globalThis & { __pitchroomDatabase?: ReturnType<typeof createDatabase>; __pitchroomRepository?: PitchroomRepository };
 
+export function repositoryNeedsRefresh(value: unknown): boolean {
+  return !value || Object.getPrototypeOf(value) !== PitchroomRepository.prototype;
+}
+
 function repository() {
   const url = process.env.DATABASE_URL;
   if (!url) throw new Error("DATABASE_URL is required for postgres-fake mode.");
   globals.__pitchroomDatabase ??= createDatabase(url);
-  // Next.js preserves globalThis across development hot reloads. Recreate a
-  // cached class instance when its prototype predates the current module.
-  if (!globals.__pitchroomRepository || typeof globals.__pitchroomRepository.removeMaterial !== "function") {
+  // Next.js preserves globalThis across development hot reloads. Comparing the
+  // complete prototype identity prevents any newly added repository method from
+  // being missed by a one-off capability check.
+  if (repositoryNeedsRefresh(globals.__pitchroomRepository)) {
     globals.__pitchroomRepository = new PitchroomRepository(globals.__pitchroomDatabase.db);
   }
-  return globals.__pitchroomRepository;
+  return globals.__pitchroomRepository!;
 }
 
 async function project() {

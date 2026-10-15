@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { reconstructSourceContent } from "./persistent-workspace";
+import { PitchroomRepository } from "@pitchroom/persistence";
+import { reconstructSourceContent, repositoryNeedsRefresh } from "./persistent-workspace";
 
 describe("persistent workspace source reconstruction", () => {
   it("does not duplicate overlapping chunk text", () => {
@@ -14,5 +15,12 @@ describe("persistent workspace source reconstruction", () => {
       { startOffset: 4, text: "efghij" },
       { startOffset: 0, text: "abcdef" },
     ])).toBe("abcdefghij");
+  });
+});
+
+describe("persistent workspace development cache", () => {
+  it("replaces repository objects created from an outdated hot-reload prototype", () => {
+    expect(repositoryNeedsRefresh(Object.create({ removeMaterial() {} }))).toBe(true);
+    expect(repositoryNeedsRefresh(Object.create(PitchroomRepository.prototype))).toBe(false);
   });
 });
