@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { GET } from "./route";
+import { healthResponse } from "./route";
 
 const original = { runtime: process.env.PITCHROOM_RUNTIME, key: process.env.OPENAI_API_KEY, model: process.env.OPENAI_MODEL, database: process.env.DATABASE_URL, ack: process.env.PITCHROOM_LIVE_TRANSFER_ACK };
 afterEach(() => {
@@ -11,7 +11,7 @@ afterEach(() => {
 describe("health readiness", () => {
   it("is ready in isolated fixture mode", async () => {
     process.env.PITCHROOM_RUNTIME = "fixture";
-    const response = GET();
+    const response = await healthResponse();
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ status: "ready", runtime: "fixture" });
   });
@@ -19,7 +19,7 @@ describe("health readiness", () => {
   it("fails closed when live configuration is incomplete", async () => {
     process.env.PITCHROOM_RUNTIME = "live";
     delete process.env.OPENAI_API_KEY; delete process.env.OPENAI_MODEL; delete process.env.DATABASE_URL;
-    const response = GET();
+    const response = await healthResponse();
     expect(response.status).toBe(503);
     expect(await response.json()).toMatchObject({ status: "not_ready", checks: { configuration: false, liveModel: false } });
   });
@@ -28,8 +28,16 @@ describe("health readiness", () => {
     process.env.PITCHROOM_RUNTIME = "live";
     process.env.OPENAI_API_KEY = "test-key"; process.env.OPENAI_MODEL = "pinned-model"; process.env.DATABASE_URL = "postgres://local/test";
     delete process.env.PITCHROOM_LIVE_TRANSFER_ACK;
-    expect(GET().status).toBe(503);
+    expect((await healthResponse(async () => true)).status).toBe(503);
     process.env.PITCHROOM_LIVE_TRANSFER_ACK = "authorized";
-    expect(GET().status).toBe(200);
+    expect((await healthResponse(async () => true)).status).toBe(200);
+  });
+
+  it("reports not ready when configured storage cannot be reached", async () => {
+    process.env.PITCHROOM_RUNTIME = "live";
+    process.env.OPENAI_API_KEY = "test-key"; process.env.OPENAI_MODEL = "pinned-model"; process.env.DATABASE_URL = "postgres://local/test"; process.env.PITCHROOM_LIVE_TRANSFER_ACK = "authorized";
+    const response = await healthResponse(async () => false);
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({ status: "not_ready", checks: { configuration: true, database: false, liveModel: true } });
   });
 });

@@ -7,10 +7,18 @@ export const dynamic = "force-dynamic";
 const runtime = () => process.env.PITCHROOM_RUNTIME ?? "fixture";
 const persistentMode = () => runtime() === "live" ? "live" as const : "postgres-fake" as const;
 const headers = (requestId: string) => ({ "cache-control": "no-store", "x-pitchroom-mode": runtime(), "x-request-id": requestId });
-export async function GET() {
+export async function workspaceResponse(readState: () => unknown | Promise<unknown> = () => runtime() === "fixture" ? readFixtureState() : readPersistentState(persistentMode())) {
   const requestId = crypto.randomUUID();
-  const state = runtime() === "fixture" ? readFixtureState() : await readPersistentState(persistentMode());
-  return NextResponse.json(workspaceStateSchema.parse(state), { headers: headers(requestId) });
+  try {
+    const state = await readState();
+    return NextResponse.json(workspaceStateSchema.parse(state), { headers: headers(requestId) });
+  } catch {
+    const envelope = errorEnvelopeSchema.parse({ code: "PERSISTENCE_ERROR", error: "Workspace storage is temporarily unavailable. Retry in a moment.", requestId });
+    return NextResponse.json(envelope, { status: 503, headers: headers(requestId) });
+  }
+}
+export async function GET() {
+  return workspaceResponse();
 }
 export async function POST(request: Request) {
   const requestId = crypto.randomUUID();

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { errorEnvelopeSchema, workspaceStateSchema } from "../../../lib/api-contract";
 import { resetFixtureState } from "../../../lib/fixture-store";
-import { GET, POST } from "./route";
+import { GET, POST, workspaceResponse } from "./route";
 
 const request = (body: unknown) => new Request("http://localhost/api/workspace", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
 
@@ -16,6 +16,15 @@ describe("workspace API", () => {
     expect(workspaceStateSchema.parse(await response.json()).project.phase).toBe("empty");
     expect(response.headers.get("cache-control")).toBe("no-store");
     expect(response.headers.get("x-request-id")).toBeTruthy();
+  });
+
+  it("returns a structured retryable response when storage is unavailable", async () => {
+    const response = await workspaceResponse(async () => { throw new Error("connection failed"); });
+    expect(response.status).toBe(503);
+    expect(errorEnvelopeSchema.parse(await response.json())).toMatchObject({
+      code: "PERSISTENCE_ERROR",
+      error: "Workspace storage is temporarily unavailable. Retry in a moment.",
+    });
   });
 
   it("rejects invalid commands before they reach state", async () => {
