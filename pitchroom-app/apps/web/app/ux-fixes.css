@@ -141,6 +141,9 @@
 .originalNote { min-height: 240px; color: var(--muted); line-height: 1.65; }
 .positioningActions { margin-top: 28px; padding-top: 20px; border-top: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between; gap: 20px; }
 .positioningActions > div { display: flex; align-items: center; gap: 18px; }
+.positioningAdjustment { margin-top: 26px; padding-top: 22px; border-top: 1px solid var(--line); }
+.positioningAdjustment label { display: block; margin-bottom: 8px; font-weight: 700; }
+.positioningAdjustment > div { display: flex; justify-content: flex-end; gap: 10px; margin-top: 10px; }
 
 @media (max-width: 760px) {
   .accepted { grid-template-columns: 1fr; }
@@ -150,4 +153,58 @@
   .positioningPaper > h2 { font-size: 29px; }
   .movement { grid-template-columns: 1fr; }
   .positioningActions, .positioningActions > div { align-items: stretch; flex-direction: column; }
+  .positioningAdjustment > div { flex-direction: column; }
+}
+
+.workflowFailure, .staleWarning, .historicalNotice { margin: 18px 0; padding: 16px 18px; border-left: 3px solid var(--orange); background: #291b16; display: flex; align-items: center; gap: 14px; }
+.workflowFailure span, .staleWarning span { color: var(--muted); }
+.staleWarning { background: #2c2518; flex-wrap: wrap; }
+.staleWarning .btn { margin-left: auto; }
+.deckPage { max-width: 1304px; margin: 0 auto; }
+.deckHeaderActions { display: flex; align-items: center; gap: 10px; }
+.deckLayout { display: grid; grid-template-columns: 210px minmax(0, 1fr) 260px; gap: 26px; align-items: start; }
+.deckPages, .draftHistory { display: grid; gap: 7px; }
+.deckPages button, .draftHistory button { border: 1px solid var(--line); background: #111113; color: var(--ink); padding: 12px; text-align: left; border-radius: 6px; }
+.deckPages button[aria-current="page"], .draftHistory button[aria-pressed="true"] { border-color: var(--orange); background: #241d19; }
+.deckPages button span { display: inline-grid; place-items: center; width: 24px; height: 24px; margin-right: 8px; border: 1px solid var(--line); border-radius: 50%; font-size: 11px; }
+.deckPaperStack { display: grid; gap: 24px; }
+.deckPaper { min-height: 430px; padding: 44px; background: #f7f4ee; color: #272b24; border-radius: 3px; box-shadow: 0 16px 60px rgba(0,0,0,.32); }
+.deckPaper .eyebrow { color: #aa4028; }
+.deckPaper h2 { margin: 18px 0 28px; font-size: 42px; max-width: 720px; }
+.deckPaper > p { white-space: pre-line; font-size: 21px; line-height: 1.5; max-width: 760px; }
+.deckPaper details { margin-top: 32px; }
+.deckPaper blockquote { background: #ece7dd; }
+.deckPaper ul { margin-top: 28px; padding-left: 22px; font-size: 18px; line-height: 1.65; }
+.deckTools { position: sticky; top: 140px; display: grid; gap: 14px; padding: 18px; border: 1px solid var(--line); border-radius: 8px; }
+.deckTools h2 { font-size: 18px; }
+.deckTools h3 { margin-top: 18px; font-size: 13px; color: var(--muted); }
+.draftHistory button { display: grid; gap: 4px; }
+.draftHistory small { color: var(--muted); }
+.deckEditor { display: grid; gap: 8px; }
+.deckEditor input { width: 100%; background: #101012; border: 1px solid #57534f; color: var(--ink); border-radius: 6px; padding: 10px; }
+.deckEditor > div { display: flex; justify-content: flex-end; gap: 8px; }
+
+@media (max-width: 1000px) {
+  .deckLayout { grid-template-columns: 170px minmax(0, 1fr); }
+  .deckTools { grid-column: 1 / -1; position: static; }
+}
+
+@media (max-width: 760px) {
+  .deckHeaderActions { width: 100%; flex-direction: column; align-items: stretch; }
+  .deckLayout { display: block; }
+  .deckPages { margin-bottom: 18px; }
+  .deckPaper { min-height: 360px; padding: 26px; }
+  .deckPaper h2 { font-size: 32px; }
+  .deckPaper > p { font-size: 17px; }
+  .deckTools { margin-top: 18px; }
+  .workflowFailure, .staleWarning, .historicalNotice { align-items: flex-start; flex-direction: column; }
+  .staleWarning .btn { margin-left: 0; }
+}
+
+@media print {
+  .topbar, .navShell, .deckHeaderActions, .deckPages, .deckTools, .agentInspector, .staleWarning, .historicalNotice { display: none !important; }
+  .workspaceMain { max-width: none; padding: 0; }
+  .deckLayout { display: block; }
+  .deckPaperStack { display: block; }
+  .deckPaper { min-height: 100vh; box-shadow: none; page-break-after: always; }
 }

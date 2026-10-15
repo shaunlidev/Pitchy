@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { understandingProposalV1Schema, validateProposalEvidence, type SourceChunk } from "@pitchroom/domain";
+import { deckProposalV1Schema, understandingProposalV1Schema, validateDeckEvidence, validateProposalEvidence, type SourceChunk } from "@pitchroom/domain";
 
 export const understandingEvalCaseSchema = z.object({
   id: z.string().min(1),
@@ -35,6 +35,24 @@ export const initialEvalCases: UnderstandingEvalCase[] = [
 ];
 
 export type DeterministicGrade = { passed: boolean; checks: Array<{ name: string; passed: boolean; message?: string }> };
+
+export function gradeDeck(input: { proposal: unknown; chunks: SourceChunk[]; understandingVersionId: string; positioningVersionId: string; appliedDirectionId: string }): DeterministicGrade {
+  const checks: DeterministicGrade["checks"] = [];
+  const parsed = deckProposalV1Schema.safeParse(input.proposal);
+  checks.push({ name: "schema_valid", passed: parsed.success, message: parsed.success ? undefined : parsed.error.message });
+  if (!parsed.success) return { passed: false, checks };
+  try {
+    validateDeckEvidence(parsed.data, input.chunks);
+    checks.push({ name: "evidence_valid", passed: true });
+  } catch (error) {
+    checks.push({ name: "evidence_valid", passed: false, message: error instanceof Error ? error.message : "Invalid evidence" });
+  }
+  checks.push({ name: "understanding_current", passed: parsed.data.understandingVersionId === input.understandingVersionId });
+  checks.push({ name: "positioning_current", passed: parsed.data.positioningVersionId === input.positioningVersionId });
+  checks.push({ name: "applied_direction_current", passed: parsed.data.appliedDirectionId === input.appliedDirectionId });
+  checks.push({ name: "unknowns_preserved", passed: parsed.data.pages[4]!.openQuestions.length > 0 });
+  return { passed: checks.every((check) => check.passed), checks };
+}
 
 export function gradeProposal(input: { evalCase: UnderstandingEvalCase; proposal: unknown; chunks: SourceChunk[]; terminalPhase: string; stepCount: number; maxSteps: number }): DeterministicGrade {
   const checks: DeterministicGrade["checks"] = [];

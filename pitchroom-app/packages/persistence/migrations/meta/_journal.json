@@ -57,6 +57,13 @@
       "when": 1792059000000,
       "tag": "0007_add_positioning",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1792062000000,
+      "tag": "0008_add_deck_and_workflow_runs",
+      "breakpoints": true
     }
   ]
 }

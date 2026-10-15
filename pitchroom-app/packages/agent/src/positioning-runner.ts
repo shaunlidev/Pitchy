@@ -64,7 +64,7 @@ const positioningJsonSchema = {
     understandingVersionId: { type: "string" },
     originalFraming: { type: "object", additionalProperties: false, required: ["title", "coreMessage"], properties: { title: { const: "Original framing" }, coreMessage: { type: "string" } } },
     directions: { type: "array", minItems: 2, maxItems: 3, items: { type: "object", additionalProperties: false, required: ["id", "title", "coreMessage", "from", "to", "tradeoff", "excludes", "evidence", "userInputIds"], properties: {
-      id: { type: "string" }, title: { type: "string" }, coreMessage: { type: "string" }, from: { type: "string" }, to: { type: "string" }, tradeoff: { type: "string" }, excludes: { type: "array", items: { type: "string" } },
+      id: { type: "string" }, title: { type: "string" }, coreMessage: { type: "string" }, from: { type: "string" }, to: { type: "string" }, tradeoff: { type: "string" }, excludes: { type: "array", items: { type: "string" } }, judgmentNote: { type: "string" },
       evidence: { type: "array", minItems: 1, items: { type: "object", additionalProperties: false, required: ["sourceId", "chunkId", "quote"], properties: { sourceId: { type: "string" }, chunkId: { type: "string" }, quote: { type: "string" } } } },
       userInputIds: { type: "array", items: { type: "string" } },
     } } },

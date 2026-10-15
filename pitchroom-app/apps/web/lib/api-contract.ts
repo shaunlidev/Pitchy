@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { acceptedMediaTypes, positioningProposalV1Schema, sourceChunkSchema, understandingProposalV1Schema } from "@pitchroom/domain";
+import { acceptedMediaTypes, deckProposalV1Schema, positioningProposalV1Schema, sourceChunkSchema, understandingProposalV1Schema } from "@pitchroom/domain";
 
 const commandId = z.string().trim().min(1).max(200).optional();
 const expectedRevision = z.number().int().nonnegative();
@@ -22,6 +22,9 @@ export const workspaceCommandSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("generate_positioning"), commandId, expectedRevision }),
   z.object({ action: z.literal("apply_positioning"), commandId, expectedRevision, directionId: z.string().min(1) }),
   z.object({ action: z.literal("undo_positioning"), commandId, expectedRevision }),
+  z.object({ action: z.literal("adjust_positioning"), commandId, expectedRevision, directionId: z.string().min(1), mode: z.enum(["headline", "judgment_note"]), text: z.string().trim().min(1).max(10_000) }),
+  z.object({ action: z.literal("generate_deck"), commandId, expectedRevision }),
+  z.object({ action: z.literal("edit_deck_page"), commandId, deckId: z.string().min(1), expectedDeckVersion: z.number().int().positive(), pageId: z.string().min(1), title: z.string().trim().min(1).max(500), body: z.string().trim().min(1).max(20_000) }),
 ]);
 
 const materialSchema = z.object({
@@ -60,6 +63,9 @@ export const workspaceStateSchema = z.object({
     previousAppliedDirectionId: z.string().min(1).optional(),
     createdAt: z.string().datetime(),
   }).optional(),
+  deck: z.object({ id: z.string().min(1), number: z.number().int().positive(), proposal: deckProposalV1Schema, createdBy: z.enum(["agent", "user"]), createdAt: z.string().datetime(), stale: z.boolean() }).optional(),
+  deckVersions: z.array(z.object({ id: z.string().min(1), number: z.number().int().positive(), proposal: deckProposalV1Schema, createdBy: z.enum(["agent", "user"]), createdAt: z.string().datetime() })),
+  workflowRuns: z.array(z.object({ id: z.string().min(1), kind: z.enum(["positioning", "deck"]), status: z.enum(["running", "completed", "failed"]), failureMessage: z.string().optional(), events: z.array(z.object({ type: z.string(), detail: z.string(), at: z.string() })) })),
   events: z.array(z.object({ sequence: z.number().int().positive(), label: z.string().min(1), detail: z.string(), at: z.string().datetime() })),
 });
 

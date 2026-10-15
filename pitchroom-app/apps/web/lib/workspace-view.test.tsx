@@ -1,7 +1,7 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it } from "vitest";
-import { acceptFixture, addFixtureMaterial, generateFixturePositioning, readFixtureState, resetFixtureState, runFixtureAgent, type FixtureState } from "./fixture-store";
+import { acceptFixture, addFixtureMaterial, applyFixturePositioning, generateFixtureDeck, generateFixturePositioning, readFixtureState, resetFixtureState, runFixtureAgent, type FixtureState } from "./fixture-store";
 import { WorkspaceView } from "./workspace-view";
 
 const sample = "Atelier helps design teams prepare client presentations.";
@@ -93,5 +93,18 @@ describe("WorkspaceView state matrix", () => {
     expect(html).toContain("Original framing");
     expect(html).toContain("Keep original");
     expect(html).toContain("Previewing does not change the project.");
+  });
+
+  it("renders a reviewable deck with pages, editing, history, and upstream navigation", () => {
+    addFixtureMaterial({ name: "brief.md", mediaType: "text/markdown", text: sample });
+    const reviewed = runFixtureAgent(); acceptFixture(reviewed.project.revision);
+    const positioned = generateFixturePositioning(); applyFixturePositioning(positioned.positioning!.proposal.directions[0]!.id, positioned.project.revision);
+    const deck = generateFixtureDeck(positioned.project.revision);
+    const html = render(deck, { initialDestination: "deck" });
+    expect(html).toContain("Discussion deck");
+    expect(html).toContain("Review complete deck");
+    expect(html).toContain("Edit this page");
+    expect(html).toContain("Draft history");
+    expect(html).toContain("Revisit positioning");
   });
 });

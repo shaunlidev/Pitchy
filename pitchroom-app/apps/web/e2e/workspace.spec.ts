@@ -4,17 +4,22 @@ import { resolve } from "node:path";
 const fixture = (name: string) => resolve(process.cwd(), "e2e", "fixtures", name);
 
 async function reset(page: import("@playwright/test").Page) {
+  await page.request.post("/api/workspace", { data: { action: "reset", commandId: `reset-${Date.now()}` } });
   await page.goto("/");
   await expect(page.getByRole("main")).toBeVisible();
-  await page.getByRole("button", { name: "Reset synthetic project" }).click();
   await expect(page.getByText("Project state: empty")).toBeVisible();
+}
+
+async function addPastedMaterial(page: import("@playwright/test").Page, text = "Atelier helps teams recover two days of client presentation preparation.") {
+  await page.getByLabel("Paste source text").fill(text);
+  await page.getByRole("button", { name: "Add material" }).click();
+  await expect(page.getByText("Project state: materials ready")).toBeVisible();
 }
 
 test.beforeEach(async ({ page }) => reset(page));
 
 test("material to reviewed understanding to explicit acceptance", async ({ page }) => {
-  await page.getByRole("button", { name: "Add material" }).click();
-  await expect(page.getByText("Project state: materials ready")).toBeVisible();
+  await addPastedMaterial(page);
   await page.getByRole("button", { name: "Run understanding agent" }).click();
   await expect(page.getByText("Project state: review required")).toBeVisible();
   await expect(page.getByText("Exact source quote")).toBeVisible();
@@ -59,7 +64,7 @@ test("unsupported file reports a recoverable error", async ({ page }) => {
 });
 
 test("stale second tab fails closed and can refresh", async ({ page, context }) => {
-  await page.getByRole("button", { name: "Add material" }).click();
+  await addPastedMaterial(page);
   await page.getByRole("button", { name: "Run understanding agent" }).click();
   await expect(page.getByText("Project state: review required")).toBeVisible();
 
@@ -82,11 +87,35 @@ test("stale second tab fails closed and can refresh", async ({ page, context }) 
 
 test("workspace survives an event-stream disconnect and reload", async ({ page }) => {
   await page.route("**/api/workspace/events", (route) => route.abort());
-  await page.getByRole("button", { name: "Add material" }).click();
+  await addPastedMaterial(page);
   await page.getByRole("button", { name: "Run understanding agent" }).click();
   await expect(page.getByText("Project state: review required")).toBeVisible();
   await page.unroute("**/api/workspace/events");
   await page.reload();
   await expect(page.getByText("Project state: review required")).toBeVisible();
   await expect(page.getByText("Exact source quote")).toBeVisible();
+});
+
+test("complete local loop creates, edits, versions, and stales a discussion deck", async ({ page }) => {
+  await addPastedMaterial(page);
+  await page.getByRole("button", { name: /Run understanding agent/ }).click();
+  await page.getByRole("button", { name: /Accept version/ }).click();
+  await page.getByRole("button", { name: /Continue to Positioning/ }).click();
+  await page.getByRole("button", { name: /Create positioning directions/ }).click();
+  await page.getByRole("button", { name: /Evidence first/ }).click();
+  await page.getByRole("button", { name: "Use this direction" }).click();
+  await page.getByRole("button", { name: /Use direction & create deck/ }).click();
+  await expect(page.getByRole("heading", { name: "Draft 1" })).toBeVisible();
+  await expect(page.getByRole("button", { name: /Evidence/ })).toBeVisible();
+  await page.getByRole("button", { name: "Edit this page" }).click();
+  await page.getByLabel("Page title").fill("Edited positioning");
+  await page.getByLabel("Page content").fill("A user-edited discussion point.");
+  await page.getByRole("button", { name: "Save as new draft" }).click();
+  await expect(page.getByRole("heading", { name: "Draft 2" })).toBeVisible();
+  await expect(page.getByText("Edited by you")).toBeVisible();
+  await page.getByRole("button", { name: "Materials" }).click();
+  await page.getByRole("button", { name: /Add files/ }).click();
+  await page.locator("#upload-material-file").setInputFiles(fixture("source-a.md"));
+  await page.getByRole("button", { name: "Deck" }).click();
+  await expect(page.getByText("This deck is out of date.")).toBeVisible();
 });

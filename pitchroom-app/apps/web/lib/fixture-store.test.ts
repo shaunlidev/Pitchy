@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { acceptFixture, addFixtureMaterial, answerFixtureQuestion, applyFixturePositioning, correctFixtureClaim, generateFixturePositioning, keepFixtureUnknown, resetFixtureState, runFixtureAgent, undoFixturePositioning } from "./fixture-store";
+import { acceptFixture, addFixtureMaterial, adjustFixturePositioning, answerFixtureQuestion, applyFixturePositioning, correctFixtureClaim, editFixtureDeckPage, generateFixtureDeck, generateFixturePositioning, keepFixtureUnknown, resetFixtureState, runFixtureAgent, undoFixturePositioning } from "./fixture-store";
 
 beforeEach(() => resetFixtureState());
 
@@ -97,5 +97,32 @@ describe("synthetic browser fixture", () => {
     acceptFixture(reviewed.project.revision);
     expect(generateFixturePositioning().positioning).toBeDefined();
     expect(addFixtureMaterial({ name: "new.md", mediaType: "text/markdown", text: "The buyer is finance." }).positioning).toBeUndefined();
+  });
+
+  it("versions an exact positioning adjustment and requires a fresh apply", () => {
+    addFixtureMaterial({ name: "brief.md", mediaType: "text/markdown", text: "Revenue grew 40 percent." });
+    const reviewed = runFixtureAgent(); acceptFixture(reviewed.project.revision);
+    const positioned = generateFixturePositioning(); const directionId = positioned.positioning!.proposal.directions[0]!.id;
+    const applied = applyFixturePositioning(directionId, positioned.project.revision);
+    const adjusted = adjustFixturePositioning(directionId, "headline", "Use the buyer's exact words.", applied.project.revision);
+    expect(adjusted.positioning?.number).toBe(2);
+    expect(adjusted.positioning?.proposal.directions[0]?.coreMessage).toBe("Use the buyer's exact words.");
+    expect(adjusted.positioning?.appliedDirectionId).toBeUndefined();
+    expect(() => generateFixtureDeck(adjusted.project.revision)).toThrow("Apply a current positioning direction");
+  });
+
+  it("creates, edits, versions, and stales a five-page deck without overwriting history", () => {
+    addFixtureMaterial({ name: "brief.md", mediaType: "text/markdown", text: "Revenue grew 40 percent." });
+    const reviewed = runFixtureAgent(); acceptFixture(reviewed.project.revision);
+    const positioned = generateFixturePositioning(); const directionId = positioned.positioning!.proposal.directions[0]!.id;
+    applyFixturePositioning(directionId, positioned.project.revision);
+    const created = generateFixtureDeck(positioned.project.revision);
+    expect(created.deck?.proposal.pages).toHaveLength(5);
+    const edited = editFixtureDeckPage(created.deck!.id, created.deck!.number, created.deck!.proposal.pages[0]!.id, "Edited positioning", "Edited by the user.");
+    expect(edited.deckVersions).toHaveLength(2);
+    expect(edited.deck?.createdBy).toBe("user");
+    const changed = addFixtureMaterial({ name: "late.md", mediaType: "text/markdown", text: "New evidence." });
+    expect(changed.deck?.stale).toBe(true);
+    expect(changed.deckVersions).toHaveLength(2);
   });
 });

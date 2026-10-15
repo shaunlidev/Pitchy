@@ -1,25 +1,25 @@
 # Harness status
 
-Last verified: 2026-10-14
+Last verified: 2026-10-15
 
 This file separates implementation evidence from planned or authorized-later work.
 
 | Layer | Status | Evidence |
 |---|---|---|
 | Type safety | PASS | `pnpm typecheck` across domain, agent, persistence, evals, testkit, and web |
-| Deterministic tests | PASS | 77 tests across domain, persisted-agent service, tool/wall-clock/output/failure budgets, web API/SSE/health/UI state, interaction regressions, and eight-phase React render matrix, source reconstruction, eval grader/rubric/live-selection gates, artifacts, and terminal-state material guards |
-| PostgreSQL integration | PASS | full empty-database migration rehearsal plus 7 repository contract tests against local PostgreSQL 17, including concurrent-run serialization, concurrent idempotent replay, and stale-terminal-write protection |
+| Deterministic tests | PASS | 110 tests: domain 21, testkit 3, agent 33, evals 7, web 46. Includes Deck contracts, Positioning/Deck mocked provider adapters, explicit adjustment/re-apply, UI state, and stale/history behavior |
+| PostgreSQL integration | PASS | 9 non-destructive repository contracts against local PostgreSQL 17, including Positioning/Deck versioning and concurrent workflow idempotency ownership. The harness no longer truncates local project tables |
 | Security regression | PASS | material cannot reopen review/accepted projects; only one concurrent run acquires project ownership; a completed run cannot later clobber project phase |
-| Production build | PASS | Next.js build with `/`, `/api/workspace`, and event stream route |
+| Production build | PASS | fresh Next.js 16.4 build with `/`, health, workspace, and event stream routes |
 | Synthetic HTTP flow | PASS | material → run → review → correction → stale approval rejection → current approval |
 | Persistent HTTP flow | PASS | PostgreSQL-backed flow reached accepted with 2 versions; process restart readback passed |
-| Offline eval harness | PASS | 15 initial cases; seeded evidence and budget violations are caught |
+| Offline eval harness | PASS | 15 Understanding cases plus an independent Deck grader for schema/order, exact evidence, current upstream IDs, applied direction, and preserved unknowns |
 | Case artifact + replay | PASS | all 15 cases traversed the bounded controller/tool path (user correction uses its distinct input/version path), produced redacted bundles, and replayed to `review_required`; total local size 360 KiB |
-| Vercel AI SDK adapter | IMPLEMENTED, NOT LIVE-VALIDATED | bounded `ToolLoopAgent`, structured output, real tools, abort propagation, tool/result/elapsed budgets, persisted trace/usage metadata, and fail-closed config |
+| External model adapters | IMPLEMENTED, MOCK-VALIDATED, NOT LIVE-VALIDATED | bounded Understanding tool loop plus structured Positioning/Deck Responses adapters; pinned model/config, exact evidence, upstream IDs, persistent workflow events, replay semantics, and fail-closed config |
 | Live eval command | IMPLEMENTED, NOT RUN | five-category smoke then full synthetic set; explicit transfer acknowledgement, pinned model, critical-failure stop, immutable batch artifacts |
 | Live model eval | NOT RUN | calls, transfer, and cost are authorized; `OPENAI_API_KEY` and pinned `OPENAI_MODEL` are absent |
-| Browser functional QA | PASS | isolated synthetic project covered material → run → review → answer/correction/keep-unknown → accept/reset; accessibility tree and console were inspected; one duplicate-submission defect was fixed and reverified |
-| Repeatable browser E2E | PASS | 5 Playwright journeys in system Chrome: acceptance, Markdown conflict, invalid-file recovery, stale two-tab write, and event-stream disconnect/reload |
+| Browser functional QA | PASS | fresh isolated non-recording journey covered Materials → Clarify → Positioning adjustment → fresh Apply → five-page Deck → edit/history → upstream stale warning; Project overview was clickable and console warnings/errors were 0 |
+| Repeatable browser E2E | IMPLEMENTED, NOT FRESHLY RUN | existing five journeys were repaired for the current intake UI and a sixth complete-loop journey was added; no run because failure traces/screenshots require fresh recording authorization |
 | Responsive visual QA | PASS | production fixture inspected at 1280×720, 768×1024, and 375×812; no overlap, clipping, horizontal overflow, or console errors; local screenshots and QA report retained under `.gstack/qa-reports/` |
 | Human acceptance | NOT RUN | requires user review of the running interaction |
 | Deployment | NOT RUN | authorized on 2026-10-14; production identity, privacy/retention, database/backup, hosting, and rollback decisions remain open |

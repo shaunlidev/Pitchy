@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { PitchroomError } from "@pitchroom/domain";
-import { acceptFixture, addFixtureMaterial, answerFixtureQuestion, applyFixturePositioning, correctFixtureClaim, generateFixturePositioning, keepFixtureUnknown, readFixtureState, removeFixtureMaterial, resetFixtureState, runFixtureAgent, undoFixturePositioning } from "../../../lib/fixture-store";
-import { acceptPersistent, addPersistentMaterial, answerPersistentQuestion, applyPersistentPositioning, correctPersistentClaim, generatePersistentPositioning, keepPersistentUnknown, readPersistentState, removePersistentMaterial, runPersistentAgent, undoPersistentPositioning } from "../../../lib/persistent-workspace";
+import { acceptFixture, addFixtureMaterial, adjustFixturePositioning, answerFixtureQuestion, applyFixturePositioning, correctFixtureClaim, editFixtureDeckPage, generateFixtureDeck, generateFixturePositioning, keepFixtureUnknown, readFixtureState, removeFixtureMaterial, resetFixtureState, runFixtureAgent, undoFixturePositioning } from "../../../lib/fixture-store";
+import { acceptPersistent, addPersistentMaterial, adjustPersistentPositioning, answerPersistentQuestion, applyPersistentPositioning, correctPersistentClaim, editPersistentDeckPage, generatePersistentDeck, generatePersistentPositioning, keepPersistentUnknown, readPersistentState, removePersistentMaterial, runPersistentAgent, undoPersistentPositioning } from "../../../lib/persistent-workspace";
 import { errorEnvelopeSchema, workspaceCommandSchema, workspaceStateSchema } from "../../../lib/api-contract";
 export const dynamic = "force-dynamic";
 const runtime = () => process.env.PITCHROOM_RUNTIME ?? "fixture";
@@ -40,6 +40,9 @@ export async function POST(request: Request) {
       case "generate_positioning": state = persistent ? await generatePersistentPositioning(body.expectedRevision, commandId, persistentMode()) : generateFixturePositioning(body.expectedRevision); break;
       case "apply_positioning": state = persistent ? await applyPersistentPositioning(body.directionId, body.expectedRevision, commandId) : applyFixturePositioning(body.directionId, body.expectedRevision); break;
       case "undo_positioning": state = persistent ? await undoPersistentPositioning(body.expectedRevision, commandId) : undoFixturePositioning(body.expectedRevision); break;
+      case "adjust_positioning": state = persistent ? await adjustPersistentPositioning(body.directionId, body.mode, body.text, body.expectedRevision, commandId) : adjustFixturePositioning(body.directionId, body.mode, body.text, body.expectedRevision); break;
+      case "generate_deck": state = persistent ? await generatePersistentDeck(body.expectedRevision, commandId, persistentMode()) : generateFixtureDeck(body.expectedRevision); break;
+      case "edit_deck_page": state = persistent ? await editPersistentDeckPage(body.deckId, body.expectedDeckVersion, body.pageId, body.title, body.body, commandId) : editFixtureDeckPage(body.deckId, body.expectedDeckVersion, body.pageId, body.title, body.body); break;
     }
     if (persistent && runtime() === "live") state = { ...state, mode: "live" as const };
     return NextResponse.json(workspaceStateSchema.parse(state), { headers: headers(requestId) });

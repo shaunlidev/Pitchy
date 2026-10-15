@@ -18,6 +18,7 @@ export const positioningDirectionSchema = z.object({
   excludes: z.array(z.string().min(1)),
   evidence: z.array(positioningEvidenceSchema).min(1),
   userInputIds: z.array(z.string().min(1)).default([]),
+  judgmentNote: z.string().min(1).optional(),
 });
 
 export const positioningProposalV1Schema = z.object({

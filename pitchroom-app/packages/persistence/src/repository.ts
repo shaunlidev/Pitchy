@@ -4,10 +4,12 @@ import postgres from "postgres";
 import {
   PitchroomError,
   defaultProjectCharacterLimit,
+  deckProposalV1Schema,
   ingestMaterial,
   positioningProposalV1Schema,
   understandingProposalV1Schema,
   type AgentEvent,
+  type DeckProposalV1,
   type MaterialInput,
   type PositioningProposalV1,
   type SourceRecord,
@@ -309,6 +311,33 @@ export class PitchroomRepository implements ToolRepository {
     return this.changePositioning({ ...input, directionId: undefined, commandType: "undo_positioning" });
   }
 
+  async adjustPositioning(input: { projectId: string; directionId: string; mode: "headline" | "judgment_note"; text: string; expectedRevision: number; idempotencyKey: string }) {
+    const requestHash = JSON.stringify({ directionId: input.directionId, mode: input.mode, text: input.text, expectedRevision: input.expectedRevision });
+    return this.db.transaction(async (tx) => {
+      const receipt = await tx.query.commandReceipts.findFirst({ where: and(eq(schema.commandReceipts.projectId, input.projectId), eq(schema.commandReceipts.idempotencyKey, input.idempotencyKey)) });
+      if (receipt) {
+        if (receipt.commandType !== "adjust_positioning" || receipt.requestHash !== requestHash) throw new PitchroomError("CONFLICT", "Idempotency key was already used for a different positioning adjustment.");
+        return tx.query.positioningVersions.findFirst({ where: eq(schema.positioningVersions.id, receipt.resourceId) });
+      }
+      const [locked] = await tx.execute<{ version: number; phase: string; current_positioning_id: string | null }>(sql`select version, phase, current_positioning_id from projects where id = ${input.projectId} for update`);
+      if (!locked || locked.phase !== "accepted" || locked.version !== input.expectedRevision || !locked.current_positioning_id) throw new PitchroomError("CONFLICT", "This positioning view is stale or not ready.");
+      const current = await tx.query.positioningVersions.findFirst({ where: eq(schema.positioningVersions.id, locked.current_positioning_id) });
+      if (!current) throw new PitchroomError("NOT_FOUND", "The current positioning version was not found.");
+      const proposal = structuredClone(current.proposal); const direction = proposal.directions.find((candidate) => candidate.id === input.directionId);
+      if (!direction) throw new PitchroomError("INVALID_INPUT", "Only a proposed direction can be adjusted.");
+      const [userInput] = await tx.insert(schema.userInputs).values({ projectId: input.projectId, kind: "correction", text: input.text.trim(), actorId: "synthetic-local-user", targetVersion: input.expectedRevision, idempotencyKey: input.idempotencyKey }).returning();
+      if (!userInput) throw new PitchroomError("PERSISTENCE_ERROR", "Positioning adjustment was not recorded.");
+      if (input.mode === "headline") direction.coreMessage = input.text.trim(); else direction.judgmentNote = input.text.trim();
+      direction.userInputIds = [...direction.userInputIds, userInput.id];
+      const validated = positioningProposalV1Schema.parse(proposal);
+      const [created] = await tx.insert(schema.positioningVersions).values({ projectId: input.projectId, understandingId: current.understandingId, version: current.version + 1, proposal: validated }).returning();
+      if (!created) throw new PitchroomError("PERSISTENCE_ERROR", "Adjusted positioning version was not created.");
+      await tx.update(schema.projects).set({ currentPositioningId: created.id, updatedAt: new Date() }).where(eq(schema.projects.id, input.projectId));
+      await tx.insert(schema.commandReceipts).values({ projectId: input.projectId, idempotencyKey: input.idempotencyKey, commandType: "adjust_positioning", requestHash, resourceId: created.id });
+      return created;
+    });
+  }
+
   private async changePositioning(input: { projectId: string; directionId?: string; expectedRevision: number; idempotencyKey: string; commandType: "apply_positioning" | "undo_positioning" }) {
     const requestHash = JSON.stringify({ directionId: input.directionId ?? null, expectedRevision: input.expectedRevision });
     return this.db.transaction(async (tx) => {
@@ -339,6 +368,101 @@ export class PitchroomRepository implements ToolRepository {
       if (!updated) throw new PitchroomError("PERSISTENCE_ERROR", "Positioning change was not saved.");
       await tx.insert(schema.commandReceipts).values({ projectId: input.projectId, idempotencyKey: input.idempotencyKey, commandType: input.commandType, requestHash, resourceId: current.id });
       return updated;
+    });
+  }
+
+  async startWorkflowRun(input: { projectId: string; kind: "positioning" | "deck"; targetRevision: number; model: string; idempotencyKey: string }) {
+    const [created] = await this.db.insert(schema.workflowRuns).values({ ...input, status: "running", events: [{ type: "run_started", detail: `${input.kind} generation started`, at: new Date().toISOString() }] }).onConflictDoNothing().returning();
+    const run = created ?? await this.db.query.workflowRuns.findFirst({ where: and(eq(schema.workflowRuns.projectId, input.projectId), eq(schema.workflowRuns.idempotencyKey, input.idempotencyKey)) });
+    if (!run) throw new PitchroomError("PERSISTENCE_ERROR", "Workflow run was not created or recovered.");
+    if (run.kind !== input.kind || run.targetRevision !== input.targetRevision || run.model !== input.model) throw new PitchroomError("CONFLICT", "Idempotency key was already used for a different workflow run.");
+    return { run, created: Boolean(created) };
+  }
+
+  async getCommandReceipt(projectId: string, idempotencyKey: string) {
+    return this.db.query.commandReceipts.findFirst({ where: and(eq(schema.commandReceipts.projectId, projectId), eq(schema.commandReceipts.idempotencyKey, idempotencyKey)) });
+  }
+
+  async appendWorkflowEvent(runId: string, type: string, detail: string) {
+    const run = await this.db.query.workflowRuns.findFirst({ where: eq(schema.workflowRuns.id, runId) });
+    if (!run) throw new PitchroomError("NOT_FOUND", "Workflow run was not found.");
+    const events = [...run.events, { type, detail, at: new Date().toISOString() }];
+    await this.db.update(schema.workflowRuns).set({ events }).where(eq(schema.workflowRuns.id, runId));
+  }
+
+  async completeWorkflowRun(runId: string, resultId: string) {
+    await this.appendWorkflowEvent(runId, "run_completed", "Validated result persisted");
+    await this.db.update(schema.workflowRuns).set({ status: "completed", resultId, finishedAt: new Date() }).where(eq(schema.workflowRuns.id, runId));
+  }
+
+  async failWorkflowRun(runId: string, error: unknown) {
+    const code = error instanceof PitchroomError ? error.code : "WORKFLOW_FAILED";
+    const message = error instanceof Error ? error.message : "Workflow failed.";
+    await this.appendWorkflowEvent(runId, "run_failed", message);
+    await this.db.update(schema.workflowRuns).set({ status: "failed", failureCode: code, failureMessage: message, finishedAt: new Date() }).where(eq(schema.workflowRuns.id, runId));
+  }
+
+  async listWorkflowRuns(projectId: string) {
+    return this.db.select().from(schema.workflowRuns).where(eq(schema.workflowRuns.projectId, projectId)).orderBy(asc(schema.workflowRuns.startedAt));
+  }
+
+  async listDeckVersions(projectId: string) {
+    return this.db.select().from(schema.deckVersions).where(eq(schema.deckVersions.projectId, projectId)).orderBy(asc(schema.deckVersions.version));
+  }
+
+  async getCurrentDeck(projectId: string) {
+    const project = await this.getProject(projectId);
+    if (!project?.currentDeckId) return undefined;
+    return this.db.query.deckVersions.findFirst({ where: and(eq(schema.deckVersions.projectId, projectId), eq(schema.deckVersions.id, project.currentDeckId)) });
+  }
+
+  async createDeck(input: { projectId: string; understandingId: string; positioningId: string; appliedDirectionId: string; expectedRevision: number; proposal: DeckProposalV1; idempotencyKey: string }) {
+    const proposal = deckProposalV1Schema.parse(input.proposal);
+    const requestHash = JSON.stringify({ understandingId: input.understandingId, positioningId: input.positioningId, appliedDirectionId: input.appliedDirectionId, expectedRevision: input.expectedRevision, proposal });
+    return this.db.transaction(async (tx) => {
+      const receipt = await tx.query.commandReceipts.findFirst({ where: and(eq(schema.commandReceipts.projectId, input.projectId), eq(schema.commandReceipts.idempotencyKey, input.idempotencyKey)) });
+      if (receipt) {
+        if (receipt.commandType !== "generate_deck" || receipt.requestHash !== requestHash) throw new PitchroomError("CONFLICT", "Idempotency key was already used for a different deck command.");
+        const existing = await tx.query.deckVersions.findFirst({ where: eq(schema.deckVersions.id, receipt.resourceId) });
+        if (!existing) throw new PitchroomError("PERSISTENCE_ERROR", "Deck receipt points to a missing version.");
+        return existing;
+      }
+      const [locked] = await tx.execute<{ version: number; phase: string; current_understanding_id: string | null; current_positioning_id: string | null }>(sql`select version, phase, current_understanding_id, current_positioning_id from projects where id = ${input.projectId} for update`);
+      if (!locked) throw new PitchroomError("NOT_FOUND", "Project was not found.");
+      if (locked.phase !== "accepted" || locked.version !== input.expectedRevision || locked.current_understanding_id !== input.understandingId || locked.current_positioning_id !== input.positioningId) throw new PitchroomError("CONFLICT", "Deck inputs are stale.");
+      const positioning = await tx.query.positioningVersions.findFirst({ where: eq(schema.positioningVersions.id, input.positioningId) });
+      if (!positioning || positioning.appliedDirectionId !== input.appliedDirectionId) throw new PitchroomError("CONFLICT", "Apply a current positioning direction before creating a deck.");
+      const [latest] = await tx.select({ version: sql<number>`coalesce(max(${schema.deckVersions.version}), 0)` }).from(schema.deckVersions).where(eq(schema.deckVersions.projectId, input.projectId));
+      const [created] = await tx.insert(schema.deckVersions).values({ projectId: input.projectId, understandingId: input.understandingId, positioningId: input.positioningId, appliedDirectionId: input.appliedDirectionId, version: Number(latest?.version ?? 0) + 1, createdBy: "agent", proposal }).returning();
+      if (!created) throw new PitchroomError("PERSISTENCE_ERROR", "Deck version was not created.");
+      await tx.update(schema.projects).set({ currentDeckId: created.id, updatedAt: new Date() }).where(eq(schema.projects.id, input.projectId));
+      await tx.insert(schema.commandReceipts).values({ projectId: input.projectId, idempotencyKey: input.idempotencyKey, commandType: "generate_deck", requestHash, resourceId: created.id });
+      return created;
+    });
+  }
+
+  async editDeckPage(input: { projectId: string; deckId: string; expectedDeckVersion: number; pageId: string; title: string; body: string; idempotencyKey: string }) {
+    const requestHash = JSON.stringify({ deckId: input.deckId, expectedDeckVersion: input.expectedDeckVersion, pageId: input.pageId, title: input.title, body: input.body });
+    return this.db.transaction(async (tx) => {
+      const receipt = await tx.query.commandReceipts.findFirst({ where: and(eq(schema.commandReceipts.projectId, input.projectId), eq(schema.commandReceipts.idempotencyKey, input.idempotencyKey)) });
+      if (receipt) {
+        if (receipt.commandType !== "edit_deck_page" || receipt.requestHash !== requestHash) throw new PitchroomError("CONFLICT", "Idempotency key was already used for a different deck edit.");
+        return tx.query.deckVersions.findFirst({ where: eq(schema.deckVersions.id, receipt.resourceId) });
+      }
+      const [locked] = await tx.execute<{ current_deck_id: string | null }>(sql`select current_deck_id from projects where id = ${input.projectId} for update`);
+      if (!locked?.current_deck_id || locked.current_deck_id !== input.deckId) throw new PitchroomError("CONFLICT", "Only the current deck can be edited.");
+      const current = await tx.query.deckVersions.findFirst({ where: eq(schema.deckVersions.id, input.deckId) });
+      if (!current || current.version !== input.expectedDeckVersion) throw new PitchroomError("CONFLICT", "This deck draft is stale.");
+      const proposal = structuredClone(current.proposal);
+      const page = proposal.pages.find((candidate) => candidate.id === input.pageId);
+      if (!page) throw new PitchroomError("INVALID_INPUT", "The selected deck page does not exist.");
+      page.title = input.title.trim(); page.body = input.body.trim();
+      const validated = deckProposalV1Schema.parse(proposal);
+      const [created] = await tx.insert(schema.deckVersions).values({ projectId: input.projectId, understandingId: current.understandingId, positioningId: current.positioningId, appliedDirectionId: current.appliedDirectionId, version: current.version + 1, createdBy: "user", proposal: validated }).returning();
+      if (!created) throw new PitchroomError("PERSISTENCE_ERROR", "Edited deck version was not created.");
+      await tx.update(schema.projects).set({ currentDeckId: created.id, updatedAt: new Date() }).where(eq(schema.projects.id, input.projectId));
+      await tx.insert(schema.commandReceipts).values({ projectId: input.projectId, idempotencyKey: input.idempotencyKey, commandType: "edit_deck_page", requestHash, resourceId: created.id });
+      return created;
     });
   }
 }

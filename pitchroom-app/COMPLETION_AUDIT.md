@@ -1,6 +1,21 @@
-# First-slice completion audit
+# V6 local-loop completion audit
 
-Last audited: 2026-10-14
+Last audited: 2026-10-15
+
+## Complete local loop added after the first slice
+
+| Area | Current state | Fresh evidence | Open gate |
+|---|---|---|---|
+| Materials and Clarify | PASS | source upload/paste, clickable Project overview, evidence review, explicit acceptance | human usefulness review |
+| Positioning | PASS locally | original framing plus choices, exact evidence/tradeoffs, adjustment versions, Apply/Undo, durable workflow events and failures | live model output not run |
+| Deck | PASS locally | fixed five-page schema, explicit Create Deck, edit creates draft 2, historical read-only view, stale preservation, Print / Save PDF affordance | actual print dialog/PDF visual output not inspected |
+| Agent uncertainty | PASS | same workflow command is atomically owned once; completed replay reads state, in-flight replay conflicts, failed replay does not silently call the model | distributed/provider production observation |
+| Deterministic verification | PASS | typecheck; 110 tests; 9 PostgreSQL contracts; production build | none for local deterministic scope |
+| Synthetic browser acceptance | PASS | non-recording isolated complete loop; 0 console warnings/errors | user acceptance remains separate |
+| Repeatable recorded E2E | IMPLEMENTED, NOT RUN | sixth complete-loop test plus repaired intake setup | fresh recording authorization |
+| Live model | IMPLEMENTED, MOCK-VALIDATED, NOT RUN | adapter contract tests validate JSON schema, evidence and upstream targeting | successful authorized live smoke |
+
+## Historical first-slice audit (2026-10-14)
 
 This is a requirement-by-requirement audit of `IMPLEMENTATION_PLAN.md`. A green
 lower layer is never used as evidence for an unrun higher layer.

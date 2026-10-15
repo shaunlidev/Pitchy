@@ -1,4 +1,4 @@
-import type { PositioningProposalV1, UnderstandingProposalV1 } from "@pitchroom/domain";
+import type { DeckProposalV1, PositioningProposalV1, UnderstandingProposalV1 } from "@pitchroom/domain";
 import {
   index,
   integer,
@@ -30,6 +30,7 @@ export const projects = pgTable("projects", {
   version: integer("version").notNull().default(0),
   currentUnderstandingId: uuid("current_understanding_id"),
   currentPositioningId: uuid("current_positioning_id"),
+  currentDeckId: uuid("current_deck_id"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
@@ -201,4 +202,40 @@ export const positioningVersions = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => [uniqueIndex("positioning_project_version_unique").on(table.projectId, table.version)],
+);
+
+export const workflowRuns = pgTable(
+  "workflow_runs",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    projectId: uuid("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+    kind: text("kind").notNull(),
+    status: text("status").notNull(),
+    targetRevision: integer("target_revision").notNull(),
+    model: text("model").notNull(),
+    idempotencyKey: text("idempotency_key").notNull(),
+    failureCode: text("failure_code"),
+    failureMessage: text("failure_message"),
+    events: jsonb("events").$type<Array<{ type: string; detail: string; at: string }>>().notNull().default([]),
+    resultId: uuid("result_id"),
+    startedAt: timestamp("started_at", { withTimezone: true }).defaultNow().notNull(),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+  },
+  (table) => [uniqueIndex("workflow_runs_project_idempotency_unique").on(table.projectId, table.idempotencyKey), index("workflow_runs_project_started_idx").on(table.projectId, table.startedAt)],
+);
+
+export const deckVersions = pgTable(
+  "deck_versions",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    projectId: uuid("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+    understandingId: uuid("understanding_id").notNull().references(() => understandingVersions.id, { onDelete: "restrict" }),
+    positioningId: uuid("positioning_id").notNull().references(() => positioningVersions.id, { onDelete: "restrict" }),
+    appliedDirectionId: text("applied_direction_id").notNull(),
+    version: integer("version").notNull(),
+    createdBy: text("created_by").notNull(),
+    proposal: jsonb("proposal").$type<DeckProposalV1>().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [uniqueIndex("deck_project_version_unique").on(table.projectId, table.version)],
 );

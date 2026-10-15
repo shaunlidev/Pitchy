@@ -1,4 +1,5 @@
 export * from "./errors";
+export * from "./deck";
 export * from "./events";
 export * from "./materials";
 export * from "./project-state";

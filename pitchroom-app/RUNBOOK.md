@@ -17,9 +17,12 @@ Readiness: `GET http://127.0.0.1:3000/api/health`.
 - `fixture` (default): synthetic local state and no external model/data transfer.
 - `postgres-fake`: PostgreSQL-backed deterministic agent, used to verify the
   complete durable workflow without an external model; requires `DATABASE_URL`.
-- `live`: PostgreSQL-backed Vercel AI SDK/OpenAI agent. It requires
+- `live`: PostgreSQL-backed external-agent runtime. Understanding uses the AI
+  SDK tool loop; Positioning and Deck use the provider's OpenAI-compatible
+  Responses endpoint. It requires
   `DATABASE_URL`, `OPENAI_API_KEY`, a pinned `OPENAI_MODEL`, and the explicit
-  `PITCHROOM_LIVE_TRANSFER_ACK=authorized` transfer acknowledgement.
+  `PITCHROOM_LIVE_TRANSFER_ACK=authorized` transfer acknowledgement. Set
+  `OPENAI_BASE_URL` when using a compatible provider such as DeepSeek.
 
 Run `pnpm env:check` before starting a non-fixture runtime. Missing configuration
 is a terminal configuration error; do not fall back silently.
@@ -50,6 +53,7 @@ from the pre-migration backup unless a reviewed inverse migration exists.
 | Stale revision conflict | current project revision/version | refresh; never force acceptance |
 | Migration failure | SQL error and migration journal | stop writes; repair migration and rehearse on a copy |
 | Provider failure | typed provider error, latency, retry count | bounded retry policy; do not switch providers silently |
+| Positioning/Deck command outcome is uncertain | persisted `workflow_runs` row and command id | retry with the same command id; completed results are read back, running duplicates fail closed, and failed results are not silently rerun |
 | User cancels a run | `run_cancelled` event and `cancelled` project state | retry as a new run; never reuse the cancelled run ID |
 
 ## Stop local services

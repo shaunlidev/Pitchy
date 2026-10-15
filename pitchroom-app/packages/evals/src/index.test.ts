@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { evaluateRubric, gradeProposal, initialEvalCases, understandingEvalCaseSchema } from "./index";
+import { buildDeterministicDeck, buildDeterministicPositioning } from "@pitchroom/agent";
+import { evaluateRubric, gradeDeck, gradeProposal, initialEvalCases, understandingEvalCaseSchema } from "./index";
 
 const chunks = [{ id: "chunk", sourceId: "source", text: "Revenue grew 40 percent in 2026.", startOffset: 0, endOffset: 35 }];
 const proposal = {
@@ -39,5 +40,13 @@ describe("offline evaluation harness", () => {
     const strong = { groundedness: 0.96, coverage: 0.85, questionUsefulness: 0.84, themeDistinctness: 0.8, uncertaintyHonesty: 0.95, userControl: 1, traceability: 1, notes: "Reviewed against source.", reviewer: "human" };
     expect(evaluateRubric([strong]).passed).toBe(true);
     expect(evaluateRubric([{ ...strong, groundedness: 0.7 }])).toMatchObject({ passed: false, failures: expect.arrayContaining(["groundedness", "groundedness_critical_case"]) });
+  });
+
+  it("grades a deck independently for grounding, current upstream state, and preserved unknowns", () => {
+    const positioning = buildDeterministicPositioning({ understandingVersionId: "u1", understanding: proposal, chunks });
+    const deck = buildDeterministicDeck({ understandingVersionId: "u1", understanding: proposal, positioningVersionId: "p1", positioning, appliedDirectionId: positioning.directions[0]!.id, chunks });
+    expect(gradeDeck({ proposal: deck, chunks, understandingVersionId: "u1", positioningVersionId: "p1", appliedDirectionId: positioning.directions[0]!.id }).passed).toBe(true);
+    const stale = gradeDeck({ proposal: deck, chunks, understandingVersionId: "u1", positioningVersionId: "p2", appliedDirectionId: positioning.directions[0]!.id });
+    expect(stale).toMatchObject({ passed: false, checks: expect.arrayContaining([expect.objectContaining({ name: "positioning_current", passed: false })]) });
   });
 });

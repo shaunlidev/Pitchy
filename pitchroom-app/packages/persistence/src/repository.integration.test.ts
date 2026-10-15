@@ -1,7 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
-import { sql } from "drizzle-orm";
-import type { PositioningProposalV1, UnderstandingProposalV1 } from "@pitchroom/domain";
+import type { DeckProposalV1, PositioningProposalV1, UnderstandingProposalV1 } from "@pitchroom/domain";
 import { createDatabase, PitchroomRepository } from "./repository";
 
 const url = process.env.DATABASE_URL;
@@ -11,7 +10,6 @@ const repository = new PitchroomRepository(db);
 
 beforeAll(async () => {
   await migrate(db, { migrationsFolder: new URL("../migrations", import.meta.url).pathname });
-  await db.execute(sql`truncate approvals, user_inputs, understanding_versions, agent_events, agent_runs, source_chunks, sources, projects cascade`);
 });
 afterAll(async () => client.end());
 
@@ -22,6 +20,7 @@ describe("PostgreSQL repository contract", () => {
     const first = await repository.addMaterial(project.id, input, "material-1");
     const second = await repository.addMaterial(project.id, input, "material-1");
     expect(second.id).toBe(first.id);
+    expect(await repository.getCommandReceipt(project.id, "material-1")).toMatchObject({ commandType: "add_material", resourceId: first.id });
     const sameContentNewKey = await repository.addMaterial(project.id, input, "material-2");
     expect(sameContentNewKey.id).toBe(first.id);
     await expect(repository.addMaterial(project.id, { ...input, text: "Different material." }, "material-2")).rejects.toThrow("different material command");
@@ -137,6 +136,16 @@ describe("PostgreSQL repository contract", () => {
     expect(secondRun.id).toBe(firstRun.id);
   });
 
+  it("coalesces workflow-run races and reports whether the caller owns execution", async () => {
+    const project = await repository.createProject("Concurrent workflow replay project");
+    const attempts = await Promise.all([
+      repository.startWorkflowRun({ projectId: project.id, kind: "deck", targetRevision: 0, model: "fake", idempotencyKey: "same-workflow-command" }),
+      repository.startWorkflowRun({ projectId: project.id, kind: "deck", targetRevision: 0, model: "fake", idempotencyKey: "same-workflow-command" }),
+    ]);
+    expect(attempts.filter((attempt) => attempt.created)).toHaveLength(1);
+    expect(attempts[0]!.run.id).toBe(attempts[1]!.run.id);
+  });
+
   it("persists positioning separately and supports explicit apply, undo, and invalidation", async () => {
     const project = await repository.createProject("Positioning project");
     await repository.addMaterial(project.id, { name: "brief.txt", mediaType: "text/plain", text: "Teams recover two days." }, "positioning-material");
@@ -151,7 +160,19 @@ describe("PostgreSQL repository contract", () => {
     expect((await repository.getCurrentPositioning(project.id))?.id).toBe(created.id);
     expect((await repository.applyPositioning({ projectId: project.id, directionId: "proof", expectedRevision: 1, idempotencyKey: "positioning-apply" })).appliedDirectionId).toBe("proof");
     expect((await repository.undoPositioning({ projectId: project.id, expectedRevision: 1, idempotencyKey: "positioning-undo" })).appliedDirectionId).toBeNull();
+    await repository.applyPositioning({ projectId: project.id, directionId: "proof", expectedRevision: 1, idempotencyKey: "positioning-reapply" });
+    const adjusted = await repository.adjustPositioning({ projectId: project.id, directionId: "proof", mode: "headline", text: "Use the buyer's exact words.", expectedRevision: 1, idempotencyKey: "positioning-adjust" });
+    expect(adjusted?.proposal.directions[0]?.coreMessage).toBe("Use the buyer's exact words.");
+    expect(adjusted?.appliedDirectionId).toBeNull();
+    await repository.applyPositioning({ projectId: project.id, directionId: "proof", expectedRevision: 1, idempotencyKey: "positioning-adjusted-apply" });
+    const page = (id: string, kind: DeckProposalV1["pages"][number]["kind"], title: string) => ({ id, kind, title, body: title, evidence: kind === "open_questions" ? [] : [{ sourceId: source.id, chunkId: chunk.id, quote: "Teams recover two days." }], userInputIds: [], openQuestions: kind === "open_questions" ? ["Who decides?"] : [] });
+    const deckProposal: DeckProposalV1 = { schemaVersion: 1, understandingVersionId: accepted.id, positioningVersionId: adjusted!.id, appliedDirectionId: "proof", pages: [page("one", "positioning", "Positioning"), page("two", "shift", "Shift"), page("three", "rationale", "Rationale"), page("four", "evidence", "Evidence"), page("five", "open_questions", "Open questions")] };
+    const deck = await repository.createDeck({ projectId: project.id, understandingId: accepted.id, positioningId: adjusted!.id, appliedDirectionId: "proof", expectedRevision: 1, proposal: deckProposal, idempotencyKey: "deck-create" });
+    const editedDeck = await repository.editDeckPage({ projectId: project.id, deckId: deck.id, expectedDeckVersion: deck.version, pageId: "one", title: "Edited", body: "Edited body", idempotencyKey: "deck-edit" });
+    expect(editedDeck?.version).toBe(2);
+    expect(await repository.listDeckVersions(project.id)).toHaveLength(2);
     await repository.addMaterial(project.id, { name: "late.txt", mediaType: "text/plain", text: "New evidence." }, "positioning-late-material");
     expect(await repository.getCurrentPositioning(project.id)).toBeUndefined();
+    expect((await repository.getCurrentDeck(project.id))?.id).toBe(editedDeck?.id);
   });
 });
