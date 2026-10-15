@@ -33,10 +33,11 @@ test("material to reviewed understanding to explicit acceptance", async ({ page 
 
 test("uploaded Markdown conflict remains explicit and unresolved", async ({ page }) => {
   await page.locator("#material-file").setInputFiles(fixture("source-a.md"));
-  await page.getByRole("button", { name: "Add material" }).click();
-  await page.getByText("Add another source").click();
-  await page.locator("#material-file").setInputFiles(fixture("source-b.md"));
-  await page.getByRole("button", { name: "Add material" }).click();
+  await expect(page.getByText("source-a.md", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: /Add files/ }).click();
+  await page.locator("#upload-material-file").setInputFiles(fixture("source-b.md"));
+  await expect(page.getByText("source-b.md", { exact: true })).toBeVisible();
+  await expect(page.getByText("2 files")).toBeVisible();
   await page.getByRole("button", { name: "Run understanding agent" }).click();
 
   await expect(page.getByText("conflicting", { exact: true })).toBeVisible();
@@ -53,7 +54,7 @@ test("unsupported file reports a recoverable error", async ({ page }) => {
   await expect(page.locator(".error[role=alert]")).toContainText("Choose a UTF-8 .txt or .md file.");
   await page.locator("#material-file").setInputFiles(fixture("source-a.md"));
   await expect(page.locator(".error[role=alert]")).toHaveCount(0);
-  await page.getByRole("button", { name: "Add material" }).click();
+  await expect(page.getByText("source-a.md", { exact: true })).toBeVisible();
   await expect(page.getByText("Project state: materials ready")).toBeVisible();
 });
 

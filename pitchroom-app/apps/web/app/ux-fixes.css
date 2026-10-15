@@ -52,21 +52,26 @@
   display: none;
 }
 
-/* Keep file selection as a directly operable native control. Some embedded
-   browsers do not forward activation from a label to a clipped file input. */
-#material-file,
-#upload-material-file {
-  position: static !important;
-  width: 100% !important;
-  height: auto !important;
-  margin: 10px 0 0 !important;
-  padding: 10px !important;
-  overflow: visible !important;
-  clip: auto !important;
-  white-space: normal !important;
-  border: 1px solid var(--line) !important;
-  border-radius: 6px;
-  background: #141416;
-  color: var(--muted);
+/* The native input is the real target inside the designed picker. Its tiny
+   opacity keeps the chooser reliable without leaking browser-localized UI. */
+.dropzone,
+.uploadPicker { position: relative; }
+
+.fileInputOverlay {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  opacity: 0.001;
   cursor: pointer;
+}
+
+.dropzone:has(.fileInputOverlay:focus-visible),
+.uploadPicker:has(.fileInputOverlay:focus-visible) {
+  outline: 3px solid #79bcfa;
+  outline-offset: 4px;
 }

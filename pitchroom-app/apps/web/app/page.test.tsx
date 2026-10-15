@@ -83,6 +83,20 @@ describe("HomePage review interactions", () => {
     await waitFor(() => expect(screen.queryByText("brief.md")).toBeNull());
   });
 
+  it("uploads the first file from the designed dropzone and refreshes the inventory", async () => {
+    resetFixtureState();
+    const user = userEvent.setup();
+    render(<HomePage />);
+
+    const input = await screen.findByLabelText("Drop your materials here or choose a text or Markdown file") as HTMLInputElement;
+    expect(input.parentElement?.classList.contains("dropzone")).toBe(true);
+    await user.upload(input, new File(["# First evidence\nA cited fact."], "first-evidence.md", { type: "text/markdown" }));
+
+    expect(await screen.findByText("first-evidence.md")).toBeTruthy();
+    expect(screen.getByText("1 file")).toBeTruthy();
+    expect(screen.getByText("Project state: materials ready")).toBeTruthy();
+  });
+
   it("keeps the remove confirmation open when deletion fails", async () => {
     const user = userEvent.setup();
     const fetchMock = vi.mocked(fetch);
