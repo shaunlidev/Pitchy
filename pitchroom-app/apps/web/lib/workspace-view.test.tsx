@@ -43,7 +43,7 @@ describe("WorkspaceView state matrix", () => {
 
   it("renders review controls, verified evidence, labels, and disabled empty-draft actions", () => {
     addFixtureMaterial({ name: "brief.md", mediaType: "text/markdown", text: sample });
-    const html = render(runFixtureAgent());
+    const html = render(runFixtureAgent(), { initialDestination: "clarify" });
     expect(html).toContain("Your review is the gate");
     expect(html).toContain("Exact source quote");
     expect(html).toContain('for="answer"');
@@ -58,7 +58,7 @@ describe("WorkspaceView state matrix", () => {
     addFixtureMaterial({ name: "brief.md", mediaType: "text/markdown", text: sample });
     const reading = readFixtureState();
     reading.project.phase = "reading";
-    const busyHtml = render(reading, { busy: true, activeRequest: new AbortController(), error: "Timed out." });
+    const busyHtml = render(reading, { busy: true, activeRequest: new AbortController(), error: "Timed out.", initialDestination: "clarify" });
     expect(busyHtml).toContain('aria-busy="true"');
     expect(busyHtml).toContain('role="alert"');
     expect(busyHtml).toContain("Timed out.");
@@ -66,7 +66,7 @@ describe("WorkspaceView state matrix", () => {
 
     const reviewed = runFixtureAgent();
     const accepted = acceptFixture(reviewed.project.revision);
-    const acceptedHtml = render(accepted);
+    const acceptedHtml = render(accepted, { initialDestination: "clarify" });
     expect(acceptedHtml).toContain("Understanding accepted.");
     expect(acceptedHtml).toContain("The agent is stopped.");
     expect(acceptedHtml).not.toContain("Your review is the gate");

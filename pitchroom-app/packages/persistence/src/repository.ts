@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { drizzle, type PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import {
@@ -110,7 +110,7 @@ export class PitchroomRepository implements ToolRepository {
   }
 
   async listSources(projectId: string): Promise<SourceRecord[]> {
-    const rows = await this.db.query.sources.findMany({ where: eq(schema.sources.projectId, projectId), orderBy: asc(schema.sources.createdAt) });
+    const rows = await this.db.query.sources.findMany({ where: and(eq(schema.sources.projectId, projectId), isNull(schema.sources.deletedAt)), orderBy: asc(schema.sources.createdAt) });
     return Promise.all(rows.map(async (source) => ({
       id: source.id,
       projectId: source.projectId,
@@ -128,8 +128,21 @@ export class PitchroomRepository implements ToolRepository {
   async getChunk(projectId: string, chunkId: string) {
     const [row] = await this.db.select({ chunk: schema.sourceChunks }).from(schema.sourceChunks)
       .innerJoin(schema.sources, eq(schema.sourceChunks.sourceId, schema.sources.id))
-      .where(and(eq(schema.sourceChunks.id, chunkId), eq(schema.sources.projectId, projectId)));
+      .where(and(eq(schema.sourceChunks.id, chunkId), eq(schema.sources.projectId, projectId), isNull(schema.sources.deletedAt)));
     return row?.chunk;
+  }
+
+  async removeMaterial(projectId: string, sourceId: string) {
+    return this.db.transaction(async (tx) => {
+      const [project] = await tx.execute<{ phase: string }>(sql`select phase from projects where id = ${projectId} for update`);
+      if (!project) throw new PitchroomError("NOT_FOUND", "Project was not found.");
+      if (project.phase === "reading" || project.phase === "structuring") throw new PitchroomError("CONFLICT", "Material cannot be removed while the agent is running.");
+      const [removed] = await tx.update(schema.sources).set({ deletedAt: new Date() }).where(and(eq(schema.sources.id, sourceId), eq(schema.sources.projectId, projectId), isNull(schema.sources.deletedAt))).returning({ id: schema.sources.id });
+      if (!removed) throw new PitchroomError("NOT_FOUND", "Material was not found in this project.");
+      const [remaining] = await tx.select({ count: sql<number>`count(*)` }).from(schema.sources).where(and(eq(schema.sources.projectId, projectId), isNull(schema.sources.deletedAt)));
+      await tx.update(schema.projects).set({ currentUnderstandingId: null, phase: Number(remaining?.count ?? 0) ? "materials_ready" : "empty", updatedAt: new Date() }).where(eq(schema.projects.id, projectId));
+      return removed;
+    });
   }
 
   async createRun(projectId: string, idempotencyKey: string, promptVersion: string, model: string) {

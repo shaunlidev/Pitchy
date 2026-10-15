@@ -31,6 +31,17 @@ export function addFixtureMaterial(input: { name: string; mediaType: "text/plain
   return readFixtureState();
 }
 
+export function removeFixtureMaterial(sourceId: string) {
+  if (state.project.phase === "reading" || state.project.phase === "structuring") throw new PitchroomError("CONFLICT", "Material cannot be removed while the agent is running.");
+  const index = state.sources.findIndex((source) => source.sourceId === sourceId);
+  if (index < 0) throw new PitchroomError("NOT_FOUND", "Material was not found in this project.");
+  const [removed] = state.sources.splice(index, 1);
+  state.currentVersionId = undefined;
+  state.project.phase = state.sources.length ? "materials_ready" : "empty";
+  addEvent("Material removed", `${removed!.name} removed from the active project; prior versions remain in history`);
+  return readFixtureState();
+}
+
 export function runFixtureAgent() {
   const source = state.sources[0];
   if (!source) throw new PitchroomError("INVALID_TRANSITION", "Add material before starting the agent.");

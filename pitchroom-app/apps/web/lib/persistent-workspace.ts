@@ -49,6 +49,12 @@ export async function addPersistentMaterial(input: { name: string; mediaType: "t
   return readPersistentState();
 }
 
+export async function removePersistentMaterial(sourceId: string) {
+  const currentProject = await project();
+  await repository().removeMaterial(currentProject.id, sourceId);
+  return readPersistentState();
+}
+
 export async function runPersistentAgent(idempotencyKey: string, mode: "postgres-fake" | "live" = "postgres-fake", signal?: AbortSignal) {
   const currentProject = await project();
   if (mode === "live" && process.env.PITCHROOM_LIVE_TRANSFER_ACK !== "authorized") throw new PitchroomError("INVALID_INPUT", "PITCHROOM_LIVE_TRANSFER_ACK=authorized is required before external model transfer.");

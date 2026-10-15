@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { PitchroomError } from "@pitchroom/domain";
-import { acceptFixture, addFixtureMaterial, answerFixtureQuestion, correctFixtureClaim, keepFixtureUnknown, readFixtureState, resetFixtureState, runFixtureAgent } from "../../../lib/fixture-store";
-import { acceptPersistent, addPersistentMaterial, answerPersistentQuestion, correctPersistentClaim, keepPersistentUnknown, readPersistentState, runPersistentAgent } from "../../../lib/persistent-workspace";
+import { acceptFixture, addFixtureMaterial, answerFixtureQuestion, correctFixtureClaim, keepFixtureUnknown, readFixtureState, removeFixtureMaterial, resetFixtureState, runFixtureAgent } from "../../../lib/fixture-store";
+import { acceptPersistent, addPersistentMaterial, answerPersistentQuestion, correctPersistentClaim, keepPersistentUnknown, readPersistentState, removePersistentMaterial, runPersistentAgent } from "../../../lib/persistent-workspace";
 import { errorEnvelopeSchema, workspaceCommandSchema, workspaceStateSchema } from "../../../lib/api-contract";
 export const dynamic = "force-dynamic";
 const runtime = () => process.env.PITCHROOM_RUNTIME ?? "fixture";
@@ -23,6 +23,7 @@ export async function POST(request: Request) {
     switch (body.action) {
       case "reset": if (persistent) throw new Error("Reset is disabled for persistent projects."); state = resetFixtureState(); break;
       case "add_material": state = persistent ? await addPersistentMaterial({ name: body.name, text: body.text, mediaType: body.mediaType, idempotencyKey: commandId }) : addFixtureMaterial({ name: body.name, text: body.text, mediaType: body.mediaType }); break;
+      case "remove_material": state = persistent ? await removePersistentMaterial(body.sourceId) : removeFixtureMaterial(body.sourceId); break;
       case "run": state = persistent ? await runPersistentAgent(commandId, persistentMode(), request.signal) : runFixtureAgent(); break;
       case "correct": state = persistent ? await correctPersistentClaim(body.text, body.expectedRevision, commandId) : correctFixtureClaim(body.text, body.expectedRevision); break;
       case "answer": state = persistent ? await answerPersistentQuestion(body.text, body.expectedRevision, commandId) : answerFixtureQuestion(body.text, body.expectedRevision); break;

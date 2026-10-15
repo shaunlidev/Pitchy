@@ -86,5 +86,5 @@ export default function HomePage() {
     {error && <><p role="alert">{error}</p><button onClick={() => { setError(""); void refresh().catch((cause) => setError(cause instanceof Error ? cause.message : String(cause))); }}>Try again</button></>}
   </main>;
 
-  return <WorkspaceView state={state} busy={busy} error={error} text={text} answer={answer} correction={correction} activeRequest={activeRequest.current} onTextChange={setText} onAnswerChange={setAnswer} onCorrectionChange={setCorrection} onChooseFile={chooseFile} onCancelRun={() => activeRequest.current?.abort()} onAction={(body) => { void act({ ...body, ...(body.action === "add_material" ? { name, mediaType } : {}) }); }} />;
+  return <WorkspaceView state={state} busy={busy} error={error} text={text} selectedName={name} answer={answer} correction={correction} activeRequest={activeRequest.current} onTextChange={setText} onAnswerChange={setAnswer} onCorrectionChange={setCorrection} onChooseFile={chooseFile} onCancelRun={() => activeRequest.current?.abort()} onAction={(body) => { void act({ ...body, ...(body.action === "add_material" ? { name, mediaType } : {}) }); }} />;
 }

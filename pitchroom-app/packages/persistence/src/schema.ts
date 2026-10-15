@@ -59,6 +59,7 @@ export const sources = pgTable(
     content: text("content").notNull(),
     contentHash: text("content_hash").notNull(),
     idempotencyKey: text("idempotency_key").notNull(),
+    deletedAt: timestamp("deleted_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => [
