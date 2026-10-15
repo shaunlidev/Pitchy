@@ -44,6 +44,10 @@ export async function executePersistedUnderstandingRun(input: {
     return { runId: run.id, understandingId: version.id, version: version.version, phase: result.phase, publicSummary: result.publicSummary };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown run failure";
+    const failedTrace = error && typeof error === "object" && "trace" in error && Array.isArray(error.trace)
+      ? error.trace as AgentEvent[]
+      : [];
+    for (const traceEvent of failedTrace) await append(traceEvent.type, traceEvent.payload);
     if (input.signal?.aborted || (error instanceof PitchroomError && error.code === "CANCELLED")) {
       await append("phase_changed", { from: "reading", to: "cancelled" });
       await append("run_cancelled", { message });
