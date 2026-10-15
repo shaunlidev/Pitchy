@@ -9,7 +9,11 @@ function repository() {
   const url = process.env.DATABASE_URL;
   if (!url) throw new Error("DATABASE_URL is required for postgres-fake mode.");
   globals.__pitchroomDatabase ??= createDatabase(url);
-  globals.__pitchroomRepository ??= new PitchroomRepository(globals.__pitchroomDatabase.db);
+  // Next.js preserves globalThis across development hot reloads. Recreate a
+  // cached class instance when its prototype predates the current module.
+  if (!globals.__pitchroomRepository || typeof globals.__pitchroomRepository.removeMaterial !== "function") {
+    globals.__pitchroomRepository = new PitchroomRepository(globals.__pitchroomDatabase.db);
+  }
   return globals.__pitchroomRepository;
 }
 
