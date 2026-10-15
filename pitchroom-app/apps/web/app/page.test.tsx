@@ -63,6 +63,22 @@ describe("HomePage review interactions", () => {
     expect(screen.getByText(/^User input ·/)).toBeTruthy();
   });
 
+  it("lets the project overview change the inspected topic", async () => {
+    const user = userEvent.setup();
+    render(<HomePage />);
+    await user.click(await screen.findByRole("button", { name: "Clarify" }));
+
+    const topicList = await screen.findByLabelText("Project topics");
+    const openQuestion = within(topicList).getAllByRole("button").find((button) => button.textContent?.includes("Open question 1"));
+    expect(openQuestion).toBeTruthy();
+    if (!openQuestion) throw new Error("Open question control was not rendered");
+    await user.click(openQuestion);
+
+    expect(openQuestion.getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByText("Open question 1", { selector: ".overviewFocus .eyebrow" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Back to the current useful question" })).toBeTruthy();
+  });
+
   it("uploads a file into the visible inventory and removes a source", async () => {
     const user = userEvent.setup();
     render(<HomePage />);
