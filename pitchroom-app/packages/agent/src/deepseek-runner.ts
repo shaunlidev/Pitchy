@@ -13,6 +13,63 @@ const outputSchema = z.object({
   publicSummary: z.string().min(1).max(1_000),
 });
 
+const closedObject = (properties: Record<string, unknown>) => ({
+  type: "object",
+  properties,
+  required: Object.keys(properties),
+  additionalProperties: false,
+});
+
+const evidenceJsonSchema = closedObject({
+  sourceId: { type: "string" },
+  chunkId: { type: "string" },
+  quote: { type: "string" },
+});
+
+const agentClaimVariant = (state: "supported" | "conflicting" | "unknown", evidenceLimits: Record<string, number>) => closedObject({
+  statement: { type: "string" },
+  evidenceState: { type: "string", enum: [state] },
+  evidence: { type: "array", items: evidenceJsonSchema, ...evidenceLimits },
+  // An agent can never manufacture a user-attributed claim.
+  userInputIds: { type: "array", items: { type: "string" }, maxItems: 0 },
+});
+
+const claimJsonSchema = {
+  anyOf: [
+    agentClaimVariant("supported", { minItems: 1 }),
+    agentClaimVariant("conflicting", { minItems: 2 }),
+    agentClaimVariant("unknown", { maxItems: 0 }),
+  ],
+};
+
+export const deepSeekOutputJsonSchema = closedObject({
+  proposal: closedObject({
+    schemaVersion: { type: "integer", enum: [1] },
+    themes: {
+      type: "array",
+      items: closedObject({
+        title: { type: "string" },
+        summary: { type: "string" },
+        claims: { type: "array", items: claimJsonSchema },
+      }),
+    },
+    gaps: {
+      type: "array",
+      items: closedObject({
+        description: { type: "string" },
+        whyItMatters: { type: "string" },
+        relatedSourceIds: { type: "array", items: { type: "string" } },
+      }),
+    },
+    nextQuestion: closedObject({
+      question: { type: "string" },
+      whyItMatters: { type: "string" },
+      relatedThemeIndexes: { type: "array", items: { type: "integer" } },
+    }),
+  }),
+  publicSummary: { type: "string" },
+});
+
 type DeepSeekOutputItem = {
   type?: string;
   call_id?: string;
@@ -114,7 +171,7 @@ export class DeepSeekUnderstandingRunner implements UnderstandingAgentRunner {
           // choice is unsupported. Completion is still rejected below until a
           // source chunk has actually been read.
           tool_choice: "auto",
-          text: { format: { type: "json_object" } },
+          text: { format: { type: "json_schema", name: "pitchroom_understanding_v1", schema: deepSeekOutputJsonSchema } },
           max_output_tokens: 8_000,
         }),
         signal,

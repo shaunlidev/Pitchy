@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ToolRepository } from "@pitchroom/domain";
-import { DeepSeekUnderstandingRunner, parseDeepSeekJson } from "./deepseek-runner";
+import { DeepSeekUnderstandingRunner, deepSeekOutputJsonSchema, parseDeepSeekJson } from "./deepseek-runner";
 
 const chunk = { id: "source-1:chunk:0", sourceId: "source-1", text: "Revenue grew 40 percent.", startOffset: 0, endOffset: 24 };
 const repository: ToolRepository = {
@@ -14,6 +14,21 @@ const jsonResponse = (body: unknown) => new Response(JSON.stringify(body), { sta
 describe("DeepSeek Responses adapter", () => {
   it("extracts a fenced JSON object", () => expect(parseDeepSeekJson("```json\n{\"ok\":true}\n```" )).toEqual({ ok: true }));
 
+  it("closes every object and requires every declared property", () => {
+    const visit = (schema: unknown): void => {
+      if (!schema || typeof schema !== "object") return;
+      const node = schema as { type?: string; properties?: Record<string, unknown>; required?: string[]; additionalProperties?: unknown; items?: unknown; anyOf?: unknown[] };
+      if (node.type === "object") {
+        expect(node.additionalProperties).toBe(false);
+        expect(node.required?.sort()).toEqual(Object.keys(node.properties ?? {}).sort());
+        Object.values(node.properties ?? {}).forEach(visit);
+      }
+      if (node.type === "array") visit(node.items);
+      node.anyOf?.forEach(visit);
+    };
+    visit(deepSeekOutputJsonSchema);
+  });
+
   it("executes observable tools before accepting validated JSON", async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(jsonResponse({ status: "completed", output: [{ type: "function_call", call_id: "1", name: "list_sources", arguments: "{}" }] }))
@@ -24,7 +39,10 @@ describe("DeepSeek Responses adapter", () => {
     expect(result.proposal.themes[0]?.claims[0]?.evidenceState).toBe("supported");
     expect(result.trace?.map((event) => event.type)).toEqual(["tool_called", "tool_succeeded", "tool_called", "tool_succeeded"]);
     expect(result.metrics).toMatchObject({ provider: "deepseek-responses", toolCallCount: 2 });
-    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toMatchObject({ tool_choice: "auto" });
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toMatchObject({
+      tool_choice: "auto",
+      text: { format: { type: "json_schema", name: "pitchroom_understanding_v1" } },
+    });
   });
 
   it("rejects a final answer that skipped reading evidence", async () => {
