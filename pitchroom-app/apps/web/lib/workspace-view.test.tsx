@@ -1,7 +1,7 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it } from "vitest";
-import { acceptFixture, addFixtureMaterial, readFixtureState, resetFixtureState, runFixtureAgent, type FixtureState } from "./fixture-store";
+import { acceptFixture, addFixtureMaterial, generateFixturePositioning, readFixtureState, resetFixtureState, runFixtureAgent, type FixtureState } from "./fixture-store";
 import { WorkspaceView } from "./workspace-view";
 
 const sample = "Atelier helps design teams prepare client presentations.";
@@ -81,5 +81,17 @@ describe("WorkspaceView state matrix", () => {
     const html = render(failed);
     expect(html).toContain("The agent did not create a new understanding.");
     expect(html).toContain("Your material is saved. You can safely retry the agent.");
+  });
+
+  it("renders positioning as a preview with explicit apply and undo boundaries", () => {
+    addFixtureMaterial({ name: "brief.md", mediaType: "text/markdown", text: sample });
+    const reviewed = runFixtureAgent();
+    acceptFixture(reviewed.project.revision);
+    const proposed = generateFixturePositioning();
+    const html = render(proposed, { initialDestination: "positioning" });
+    expect(html).toContain("Preview only");
+    expect(html).toContain("Original framing");
+    expect(html).toContain("Keep original");
+    expect(html).toContain("Previewing does not change the project.");
   });
 });

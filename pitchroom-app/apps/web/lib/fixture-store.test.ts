@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { acceptFixture, addFixtureMaterial, answerFixtureQuestion, correctFixtureClaim, keepFixtureUnknown, resetFixtureState, runFixtureAgent } from "./fixture-store";
+import { acceptFixture, addFixtureMaterial, answerFixtureQuestion, applyFixturePositioning, correctFixtureClaim, generateFixturePositioning, keepFixtureUnknown, resetFixtureState, runFixtureAgent, undoFixturePositioning } from "./fixture-store";
 
 beforeEach(() => resetFixtureState());
 
@@ -76,5 +76,26 @@ describe("synthetic browser fixture", () => {
     const claim = result.versions[0]!.proposal.themes[0]!.claims[0]!;
     expect(claim.evidenceState).toBe("conflicting");
     expect(new Set(claim.evidence.map((item) => item.sourceId)).size).toBe(2);
+  });
+
+  it("previews positioning as an independent version and applies or undoes only by explicit command", () => {
+    addFixtureMaterial({ name: "brief.md", mediaType: "text/markdown", text: "Revenue grew 40 percent." });
+    const reviewed = runFixtureAgent();
+    acceptFixture(reviewed.project.revision);
+    expect(() => generateFixturePositioning(0)).toThrow("Accept the current understanding");
+    const proposed = generateFixturePositioning();
+    expect(proposed.positioning?.proposal.directions).toHaveLength(2);
+    expect(proposed.positioning?.appliedDirectionId).toBeUndefined();
+    const directionId = proposed.positioning!.proposal.directions[0]!.id;
+    expect(applyFixturePositioning(directionId, proposed.project.revision).positioning?.appliedDirectionId).toBe(directionId);
+    expect(undoFixturePositioning(proposed.project.revision).positioning?.appliedDirectionId).toBeUndefined();
+  });
+
+  it("invalidates positioning when source material changes", () => {
+    addFixtureMaterial({ name: "brief.md", mediaType: "text/markdown", text: "Revenue grew 40 percent." });
+    const reviewed = runFixtureAgent();
+    acceptFixture(reviewed.project.revision);
+    expect(generateFixturePositioning().positioning).toBeDefined();
+    expect(addFixtureMaterial({ name: "new.md", mediaType: "text/markdown", text: "The buyer is finance." }).positioning).toBeUndefined();
   });
 });

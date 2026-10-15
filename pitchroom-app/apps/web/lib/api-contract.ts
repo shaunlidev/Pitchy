@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { acceptedMediaTypes, sourceChunkSchema, understandingProposalV1Schema } from "@pitchroom/domain";
+import { acceptedMediaTypes, positioningProposalV1Schema, sourceChunkSchema, understandingProposalV1Schema } from "@pitchroom/domain";
 
 const commandId = z.string().trim().min(1).max(200).optional();
 const expectedRevision = z.number().int().nonnegative();
@@ -19,6 +19,9 @@ export const workspaceCommandSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("answer"), commandId, expectedRevision, text: z.string().trim().min(1).max(10_000) }),
   z.object({ action: z.literal("keep_unknown"), commandId, expectedRevision }),
   z.object({ action: z.literal("accept"), commandId, expectedRevision }),
+  z.object({ action: z.literal("generate_positioning"), commandId, expectedRevision }),
+  z.object({ action: z.literal("apply_positioning"), commandId, expectedRevision, directionId: z.string().min(1) }),
+  z.object({ action: z.literal("undo_positioning"), commandId, expectedRevision }),
 ]);
 
 const materialSchema = z.object({
@@ -49,6 +52,14 @@ export const workspaceStateSchema = z.object({
   sources: z.array(materialSchema),
   versions: z.array(versionSchema),
   currentVersionId: z.string().min(1).optional(),
+  positioning: z.object({
+    id: z.string().min(1),
+    number: z.number().int().positive(),
+    proposal: positioningProposalV1Schema,
+    appliedDirectionId: z.string().min(1).optional(),
+    previousAppliedDirectionId: z.string().min(1).optional(),
+    createdAt: z.string().datetime(),
+  }).optional(),
   events: z.array(z.object({ sequence: z.number().int().positive(), label: z.string().min(1), detail: z.string(), at: z.string().datetime() })),
 });
 

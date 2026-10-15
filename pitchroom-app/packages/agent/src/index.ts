@@ -6,3 +6,4 @@ export * from "./live-runner";
 export * from "./deepseek-runner";
 export * from "./persisted-run";
 export * from "./deterministic-runner";
+export * from "./positioning-runner";

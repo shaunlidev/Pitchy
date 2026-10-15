@@ -5,9 +5,11 @@ import {
   PitchroomError,
   defaultProjectCharacterLimit,
   ingestMaterial,
+  positioningProposalV1Schema,
   understandingProposalV1Schema,
   type AgentEvent,
   type MaterialInput,
+  type PositioningProposalV1,
   type SourceRecord,
   type ToolRepository,
   type UnderstandingProposalV1,
@@ -104,7 +106,7 @@ export class PitchroomRepository implements ToolRepository {
         text: chunk.text,
       })));
       await tx.insert(schema.commandReceipts).values({ projectId, idempotencyKey, commandType: "add_material", requestHash: material.contentHash, resourceId: source.id });
-      await tx.update(schema.projects).set({ phase: "materials_ready", currentUnderstandingId: null, updatedAt: new Date() }).where(eq(schema.projects.id, projectId));
+      await tx.update(schema.projects).set({ phase: "materials_ready", currentUnderstandingId: null, currentPositioningId: null, updatedAt: new Date() }).where(eq(schema.projects.id, projectId));
       return source;
     });
   }
@@ -140,7 +142,7 @@ export class PitchroomRepository implements ToolRepository {
       const [removed] = await tx.update(schema.sources).set({ deletedAt: new Date() }).where(and(eq(schema.sources.id, sourceId), eq(schema.sources.projectId, projectId), isNull(schema.sources.deletedAt))).returning({ id: schema.sources.id });
       if (!removed) throw new PitchroomError("NOT_FOUND", "Material was not found in this project.");
       const [remaining] = await tx.select({ count: sql<number>`count(*)` }).from(schema.sources).where(and(eq(schema.sources.projectId, projectId), isNull(schema.sources.deletedAt)));
-      await tx.update(schema.projects).set({ currentUnderstandingId: null, phase: Number(remaining?.count ?? 0) ? "materials_ready" : "empty", updatedAt: new Date() }).where(eq(schema.projects.id, projectId));
+      await tx.update(schema.projects).set({ currentUnderstandingId: null, currentPositioningId: null, phase: Number(remaining?.count ?? 0) ? "materials_ready" : "empty", updatedAt: new Date() }).where(eq(schema.projects.id, projectId));
       return removed;
     });
   }
@@ -267,6 +269,76 @@ export class PitchroomRepository implements ToolRepository {
       const [approval] = await tx.insert(schema.approvals).values({ projectId: input.projectId, understandingId: input.understandingId, decision: "accepted", actorId: input.actorId, idempotencyKey: input.idempotencyKey }).returning();
       await tx.update(schema.projects).set({ phase: "accepted", updatedAt: new Date() }).where(eq(schema.projects.id, input.projectId));
       return approval;
+    });
+  }
+
+  async getCurrentPositioning(projectId: string) {
+    const project = await this.getProject(projectId);
+    if (!project?.currentPositioningId) return undefined;
+    return this.db.query.positioningVersions.findFirst({ where: and(eq(schema.positioningVersions.projectId, projectId), eq(schema.positioningVersions.id, project.currentPositioningId)) });
+  }
+
+  async createPositioning(input: { projectId: string; understandingId: string; expectedRevision: number; proposal: PositioningProposalV1; idempotencyKey: string }) {
+    const proposal = positioningProposalV1Schema.parse(input.proposal);
+    const requestHash = JSON.stringify({ understandingId: input.understandingId, expectedRevision: input.expectedRevision, proposal });
+    return this.db.transaction(async (tx) => {
+      const existing = await tx.query.commandReceipts.findFirst({ where: and(eq(schema.commandReceipts.projectId, input.projectId), eq(schema.commandReceipts.idempotencyKey, input.idempotencyKey)) });
+      if (existing) {
+        if (existing.commandType !== "generate_positioning" || existing.requestHash !== requestHash) throw new PitchroomError("CONFLICT", "Idempotency key was already used for a different positioning command.");
+        const record = await tx.query.positioningVersions.findFirst({ where: eq(schema.positioningVersions.id, existing.resourceId) });
+        if (!record) throw new PitchroomError("PERSISTENCE_ERROR", "Positioning receipt points to a missing version.");
+        return record;
+      }
+      const [locked] = await tx.execute<{ version: number; phase: string; current_understanding_id: string | null }>(sql`select version, phase, current_understanding_id from projects where id = ${input.projectId} for update`);
+      if (!locked) throw new PitchroomError("NOT_FOUND", "Project was not found.");
+      if (locked.phase !== "accepted" || locked.version !== input.expectedRevision || locked.current_understanding_id !== input.understandingId) throw new PitchroomError("CONFLICT", "Positioning must use the current accepted understanding.");
+      const [latest] = await tx.select({ version: sql<number>`coalesce(max(${schema.positioningVersions.version}), 0)` }).from(schema.positioningVersions).where(eq(schema.positioningVersions.projectId, input.projectId));
+      const [created] = await tx.insert(schema.positioningVersions).values({ projectId: input.projectId, understandingId: input.understandingId, version: Number(latest?.version ?? 0) + 1, proposal }).returning();
+      if (!created) throw new PitchroomError("PERSISTENCE_ERROR", "Positioning version was not created.");
+      await tx.update(schema.projects).set({ currentPositioningId: created.id, updatedAt: new Date() }).where(eq(schema.projects.id, input.projectId));
+      await tx.insert(schema.commandReceipts).values({ projectId: input.projectId, idempotencyKey: input.idempotencyKey, commandType: "generate_positioning", requestHash, resourceId: created.id });
+      return created;
+    });
+  }
+
+  async applyPositioning(input: { projectId: string; directionId: string; expectedRevision: number; idempotencyKey: string }) {
+    return this.changePositioning({ ...input, commandType: "apply_positioning" });
+  }
+
+  async undoPositioning(input: { projectId: string; expectedRevision: number; idempotencyKey: string }) {
+    return this.changePositioning({ ...input, directionId: undefined, commandType: "undo_positioning" });
+  }
+
+  private async changePositioning(input: { projectId: string; directionId?: string; expectedRevision: number; idempotencyKey: string; commandType: "apply_positioning" | "undo_positioning" }) {
+    const requestHash = JSON.stringify({ directionId: input.directionId ?? null, expectedRevision: input.expectedRevision });
+    return this.db.transaction(async (tx) => {
+      const receipt = await tx.query.commandReceipts.findFirst({ where: and(eq(schema.commandReceipts.projectId, input.projectId), eq(schema.commandReceipts.idempotencyKey, input.idempotencyKey)) });
+      if (receipt) {
+        if (receipt.commandType !== input.commandType || receipt.requestHash !== requestHash) throw new PitchroomError("CONFLICT", "Idempotency key was already used for a different positioning command.");
+        const record = await tx.query.positioningVersions.findFirst({ where: eq(schema.positioningVersions.id, receipt.resourceId) });
+        if (!record) throw new PitchroomError("PERSISTENCE_ERROR", "Positioning receipt points to a missing version.");
+        return record;
+      }
+      const [locked] = await tx.execute<{ version: number; phase: string; current_positioning_id: string | null }>(sql`select version, phase, current_positioning_id from projects where id = ${input.projectId} for update`);
+      if (!locked) throw new PitchroomError("NOT_FOUND", "Project was not found.");
+      if (locked.phase !== "accepted" || locked.version !== input.expectedRevision || !locked.current_positioning_id) throw new PitchroomError("CONFLICT", "This positioning view is stale or not ready.");
+      const current = await tx.query.positioningVersions.findFirst({ where: eq(schema.positioningVersions.id, locked.current_positioning_id) });
+      if (!current) throw new PitchroomError("PERSISTENCE_ERROR", "The current positioning version is missing.");
+      let appliedDirectionId: string | null;
+      let previousAppliedDirectionId: string | null;
+      if (input.commandType === "undo_positioning") {
+        if (!current.appliedDirectionId) throw new PitchroomError("CONFLICT", "There is no current positioning change to undo.");
+        appliedDirectionId = current.previousAppliedDirectionId ?? null;
+        previousAppliedDirectionId = null;
+      } else {
+        if (!input.directionId || (input.directionId !== "original" && !current.proposal.directions.some((direction) => direction.id === input.directionId))) throw new PitchroomError("INVALID_INPUT", "The selected direction does not exist.");
+        previousAppliedDirectionId = current.appliedDirectionId ?? null;
+        appliedDirectionId = input.directionId;
+      }
+      const [updated] = await tx.update(schema.positioningVersions).set({ appliedDirectionId, previousAppliedDirectionId, updatedAt: new Date() }).where(eq(schema.positioningVersions.id, current.id)).returning();
+      if (!updated) throw new PitchroomError("PERSISTENCE_ERROR", "Positioning change was not saved.");
+      await tx.insert(schema.commandReceipts).values({ projectId: input.projectId, idempotencyKey: input.idempotencyKey, commandType: input.commandType, requestHash, resourceId: current.id });
+      return updated;
     });
   }
 }

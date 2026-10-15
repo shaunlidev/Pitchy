@@ -105,3 +105,49 @@
 .overviewFocus p { color: var(--muted); line-height: 1.55; }
 .overviewFocus .plain { display: inline-block; margin-top: 10px; }
 .gapFocus { border-left: 2px solid var(--orange); }
+
+.accepted {
+  grid-template-columns: 1fr auto;
+  align-items: center;
+}
+
+.accepted > div { display: grid; gap: 5px; }
+
+.positioningPage { max-width: 1160px; margin: 0 auto; }
+.positioningPage .workspaceHeading { align-items: flex-end; }
+.positioningPage .workspaceHeading h1 { margin-top: 8px; font-size: 44px; line-height: 1.04; }
+.positioningEmpty { max-width: 760px; min-height: 420px; display: grid; align-content: center; justify-items: start; gap: 18px; }
+.positioningEmpty h2 { font-size: 30px; max-width: 620px; }
+.positioningEmpty p { color: var(--muted); line-height: 1.65; max-width: 620px; }
+.positioningGrid { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 44px; align-items: start; }
+.directionList { display: grid; gap: 10px; position: sticky; top: 140px; }
+.directionOption { display: grid; gap: 8px; width: 100%; padding: 16px; border: 1px solid var(--line); border-radius: 7px; background: #101012; color: var(--ink); text-align: left; cursor: pointer; }
+.directionOption:hover { border-color: #625c57; }
+.directionOption.active { border-color: var(--orange); background: #241d19; }
+.directionOption:focus-visible { outline: 2px solid #79bcfa; outline-offset: 2px; }
+.directionOption span { font-weight: 750; }
+.directionOption small { color: var(--muted); line-height: 1.45; }
+.positioningPaper { padding: 34px; border: 1px solid var(--line); border-radius: 9px; background: #111113; }
+.positioningPaper > h2 { margin: 12px 0 28px; max-width: 800px; font-size: 35px; line-height: 1.18; letter-spacing: -.7px; }
+.movement { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin: 24px 0; }
+.movement > div { padding: 16px; border-top: 1px solid var(--line); }
+.movement span, .positioningConstraint h3, .positioningEvidence h3 { color: var(--muted); font-size: 11px; letter-spacing: .04em; text-transform: uppercase; }
+.movement p { margin-top: 8px; line-height: 1.55; }
+.positioningConstraint { padding: 18px; background: #171719; }
+.positioningConstraint p, .positioningConstraint ul { margin: 8px 0 18px; color: var(--muted); line-height: 1.55; }
+.positioningConstraint ul { padding-left: 18px; }
+.positioningEvidence { margin-top: 28px; }
+.positioningEvidence blockquote small { display: block; margin-top: 7px; color: var(--muted); }
+.originalNote { min-height: 240px; color: var(--muted); line-height: 1.65; }
+.positioningActions { margin-top: 28px; padding-top: 20px; border-top: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+.positioningActions > div { display: flex; align-items: center; gap: 18px; }
+
+@media (max-width: 760px) {
+  .accepted { grid-template-columns: 1fr; }
+  .positioningGrid { display: block; }
+  .directionList { position: static; margin-bottom: 20px; }
+  .positioningPaper { padding: 22px; }
+  .positioningPaper > h2 { font-size: 29px; }
+  .movement { grid-template-columns: 1fr; }
+  .positioningActions, .positioningActions > div { align-items: stretch; flex-direction: column; }
+}

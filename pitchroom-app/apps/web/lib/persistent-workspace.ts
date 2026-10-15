@@ -1,4 +1,4 @@
-import { DeterministicUnderstandingRunner, createLiveUnderstandingRunner, executePersistedUnderstandingRun } from "@pitchroom/agent";
+import { DeterministicPositioningRunner, DeterministicUnderstandingRunner, createLivePositioningRunner, createLiveUnderstandingRunner, executePersistedUnderstandingRun } from "@pitchroom/agent";
 import { createDatabase, PitchroomRepository } from "@pitchroom/persistence";
 import { PitchroomError, type UnderstandingProposalV1 } from "@pitchroom/domain";
 import type { FixtureState } from "./fixture-store";
@@ -36,13 +36,14 @@ export function reconstructSourceContent(chunks: Array<{ startOffset: number; te
 
 export async function readPersistentState(mode: "postgres-fake" | "live" = "postgres-fake"): Promise<FixtureState> {
   const currentProject = await project();
-  const [sources, versions, eventRows] = await Promise.all([repository().listSources(currentProject.id), repository().listVersions(currentProject.id), repository().listEvents(currentProject.id)]);
+  const [sources, versions, eventRows, positioning] = await Promise.all([repository().listSources(currentProject.id), repository().listVersions(currentProject.id), repository().listEvents(currentProject.id), repository().getCurrentPositioning(currentProject.id)]);
   return {
     mode,
     project: { id: currentProject.id, name: currentProject.name, phase: currentProject.phase, revision: currentProject.version },
     sources: sources.map((source) => ({ sourceId: source.id, name: source.name, mediaType: source.mediaType as "text/plain" | "text/markdown", content: reconstructSourceContent(source.chunks), contentHash: source.contentHash, chunks: source.chunks.map((chunk, ordinal) => ({ ...chunk, ordinal })) })),
     versions: versions.map((version) => ({ id: version.id, number: version.version, proposal: version.proposal, createdBy: version.createdBy === "user" ? "user" : "agent", createdAt: version.createdAt.toISOString() })),
     currentVersionId: currentProject.currentUnderstandingId ?? undefined,
+    positioning: positioning ? { id: positioning.id, number: positioning.version, proposal: positioning.proposal, appliedDirectionId: positioning.appliedDirectionId ?? undefined, previousAppliedDirectionId: positioning.previousAppliedDirectionId ?? undefined, createdAt: positioning.createdAt.toISOString() } : undefined,
     events: eventRows.map(({ event }, index) => ({ sequence: index + 1, ...eventView(event.type, event.payload), at: event.createdAt.toISOString() })),
   };
 }
@@ -101,5 +102,31 @@ export async function acceptPersistent(expectedRevision: number, idempotencyKey:
   const currentProject = await project();
   if (!currentProject.currentUnderstandingId) throw new PitchroomError("CONFLICT", "No understanding is ready for acceptance.");
   await repository().acceptUnderstanding({ projectId: currentProject.id, understandingId: currentProject.currentUnderstandingId, expectedRevision, actorId: "synthetic-local-user", idempotencyKey });
+  return readPersistentState();
+}
+
+export async function generatePersistentPositioning(expectedRevision: number, idempotencyKey: string, mode: "postgres-fake" | "live" = "postgres-fake") {
+  const currentProject = await project();
+  if (currentProject.phase !== "accepted" || currentProject.version !== expectedRevision || !currentProject.currentUnderstandingId) throw new PitchroomError("CONFLICT", "Accept the current understanding before creating positioning directions.");
+  const version = (await repository().listVersions(currentProject.id)).find((candidate) => candidate.id === currentProject.currentUnderstandingId);
+  if (!version) throw new PitchroomError("NOT_FOUND", "The accepted understanding was not found.");
+  const sources = await repository().listSources(currentProject.id);
+  const chunks = sources.flatMap((source) => source.chunks);
+  if (mode === "live" && process.env.PITCHROOM_LIVE_TRANSFER_ACK !== "authorized") throw new PitchroomError("INVALID_INPUT", "PITCHROOM_LIVE_TRANSFER_ACK=authorized is required before external model transfer.");
+  const runner = mode === "live" ? createLivePositioningRunner({ apiKey: process.env.OPENAI_API_KEY, model: process.env.OPENAI_MODEL, baseURL: process.env.OPENAI_BASE_URL }) : new DeterministicPositioningRunner();
+  const proposal = await runner.run({ understandingVersionId: version.id, understanding: version.proposal, chunks });
+  await repository().createPositioning({ projectId: currentProject.id, understandingId: version.id, expectedRevision, proposal, idempotencyKey });
+  return readPersistentState(mode);
+}
+
+export async function applyPersistentPositioning(directionId: string, expectedRevision: number, idempotencyKey: string) {
+  const currentProject = await project();
+  await repository().applyPositioning({ projectId: currentProject.id, directionId, expectedRevision, idempotencyKey });
+  return readPersistentState();
+}
+
+export async function undoPersistentPositioning(expectedRevision: number, idempotencyKey: string) {
+  const currentProject = await project();
+  await repository().undoPositioning({ projectId: currentProject.id, expectedRevision, idempotencyKey });
   return readPersistentState();
 }

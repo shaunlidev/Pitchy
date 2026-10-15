@@ -1,4 +1,4 @@
-import type { UnderstandingProposalV1 } from "@pitchroom/domain";
+import type { PositioningProposalV1, UnderstandingProposalV1 } from "@pitchroom/domain";
 import {
   index,
   integer,
@@ -29,6 +29,7 @@ export const projects = pgTable("projects", {
   phase: projectPhase("phase").notNull().default("empty"),
   version: integer("version").notNull().default(0),
   currentUnderstandingId: uuid("current_understanding_id"),
+  currentPositioningId: uuid("current_positioning_id"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
@@ -184,4 +185,20 @@ export const approvals = pgTable(
     index("approvals_project_created_idx").on(table.projectId, table.createdAt),
     uniqueIndex("approvals_project_idempotency_unique").on(table.projectId, table.idempotencyKey),
   ],
+);
+
+export const positioningVersions = pgTable(
+  "positioning_versions",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    projectId: uuid("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+    understandingId: uuid("understanding_id").notNull().references(() => understandingVersions.id, { onDelete: "restrict" }),
+    version: integer("version").notNull(),
+    proposal: jsonb("proposal").$type<PositioningProposalV1>().notNull(),
+    appliedDirectionId: text("applied_direction_id"),
+    previousAppliedDirectionId: text("previous_applied_direction_id"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [uniqueIndex("positioning_project_version_unique").on(table.projectId, table.version)],
 );

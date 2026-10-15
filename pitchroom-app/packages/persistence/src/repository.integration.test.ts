@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
 import { sql } from "drizzle-orm";
-import type { UnderstandingProposalV1 } from "@pitchroom/domain";
+import type { PositioningProposalV1, UnderstandingProposalV1 } from "@pitchroom/domain";
 import { createDatabase, PitchroomRepository } from "./repository";
 
 const url = process.env.DATABASE_URL;
@@ -135,5 +135,23 @@ describe("PostgreSQL repository contract", () => {
       repository.createRun(project.id, "same-run-command", "v1", "fake"),
     ]);
     expect(secondRun.id).toBe(firstRun.id);
+  });
+
+  it("persists positioning separately and supports explicit apply, undo, and invalidation", async () => {
+    const project = await repository.createProject("Positioning project");
+    await repository.addMaterial(project.id, { name: "brief.txt", mediaType: "text/plain", text: "Teams recover two days." }, "positioning-material");
+    const source = (await repository.listSources(project.id))[0]!;
+    const chunk = source.chunks[0]!;
+    const run = await repository.createRun(project.id, "positioning-run", "v1", "fake");
+    const understanding: UnderstandingProposalV1 = { schemaVersion: 1, themes: [{ title: "Speed", summary: "Teams move faster.", claims: [{ statement: "Teams recover two days.", evidenceState: "supported", evidence: [{ sourceId: source.id, chunkId: chunk.id, quote: "Teams recover two days." }], userInputIds: [] }] }], gaps: [], nextQuestion: { question: "Which decision matters?", whyItMatters: "It sets emphasis.", relatedThemeIndexes: [0] } };
+    const accepted = await repository.completeRun({ projectId: project.id, runId: run.id, expectedRevision: 0, proposal: understanding });
+    await repository.acceptUnderstanding({ projectId: project.id, understandingId: accepted.id, expectedRevision: 1, actorId: "local-user", idempotencyKey: "positioning-accept" });
+    const proposal: PositioningProposalV1 = { schemaVersion: 1, understandingVersionId: accepted.id, originalFraming: { title: "Original framing", coreMessage: "Teams move faster." }, directions: ["proof", "decision"].map((id) => ({ id, title: id, coreMessage: `${id} message`, from: "Teams move faster.", to: `${id} framing`, tradeoff: `${id} tradeoff`, excludes: ["unsupported claims"], evidence: [{ sourceId: source.id, chunkId: chunk.id, quote: "Teams recover two days." }], userInputIds: [] })) };
+    const created = await repository.createPositioning({ projectId: project.id, understandingId: accepted.id, expectedRevision: 1, proposal, idempotencyKey: "positioning-create" });
+    expect((await repository.getCurrentPositioning(project.id))?.id).toBe(created.id);
+    expect((await repository.applyPositioning({ projectId: project.id, directionId: "proof", expectedRevision: 1, idempotencyKey: "positioning-apply" })).appliedDirectionId).toBe("proof");
+    expect((await repository.undoPositioning({ projectId: project.id, expectedRevision: 1, idempotencyKey: "positioning-undo" })).appliedDirectionId).toBeNull();
+    await repository.addMaterial(project.id, { name: "late.txt", mediaType: "text/plain", text: "New evidence." }, "positioning-late-material");
+    expect(await repository.getCurrentPositioning(project.id)).toBeUndefined();
   });
 });

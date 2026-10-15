@@ -1,13 +1,15 @@
-import { PitchroomError, defaultProjectCharacterLimit, ingestMaterial, type ProjectPhase, type UnderstandingProposalV1 } from "@pitchroom/domain";
-import { buildDeterministicUnderstanding } from "@pitchroom/agent";
+import { PitchroomError, defaultProjectCharacterLimit, ingestMaterial, type PositioningProposalV1, type ProjectPhase, type UnderstandingProposalV1 } from "@pitchroom/domain";
+import { buildDeterministicPositioning, buildDeterministicUnderstanding } from "@pitchroom/agent";
 
 type Version = { id: string; number: number; proposal: UnderstandingProposalV1; createdBy: "agent" | "user"; createdAt: string };
+type PositioningVersion = { id: string; number: number; proposal: PositioningProposalV1; appliedDirectionId?: string; previousAppliedDirectionId?: string; createdAt: string };
 export type FixtureState = {
   mode: "synthetic-fixture" | "postgres-fake" | "live";
   project: { id: string; name: string; phase: ProjectPhase; revision: number };
   sources: ReturnType<typeof ingestMaterial>[];
   versions: Version[];
   currentVersionId?: string;
+  positioning?: PositioningVersion;
   events: Array<{ sequence: number; label: string; detail: string; at: string }>;
 };
 
@@ -28,6 +30,7 @@ export function addFixtureMaterial(input: { name: string; mediaType: "text/plain
   if (!state.sources.some((source) => source.contentHash === material.contentHash)) state.sources.push(material);
   state.project.phase = "materials_ready";
   state.currentVersionId = undefined;
+  state.positioning = undefined;
   addEvent("Material ready", `${material.name} · ${material.chunks.length} chunk${material.chunks.length === 1 ? "" : "s"}`);
   return readFixtureState();
 }
@@ -38,6 +41,7 @@ export function removeFixtureMaterial(sourceId: string) {
   if (index < 0) throw new PitchroomError("NOT_FOUND", "Material was not found in this project.");
   const [removed] = state.sources.splice(index, 1);
   state.currentVersionId = undefined;
+  state.positioning = undefined;
   state.project.phase = state.sources.length ? "materials_ready" : "empty";
   addEvent("Material removed", `${removed!.name} removed from the active project; prior versions remain in history`);
   return readFixtureState();
@@ -93,4 +97,31 @@ export function keepFixtureUnknown(expectedRevision: number) {
 export function acceptFixture(expectedRevision: number) {
   if (state.project.phase !== "review_required" || state.project.revision !== expectedRevision) throw new PitchroomError("CONFLICT", "Only the current reviewed version can be accepted.");
   state.project.phase = "accepted"; addEvent("Understanding accepted", `${state.currentVersionId} accepted by synthetic-local-user`); return readFixtureState();
+}
+
+export function generateFixturePositioning(expectedRevision: number = state.project.revision) {
+  if (state.project.phase !== "accepted" || state.project.revision !== expectedRevision || !state.currentVersionId) throw new PitchroomError("CONFLICT", "Accept the current understanding before creating positioning directions.");
+  const current = state.versions.find((version) => version.id === state.currentVersionId);
+  if (!current) throw new PitchroomError("NOT_FOUND", "The accepted understanding was not found.");
+  const proposal = buildDeterministicPositioning({ understandingVersionId: current.id, understanding: current.proposal, chunks: state.sources.flatMap((source) => source.chunks) });
+  state.positioning = { id: `positioning-${Date.now()}`, number: (state.positioning?.number ?? 0) + 1, proposal, createdAt: new Date().toISOString() };
+  addEvent("Positioning proposed", `${proposal.directions.length} source-grounded directions ready for review`);
+  return readFixtureState();
+}
+
+export function applyFixturePositioning(directionId: string, expectedRevision: number) {
+  if (state.project.phase !== "accepted" || state.project.revision !== expectedRevision || !state.positioning) throw new PitchroomError("CONFLICT", "This positioning view is stale or not ready.");
+  if (directionId !== "original" && !state.positioning.proposal.directions.some((direction) => direction.id === directionId)) throw new PitchroomError("INVALID_INPUT", "The selected direction does not exist.");
+  state.positioning.previousAppliedDirectionId = state.positioning.appliedDirectionId;
+  state.positioning.appliedDirectionId = directionId;
+  addEvent("Positioning applied", directionId === "original" ? "Original framing retained" : `${directionId} applied by user`);
+  return readFixtureState();
+}
+
+export function undoFixturePositioning(expectedRevision: number) {
+  if (state.project.phase !== "accepted" || state.project.revision !== expectedRevision || !state.positioning?.appliedDirectionId) throw new PitchroomError("CONFLICT", "There is no current positioning change to undo.");
+  state.positioning.appliedDirectionId = state.positioning.previousAppliedDirectionId;
+  state.positioning.previousAppliedDirectionId = undefined;
+  addEvent("Positioning undone", "The latest applied direction was reversed");
+  return readFixtureState();
 }
