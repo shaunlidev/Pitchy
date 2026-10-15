@@ -35,7 +35,7 @@ export default function HomePage() {
     return () => stream.close();
   }, [refresh]);
 
-  async function act(body: Record<string, unknown>) {
+  async function act(body: Record<string, unknown>): Promise<boolean> {
     setBusy(true);
     setError("");
     const controller = body.action === "run" ? new AbortController() : undefined;
@@ -55,8 +55,10 @@ export default function HomePage() {
         setAnswer("");
         setCorrection("");
       }
+      return true;
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "The action failed.");
+      return false;
     } finally {
       if (activeRequest.current === controller) activeRequest.current = undefined;
       setBusy(false);
@@ -64,10 +66,10 @@ export default function HomePage() {
   }
 
   async function chooseFile(file?: File) {
-    if (!file) return;
+    if (!file) return false;
     if (!/\.(md|txt)$/i.test(file.name)) {
       setError("Choose a UTF-8 .txt or .md file.");
-      return;
+      return false;
     }
     try {
       const fileText = new TextDecoder("utf-8", { fatal: true }).decode(await file.arrayBuffer());
@@ -75,8 +77,10 @@ export default function HomePage() {
       setMediaType(file.name.toLowerCase().endsWith(".md") ? "text/markdown" : "text/plain");
       setText(fileText);
       setError("");
+      return await act({ action: "add_material", name: file.name, mediaType: file.name.toLowerCase().endsWith(".md") ? "text/markdown" : "text/plain", text: fileText });
     } catch {
       setError("The selected file could not be read as UTF-8 text.");
+      return false;
     }
   }
 
@@ -86,5 +90,5 @@ export default function HomePage() {
     {error && <><p role="alert">{error}</p><button onClick={() => { setError(""); void refresh().catch((cause) => setError(cause instanceof Error ? cause.message : String(cause))); }}>Try again</button></>}
   </main>;
 
-  return <WorkspaceView state={state} busy={busy} error={error} text={text} selectedName={name} answer={answer} correction={correction} activeRequest={activeRequest.current} onTextChange={setText} onAnswerChange={setAnswer} onCorrectionChange={setCorrection} onChooseFile={chooseFile} onCancelRun={() => activeRequest.current?.abort()} onAction={(body) => { void act({ ...body, ...(body.action === "add_material" ? { name, mediaType } : {}) }); }} />;
+  return <WorkspaceView state={state} busy={busy} error={error} text={text} answer={answer} correction={correction} activeRequest={activeRequest.current} onTextChange={setText} onAnswerChange={setAnswer} onCorrectionChange={setCorrection} onChooseFile={chooseFile} onCancelRun={() => activeRequest.current?.abort()} onAction={(body) => act({ ...body, ...(body.action === "add_material" ? { name, mediaType } : {}) })} />;
 }

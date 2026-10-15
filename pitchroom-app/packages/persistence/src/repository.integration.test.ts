@@ -85,7 +85,7 @@ describe("PostgreSQL repository contract", () => {
     expect(await repository.getProject(project.id)).toMatchObject({ phase: "reading" });
   });
 
-  it("keeps review and accepted phases terminal for material ingestion", async () => {
+  it("invalidates reviewed understanding when new material is added", async () => {
     const project = await repository.createProject("Terminal material project");
     await repository.addMaterial(project.id, { name: "brief.txt", mediaType: "text/plain", text: "Revenue grew." }, "terminal-material-1");
     const source = (await repository.listSources(project.id))[0]!;
@@ -96,11 +96,14 @@ describe("PostgreSQL repository contract", () => {
       gaps: [],
       nextQuestion: { question: "Why?", whyItMatters: "Review", relatedThemeIndexes: [0] },
     };
-    const understanding = await repository.completeRun({ projectId: project.id, runId: run.id, expectedRevision: 0, proposal });
-    await expect(repository.addMaterial(project.id, { name: "late.txt", mediaType: "text/plain", text: "Late." }, "terminal-material-2")).rejects.toThrow("cannot be added");
-    await repository.acceptUnderstanding({ projectId: project.id, understandingId: understanding.id, expectedRevision: 1, actorId: "local-user", idempotencyKey: "terminal-accept" });
-    await expect(repository.addMaterial(project.id, { name: "later.txt", mediaType: "text/plain", text: "Later." }, "terminal-material-3")).rejects.toThrow("cannot be added");
-    expect(await repository.getProject(project.id)).toMatchObject({ phase: "accepted" });
+    await repository.completeRun({ projectId: project.id, runId: run.id, expectedRevision: 0, proposal });
+    await repository.addMaterial(project.id, { name: "late.txt", mediaType: "text/plain", text: "Late." }, "terminal-material-2");
+    expect(await repository.getProject(project.id)).toMatchObject({ phase: "materials_ready", currentUnderstandingId: null });
+    const rerun = await repository.createRun(project.id, "terminal-rerun", "v1", "fake");
+    const secondUnderstanding = await repository.completeRun({ projectId: project.id, runId: rerun.id, expectedRevision: 1, proposal });
+    await repository.acceptUnderstanding({ projectId: project.id, understandingId: secondUnderstanding.id, expectedRevision: 2, actorId: "local-user", idempotencyKey: "terminal-accept" });
+    await repository.addMaterial(project.id, { name: "later.txt", mediaType: "text/plain", text: "Later." }, "terminal-material-3");
+    expect(await repository.getProject(project.id)).toMatchObject({ phase: "materials_ready", currentUnderstandingId: null });
   });
 
   it("serializes concurrent run creation and prevents stale terminal writes", async () => {

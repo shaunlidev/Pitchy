@@ -14,6 +14,10 @@ const jsonResponse = (body: unknown) => new Response(JSON.stringify(body), { sta
 describe("DeepSeek Responses adapter", () => {
   it("extracts a fenced JSON object", () => expect(parseDeepSeekJson("```json\n{\"ok\":true}\n```" )).toEqual({ ok: true }));
 
+  it("turns malformed model JSON into a bounded proposal error", () => {
+    expect(() => parseDeepSeekJson('{"items":[1,]}')).toThrow("DeepSeek returned no parseable JSON object.");
+  });
+
   it("closes every object and requires every declared property", () => {
     const visit = (schema: unknown): void => {
       if (!schema || typeof schema !== "object") return;

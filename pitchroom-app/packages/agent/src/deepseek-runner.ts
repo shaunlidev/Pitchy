@@ -112,7 +112,9 @@ export function parseDeepSeekJson(text: string): unknown {
   try { return JSON.parse(unfenced); } catch {
     const start = unfenced.indexOf("{");
     const end = unfenced.lastIndexOf("}");
-    if (start >= 0 && end > start) return JSON.parse(unfenced.slice(start, end + 1));
+    if (start >= 0 && end > start) {
+      try { return JSON.parse(unfenced.slice(start, end + 1)); } catch { /* handled below */ }
+    }
     throw new PitchroomError("PROPOSAL_REJECTED", "DeepSeek returned no parseable JSON object.");
   }
 }

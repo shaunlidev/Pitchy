@@ -71,7 +71,7 @@ export class PitchroomRepository implements ToolRepository {
         if (!existing) throw new PitchroomError("PERSISTENCE_ERROR", "Material receipt points to a missing source.");
         return existing;
       }
-      if (project.phase !== "empty" && project.phase !== "materials_ready") {
+      if (project.phase === "reading" || project.phase === "structuring") {
         throw new PitchroomError("INVALID_TRANSITION", `Material cannot be added while the project is ${project.phase}.`);
       }
       const duplicateContent = await tx.query.sources.findFirst({
@@ -104,7 +104,7 @@ export class PitchroomRepository implements ToolRepository {
         text: chunk.text,
       })));
       await tx.insert(schema.commandReceipts).values({ projectId, idempotencyKey, commandType: "add_material", requestHash: material.contentHash, resourceId: source.id });
-      await tx.update(schema.projects).set({ phase: "materials_ready", updatedAt: new Date() }).where(eq(schema.projects.id, projectId));
+      await tx.update(schema.projects).set({ phase: "materials_ready", currentUnderstandingId: null, updatedAt: new Date() }).where(eq(schema.projects.id, projectId));
       return source;
     });
   }

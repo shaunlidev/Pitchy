@@ -20,13 +20,14 @@ export const readFixtureState = (): FixtureState => structuredClone(state);
 export function resetFixtureState() { Object.assign(state, makeState()); return readFixtureState(); }
 
 export function addFixtureMaterial(input: { name: string; mediaType: "text/plain" | "text/markdown"; text: string }) {
-  if (state.project.phase !== "empty" && state.project.phase !== "materials_ready") {
+  if (state.project.phase === "reading" || state.project.phase === "structuring") {
     throw new PitchroomError("INVALID_TRANSITION", `Material cannot be added while the project is ${state.project.phase}.`);
   }
   const material = ingestMaterial(state.project.id, input);
   if (!state.sources.some((source) => source.contentHash === material.contentHash) && state.sources.reduce((total, source) => total + source.content.length, 0) + material.content.length > defaultProjectCharacterLimit) throw new PitchroomError("INVALID_INPUT", "Material would exceed the project text limit.", { limit: defaultProjectCharacterLimit });
   if (!state.sources.some((source) => source.contentHash === material.contentHash)) state.sources.push(material);
   state.project.phase = "materials_ready";
+  state.currentVersionId = undefined;
   addEvent("Material ready", `${material.name} · ${material.chunks.length} chunk${material.chunks.length === 1 ? "" : "s"}`);
   return readFixtureState();
 }

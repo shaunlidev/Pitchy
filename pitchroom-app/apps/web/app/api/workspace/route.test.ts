@@ -33,12 +33,14 @@ describe("workspace API", () => {
     expect(errorEnvelopeSchema.parse(await response.json()).code).toBe("CONFLICT");
   });
 
-  it("rejects material after the project enters review", async () => {
+  it("accepts new material after review and invalidates the current understanding", async () => {
     await POST(request({ action: "add_material", commandId: "add-before-review", name: "brief.txt", mediaType: "text/plain", text: "Revenue grew." }));
     await POST(request({ action: "run", commandId: "run-before-review" }));
     const response = await POST(request({ action: "add_material", commandId: "add-after-review", name: "late.txt", mediaType: "text/plain", text: "Late material." }));
-    expect(response.status).toBe(400);
-    expect(errorEnvelopeSchema.parse(await response.json()).code).toBe("INVALID_TRANSITION");
-    expect(workspaceStateSchema.parse(await (await GET()).json()).project.phase).toBe("review_required");
+    expect(response.status).toBe(200);
+    const state = workspaceStateSchema.parse(await response.json());
+    expect(state.sources.map((source) => source.name)).toEqual(["brief.txt", "late.txt"]);
+    expect(state.project.phase).toBe("materials_ready");
+    expect(state.currentVersionId).toBeUndefined();
   });
 });

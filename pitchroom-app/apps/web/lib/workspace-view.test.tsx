@@ -17,9 +17,9 @@ function render(state: FixtureState, overrides: Partial<Parameters<typeof Worksp
     onTextChange: () => undefined,
     onAnswerChange: () => undefined,
     onCorrectionChange: () => undefined,
-    onChooseFile: () => undefined,
+    onChooseFile: () => true,
     onCancelRun: () => undefined,
-    onAction: () => undefined,
+    onAction: () => true,
     ...overrides,
   }));
 }

@@ -10,13 +10,18 @@ describe("synthetic browser fixture", () => {
     expect(reviewed.project.phase).toBe("review_required");
     expect(() => acceptFixture(0)).toThrow("current reviewed version");
     expect(acceptFixture(1).project.phase).toBe("accepted");
-    expect(() => addFixtureMaterial({ name: "late.md", mediaType: "text/markdown", text: "Late material." })).toThrow("cannot be added");
+    const updated = addFixtureMaterial({ name: "late.md", mediaType: "text/markdown", text: "Late material." });
+    expect(updated.project.phase).toBe("materials_ready");
+    expect(updated.currentVersionId).toBeUndefined();
   });
 
-  it("rejects material after review begins", () => {
+  it("adds material after review and invalidates the current understanding", () => {
     addFixtureMaterial({ name: "brief.md", mediaType: "text/markdown", text: "Revenue grew 40 percent." });
     runFixtureAgent();
-    expect(() => addFixtureMaterial({ name: "late.md", mediaType: "text/markdown", text: "Late material." })).toThrow("cannot be added");
+    const updated = addFixtureMaterial({ name: "late.md", mediaType: "text/markdown", text: "Late material." });
+    expect(updated.sources.map((source) => source.name)).toEqual(["brief.md", "late.md"]);
+    expect(updated.project.phase).toBe("materials_ready");
+    expect(updated.currentVersionId).toBeUndefined();
   });
 
   it("attributes corrections to user input rather than source evidence", () => {

@@ -23,7 +23,8 @@ describe("HomePage review interactions", () => {
     vi.stubGlobal("EventSource", FakeEventSource);
     vi.stubGlobal("fetch", vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       if (!init?.method || init.method === "GET") return jsonResponse(readFixtureState());
-      const body = JSON.parse(String(init.body)) as { action: string; text?: string; expectedRevision?: number; sourceId?: string };
+      const body = JSON.parse(String(init.body)) as { action: string; text?: string; expectedRevision?: number; sourceId?: string; name?: string; mediaType?: "text/plain" | "text/markdown" };
+      if (body.action === "add_material") return jsonResponse(addFixtureMaterial({ name: body.name ?? "pasted-material.md", mediaType: body.mediaType ?? "text/markdown", text: body.text ?? "" }));
       if (body.action === "answer") return jsonResponse(answerFixtureQuestion(body.text ?? "", body.expectedRevision ?? -1));
       if (body.action === "correct") return jsonResponse(correctFixtureClaim(body.text ?? "", body.expectedRevision ?? -1));
       if (body.action === "remove_material") return jsonResponse(removeFixtureMaterial(body.sourceId ?? ""));
@@ -61,14 +62,19 @@ describe("HomePage review interactions", () => {
     expect(screen.getByText(/^User input ·/)).toBeTruthy();
   });
 
-  it("opens explicit upload and removal dialogs from the default Materials home", async () => {
+  it("uploads a file into the visible inventory and removes a source", async () => {
     const user = userEvent.setup();
     render(<HomePage />);
     expect(await screen.findByRole("heading", { name: "Your project materials." })).toBeTruthy();
     expect(screen.queryByText("External AI is enabled for this project.")).toBeNull();
     await user.click(screen.getByRole("button", { name: /Add files/ }));
     expect(screen.getByRole("dialog", { name: "Add source material" })).toBeTruthy();
-    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    const input = document.querySelector("#upload-material-file") as HTMLInputElement;
+    await user.upload(input, new File(["# New evidence\nA new cited fact."], "new-evidence.md", { type: "text/markdown" }));
+    expect(await screen.findByText("new-evidence.md")).toBeTruthy();
+    expect(screen.queryByRole("dialog", { name: "Add source material" })).toBeNull();
+    expect(screen.getByText("2 files")).toBeTruthy();
+    expect((screen.getByRole("button", { name: /Back to Clarify/ }) as HTMLButtonElement).disabled).toBe(true);
     await user.click(screen.getByRole("button", { name: "Remove brief.md" }));
     expect(screen.getByRole("alertdialog", { name: "Remove this source?" })).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "Remove file" }));
