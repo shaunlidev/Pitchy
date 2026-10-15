@@ -75,9 +75,11 @@ async function currentProposal(expectedRevision: number) {
   return { currentProject, proposal: structuredClone(version.proposal) as UnderstandingProposalV1 };
 }
 
-export async function correctPersistentClaim(text: string, expectedRevision: number, idempotencyKey: string) {
+export async function correctPersistentClaim(text: string, themeIndex: number, claimIndex: number, expectedRevision: number, idempotencyKey: string) {
   const { currentProject, proposal } = await currentProposal(expectedRevision);
-  proposal.themes[0]!.claims[0] = { statement: text.trim(), evidenceState: "user_asserted", evidence: [], userInputIds: ["assigned-transactionally"] };
+  const claim = proposal.themes[themeIndex]?.claims[claimIndex];
+  if (!claim) throw new PitchroomError("INVALID_INPUT", "The selected claim is no longer available. Refresh and choose it again.");
+  proposal.themes[themeIndex]!.claims[claimIndex] = { statement: text.trim(), evidenceState: "user_asserted", evidence: [], userInputIds: ["assigned-transactionally"] };
   await repository().createUserVersion({ projectId: currentProject.id, expectedRevision, kind: "correction", text, actorId: "synthetic-local-user", idempotencyKey, proposal });
   return readPersistentState();
 }

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { addFixtureMaterial, answerFixtureQuestion, correctFixtureClaim, readFixtureState, removeFixtureMaterial, resetFixtureState, runFixtureAgent } from "../lib/fixture-store";
@@ -23,10 +23,10 @@ describe("HomePage review interactions", () => {
     vi.stubGlobal("EventSource", FakeEventSource);
     vi.stubGlobal("fetch", vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       if (!init?.method || init.method === "GET") return jsonResponse(readFixtureState());
-      const body = JSON.parse(String(init.body)) as { action: string; text?: string; expectedRevision?: number; sourceId?: string; name?: string; mediaType?: "text/plain" | "text/markdown" };
+      const body = JSON.parse(String(init.body)) as { action: string; text?: string; expectedRevision?: number; sourceId?: string; name?: string; mediaType?: "text/plain" | "text/markdown"; themeIndex?: number; claimIndex?: number };
       if (body.action === "add_material") return jsonResponse(addFixtureMaterial({ name: body.name ?? "pasted-material.md", mediaType: body.mediaType ?? "text/markdown", text: body.text ?? "" }));
       if (body.action === "answer") return jsonResponse(answerFixtureQuestion(body.text ?? "", body.expectedRevision ?? -1));
-      if (body.action === "correct") return jsonResponse(correctFixtureClaim(body.text ?? "", body.expectedRevision ?? -1));
+      if (body.action === "correct") return jsonResponse(correctFixtureClaim(body.text ?? "", body.themeIndex ?? -1, body.claimIndex ?? -1, body.expectedRevision ?? -1));
       if (body.action === "remove_material") return jsonResponse(removeFixtureMaterial(body.sourceId ?? ""));
       return jsonResponse({ error: "Unexpected test action" }, 400);
     }));
@@ -53,12 +53,13 @@ describe("HomePage review interactions", () => {
     const user = userEvent.setup();
     render(<HomePage />);
     await user.click(await screen.findByRole("button", { name: "Clarify" }));
-    const correction = await screen.findByLabelText("Correct the first claim") as HTMLTextAreaElement;
+    const correction = await screen.findByLabelText("Your correction") as HTMLTextAreaElement;
     await user.type(correction, "Atelier shortens client-deck preparation.");
-    await user.click(screen.getByRole("button", { name: "Record correction" }));
+    const correctionPanel = screen.getByRole("region", { name: "Correct a specific claim" });
+    await user.click(within(correctionPanel).getByRole("button", { name: "Record correction" }));
     await waitFor(() => expect(correction.value).toBe(""));
-    expect((screen.getByRole("button", { name: "Record correction" }) as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.getByText("Atelier shortens client-deck preparation.")).toBeTruthy();
+    expect((within(correctionPanel).getByRole("button", { name: "Record correction" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getAllByText("Atelier shortens client-deck preparation.").length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText(/^User input ·/)).toBeTruthy();
   });
 
@@ -66,6 +67,7 @@ describe("HomePage review interactions", () => {
     const user = userEvent.setup();
     render(<HomePage />);
     expect(await screen.findByRole("heading", { name: "Your project materials." })).toBeTruthy();
+    expect((screen.getByLabelText("Written brief") as HTMLTextAreaElement).value).toBe("");
     expect(screen.queryByText("External AI is enabled for this project.")).toBeNull();
     await user.click(screen.getByRole("button", { name: /Add files/ }));
     expect(screen.getByRole("dialog", { name: "Add source material" })).toBeTruthy();
@@ -79,5 +81,24 @@ describe("HomePage review interactions", () => {
     expect(screen.getByRole("alertdialog", { name: "Remove this source?" })).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "Remove file" }));
     await waitFor(() => expect(screen.queryByText("brief.md")).toBeNull());
+  });
+
+  it("keeps the remove confirmation open when deletion fails", async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.mocked(fetch);
+    const workingFetch = fetchMock.getMockImplementation();
+    fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const body = init?.body ? JSON.parse(String(init.body)) as { action?: string } : undefined;
+      if (body?.action === "remove_material") return jsonResponse({ error: "Removal failed" }, 500);
+      if (!workingFetch) throw new Error("Missing test fetch implementation");
+      return workingFetch(input, init);
+    });
+
+    render(<HomePage />);
+    await user.click(await screen.findByRole("button", { name: "Remove brief.md" }));
+    await user.click(screen.getByRole("button", { name: "Remove file" }));
+
+    expect((await screen.findByRole("alert")).textContent).toContain("Removal failed");
+    expect(screen.getByRole("alertdialog", { name: "Remove this source?" })).toBeTruthy();
   });
 });

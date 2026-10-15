@@ -25,7 +25,7 @@ export async function POST(request: Request) {
       case "add_material": state = persistent ? await addPersistentMaterial({ name: body.name, text: body.text, mediaType: body.mediaType, idempotencyKey: commandId }) : addFixtureMaterial({ name: body.name, text: body.text, mediaType: body.mediaType }); break;
       case "remove_material": state = persistent ? await removePersistentMaterial(body.sourceId) : removeFixtureMaterial(body.sourceId); break;
       case "run": state = persistent ? await runPersistentAgent(commandId, persistentMode(), request.signal) : runFixtureAgent(); break;
-      case "correct": state = persistent ? await correctPersistentClaim(body.text, body.expectedRevision, commandId) : correctFixtureClaim(body.text, body.expectedRevision); break;
+      case "correct": state = persistent ? await correctPersistentClaim(body.text, body.themeIndex, body.claimIndex, body.expectedRevision, commandId) : correctFixtureClaim(body.text, body.themeIndex, body.claimIndex, body.expectedRevision); break;
       case "answer": state = persistent ? await answerPersistentQuestion(body.text, body.expectedRevision, commandId) : answerFixtureQuestion(body.text, body.expectedRevision); break;
       case "keep_unknown": state = persistent ? await keepPersistentUnknown(body.expectedRevision, commandId) : keepFixtureUnknown(body.expectedRevision); break;
       case "accept": state = persistent ? await acceptPersistent(body.expectedRevision, commandId) : acceptFixture(body.expectedRevision); break;

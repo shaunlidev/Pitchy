@@ -27,11 +27,21 @@ describe("synthetic browser fixture", () => {
   it("attributes corrections to user input rather than source evidence", () => {
     addFixtureMaterial({ name: "brief.md", mediaType: "text/markdown", text: "Revenue grew 40 percent." });
     runFixtureAgent();
-    const corrected = correctFixtureClaim("Finance owner says growth was 35 percent.", 1);
+    const corrected = correctFixtureClaim("Finance owner says growth was 35 percent.", 0, 0, 1);
     const claim = corrected.versions.at(-1)!.proposal.themes[0]!.claims[0]!;
     expect(claim.evidenceState).toBe("user_asserted");
     expect(claim.evidence).toEqual([]);
     expect(claim.userInputIds).toHaveLength(1);
+  });
+
+  it("corrects the explicitly selected claim instead of assuming the first", () => {
+    addFixtureMaterial({ name: "brief.md", mediaType: "text/markdown", text: "Revenue grew 40 percent." });
+    runFixtureAgent();
+    const answered = answerFixtureQuestion("The audience should approve the pilot.", 1);
+    const corrected = correctFixtureClaim("The audience should review the pilot evidence.", 0, 1, answered.project.revision);
+    const claims = corrected.versions.at(-1)!.proposal.themes[0]!.claims;
+    expect(claims[0]!.statement).toBe("Revenue grew 40 percent.");
+    expect(claims[1]).toMatchObject({ statement: "The audience should review the pilot evidence.", evidenceState: "user_asserted" });
   });
 
   it("preserves an unknown as a new immutable version", () => {

@@ -4,14 +4,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { FixtureState } from "../lib/fixture-store";
 import { WorkspaceView } from "../lib/workspace-view";
 import "./styles.css";
-
-const sample = `Atelier helps independent design teams turn scattered research into a clear client presentation.\n\nIn 2026, twelve pilot teams reduced preparation time from two days to three hours. The material does not yet explain which decision the client should make after seeing the deck.`;
+import "./ux-fixes.css";
 
 export default function HomePage() {
   const [state, setState] = useState<FixtureState>();
-  const [text, setText] = useState(sample);
-  const [name, setName] = useState("atelier-brief.md");
-  const [mediaType, setMediaType] = useState<"text/plain" | "text/markdown">("text/markdown");
+  const [text, setText] = useState("");
   const [correction, setCorrection] = useState("");
   const [answer, setAnswer] = useState("");
   const [busy, setBusy] = useState(false);
@@ -73,9 +70,6 @@ export default function HomePage() {
     }
     try {
       const fileText = new TextDecoder("utf-8", { fatal: true }).decode(await file.arrayBuffer());
-      setName(file.name);
-      setMediaType(file.name.toLowerCase().endsWith(".md") ? "text/markdown" : "text/plain");
-      setText(fileText);
       setError("");
       return await act({ action: "add_material", name: file.name, mediaType: file.name.toLowerCase().endsWith(".md") ? "text/markdown" : "text/plain", text: fileText });
     } catch {
@@ -90,5 +84,5 @@ export default function HomePage() {
     {error && <><p role="alert">{error}</p><button onClick={() => { setError(""); void refresh().catch((cause) => setError(cause instanceof Error ? cause.message : String(cause))); }}>Try again</button></>}
   </main>;
 
-  return <WorkspaceView state={state} busy={busy} error={error} text={text} answer={answer} correction={correction} activeRequest={activeRequest.current} onTextChange={setText} onAnswerChange={setAnswer} onCorrectionChange={setCorrection} onChooseFile={chooseFile} onCancelRun={() => activeRequest.current?.abort()} onAction={(body) => act({ ...body, ...(body.action === "add_material" ? { name, mediaType } : {}) })} />;
+  return <WorkspaceView state={state} busy={busy} error={error} text={text} answer={answer} correction={correction} activeRequest={activeRequest.current} onTextChange={setText} onAnswerChange={setAnswer} onCorrectionChange={setCorrection} onChooseFile={chooseFile} onCancelRun={() => activeRequest.current?.abort()} onAction={(body) => act(body.action === "add_material" && !body.name ? { ...body, name: "written-brief.md", mediaType: "text/markdown" } : body)} />;
 }

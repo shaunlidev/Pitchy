@@ -57,11 +57,13 @@ export function runFixtureAgent() {
   return readFixtureState();
 }
 
-export function correctFixtureClaim(text: string, expectedRevision: number) {
+export function correctFixtureClaim(text: string, themeIndex: number, claimIndex: number, expectedRevision: number) {
   if (state.project.phase !== "review_required" || state.project.revision !== expectedRevision) throw new PitchroomError("CONFLICT", "This view is stale. Refresh before changing the current version.");
   const current = state.versions.find((version) => version.id === state.currentVersionId); if (!current) throw new PitchroomError("NOT_FOUND", "No understanding version is ready for review.");
   const proposal = structuredClone(current.proposal);
-  proposal.themes[0]!.claims[0] = { statement: text.trim(), evidenceState: "user_asserted", evidence: [], userInputIds: [`input-${state.project.revision + 1}`] };
+  const claim = proposal.themes[themeIndex]?.claims[claimIndex];
+  if (!claim) throw new PitchroomError("INVALID_INPUT", "The selected claim is no longer available. Refresh and choose it again.");
+  proposal.themes[themeIndex]!.claims[claimIndex] = { statement: text.trim(), evidenceState: "user_asserted", evidence: [], userInputIds: [`input-${state.project.revision + 1}`] };
   const version: Version = { id: `version-${state.versions.length + 1}`, number: state.versions.length + 1, proposal, createdBy: "user", createdAt: new Date().toISOString() };
   state.versions.push(version); state.currentVersionId = version.id; state.project.revision += 1;
   addEvent("User correction recorded", `Created version ${version.number}; source attribution was not reused`);

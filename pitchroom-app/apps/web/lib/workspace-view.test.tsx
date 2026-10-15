@@ -45,6 +45,7 @@ describe("WorkspaceView state matrix", () => {
     addFixtureMaterial({ name: "brief.md", mediaType: "text/markdown", text: sample });
     const html = render(runFixtureAgent(), { initialDestination: "clarify" });
     expect(html).toContain("Your review is the gate");
+    expect(html).toContain("Correct a specific claim");
     expect(html).toContain("Exact source quote");
     expect(html).toContain('for="answer"');
     expect(html).toContain('id="answer"');
@@ -70,5 +71,15 @@ describe("WorkspaceView state matrix", () => {
     expect(acceptedHtml).toContain("Understanding accepted.");
     expect(acceptedHtml).toContain("The agent is stopped.");
     expect(acceptedHtml).not.toContain("Your review is the gate");
+    expect(acceptedHtml).not.toContain("Correct a specific claim");
+  });
+
+  it("shows a visible recovery contract when the agent fails", () => {
+    addFixtureMaterial({ name: "brief.md", mediaType: "text/markdown", text: sample });
+    const failed = readFixtureState();
+    failed.project.phase = "failed";
+    const html = render(failed);
+    expect(html).toContain("The agent did not create a new understanding.");
+    expect(html).toContain("Your material is saved. You can safely retry the agent.");
   });
 });

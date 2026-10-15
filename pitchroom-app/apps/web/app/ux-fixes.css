@@ -1,0 +1,53 @@
+.recoveryNotice {
+  max-width: 1304px;
+  margin: 16px auto 0;
+  padding: 14px 18px;
+  background: #221d18;
+  border-left: 2px solid var(--orange);
+  display: grid;
+  gap: 4px;
+}
+
+.recoveryNotice span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.claimCorrectionPanel {
+  max-width: 780px;
+  margin: 28px 0 0 auto;
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.claimCorrectionPanel h2 { font-size: 18px; }
+
+.claimCorrectionPanel select {
+  width: 100%;
+  background: #101012;
+  color: var(--ink);
+  border: 1px solid #57534f;
+  border-radius: 6px;
+  padding: 10px;
+}
+
+.selectedClaim {
+  display: grid;
+  gap: 6px;
+  margin: 16px 0;
+  padding: 12px;
+  background: #171719;
+  color: var(--muted);
+}
+
+.selectedClaim strong { font-size: 11px; color: var(--ink); }
+.correctionDisclosure,
+.understanding .plain { display: none; }
+
+[data-phase="accepted"] .focusedQuestion .answerLabel,
+[data-phase="accepted"] .focusedQuestion textarea,
+[data-phase="accepted"] .questionActions {
+  display: none;
+}

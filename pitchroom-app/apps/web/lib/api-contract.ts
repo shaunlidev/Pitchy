@@ -15,7 +15,7 @@ export const workspaceCommandSchema = z.discriminatedUnion("action", [
   }),
   z.object({ action: z.literal("run"), commandId }),
   z.object({ action: z.literal("remove_material"), commandId, sourceId: z.string().min(1) }),
-  z.object({ action: z.literal("correct"), commandId, expectedRevision, text: z.string().trim().min(1).max(10_000) }),
+  z.object({ action: z.literal("correct"), commandId, expectedRevision, themeIndex: z.number().int().nonnegative(), claimIndex: z.number().int().nonnegative(), text: z.string().trim().min(1).max(10_000) }),
   z.object({ action: z.literal("answer"), commandId, expectedRevision, text: z.string().trim().min(1).max(10_000) }),
   z.object({ action: z.literal("keep_unknown"), commandId, expectedRevision }),
   z.object({ action: z.literal("accept"), commandId, expectedRevision }),
