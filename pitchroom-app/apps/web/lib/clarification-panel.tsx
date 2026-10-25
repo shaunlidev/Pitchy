@@ -39,7 +39,9 @@ export function ClarificationPanel({ task, understanding, busy, onAction, revisi
     <p><strong>Your saved answer</strong>: {task.answer}</p>
     <p>Based on understanding {task.baseUnderstandingId}. {task.status !== "applied" && "The current understanding has not been replaced by this proposal."}</p>
     {task.reassessment && <p>Reassessing saved answer from {task.reassessment.originalUnderstandingId}. Original question: {task.reassessment.originalQuestion.question}. Material changes: {task.reassessment.sourceChanges.added.length} added, {task.reassessment.sourceChanges.changed.length} changed, {task.reassessment.sourceChanges.removed.length} removed.</p>}
-    {result && <p><strong>{editedInterpretation ? "Original Agent explanation" : "Why"}</strong>: {result.reason}</p>}
+    {result && (task.status === "applied"
+      ? <details><summary>Explanation saved before Apply</summary><p>This explanation records the earlier proposal. The status above reflects the saved understanding now.</p><p><strong>{editedInterpretation ? "Original Agent explanation" : "Why"}</strong>: {result.reason}</p></details>
+      : <p><strong>{editedInterpretation ? "Original Agent explanation" : "Why"}</strong>: {result.reason}</p>)}
     {editedInterpretation && <p role="status">You edited this interpretation. The original Agent basis has not been reassessed for your wording.</p>}
     {result?.schemaVersion === 4 && <details><summary>Basis for this proposal</summary><BasisV4 bases={result.bases} refs={result.reasonBasisRefs} task={task}/></details>}
     {result?.schemaVersion === 3 && <details><summary>Basis for this proposal</summary><Basis items={result.reasonBasis} task={task}/></details>}
