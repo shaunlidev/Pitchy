@@ -1,5 +1,5 @@
 import { coreMessageWireFixture, liveDeckWireFixture } from "./presentation.testkit";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { buildDeterministicPositioning, ResponsesPositioningRunner } from "./positioning-runner";
 
 const input = {
@@ -9,6 +9,19 @@ const input = {
 };
 
 describe("deterministic positioning runner", () => {
+  it.each(["response_headers", "response_body"])("classifies a provider timeout during %s without retrying", async (phase) => {
+    const timeout = new DOMException("The operation timed out", "TimeoutError");
+    const transport = vi.fn<typeof fetch>(async () => {
+      if (phase === "response_headers") throw timeout;
+      return new Response(new ReadableStream({ start(controller) { controller.error(timeout); } }));
+    });
+    await expect(new ResponsesPositioningRunner({ apiKey: "offline", model: "test", baseURL: "https://example.test", fetch: transport }).run(input)).rejects.toMatchObject({
+      code: "PROVIDER_TIMEOUT",
+      details: { stage: "positioning", phase, timeoutMs: 60_000 },
+    });
+    expect(transport).toHaveBeenCalledTimes(1);
+  });
+
   it("creates distinct reviewable directions from supported material", () => {
     const result = buildDeterministicPositioning(input);
     expect(result.directions).toHaveLength(2);

@@ -1,4 +1,6 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { PitchroomError } from "@pitchroom/domain";
+import * as fixtureStore from "../../../lib/fixture-store";
 import { errorEnvelopeSchema, workspaceStateSchema } from "../../../lib/api-contract";
 import { resetFixtureState } from "../../../lib/fixture-store";
 import { GET, POST, workspaceResponse } from "./route";
@@ -6,11 +8,23 @@ import { GET, POST, workspaceResponse } from "./route";
 const request = (body: unknown) => new Request("http://localhost/api/workspace", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
 
 beforeEach(() => {
+  vi.restoreAllMocks();
   delete process.env.PITCHROOM_RUNTIME;
   resetFixtureState();
 });
 
 describe("workspace API", () => {
+  it("reports a provider timeout as 504 and preserves the workspace", async () => {
+    const before = await (await GET()).json();
+    vi.spyOn(fixtureStore, "generateFixturePositioning").mockImplementation(() => {
+      throw new PitchroomError("PROVIDER_TIMEOUT", "The positioning provider timed out.", { stage: "positioning", phase: "response_headers", timeoutMs: 60_000 });
+    });
+    const response = await POST(request({ action: "generate_positioning", commandId: "timeout-1", expectedRevision: 0 }));
+    expect(response.status).toBe(504);
+    expect(await response.json()).toMatchObject({ code: "PROVIDER_TIMEOUT", details: { stage: "positioning", phase: "response_headers" } });
+    expect(await (await GET()).json()).toEqual(before);
+  });
+
   it("returns a response-validated initial state with request metadata", async () => {
     const response = await GET();
     expect(workspaceStateSchema.parse(await response.json()).project.phase).toBe("empty");

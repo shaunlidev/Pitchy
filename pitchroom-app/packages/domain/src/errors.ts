@@ -6,6 +6,7 @@ export type PitchroomErrorCode =
   | "BUDGET_EXCEEDED"
   | "CANCELLED"
   | "PROPOSAL_REJECTED"
+  | "PROVIDER_TIMEOUT"
   | "PERSISTENCE_ERROR";
 
 export class PitchroomError extends Error {

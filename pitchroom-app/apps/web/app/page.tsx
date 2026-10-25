@@ -46,10 +46,10 @@ export default function HomePage() {
     return () => clearInterval(timer);
   }, [clarificationRunning, refresh]);
 
-  async function act(body: Record<string, unknown>, retryCommandId?: string): Promise<boolean> {
+  async function act(body: Record<string, unknown>, retryCommandId?: string, explicitRetry = false): Promise<boolean> {
     if (submitting.current) return false;
     const feedbackDecision = ["apply_clarification","dismiss_clarification","retry_clarification"].includes(String(body.action));
-    if (!retryCommandId && state && deriveWorkspaceUXState(state, activeAgentRequest, { busy, error: actionError }).mutationLocked && !(feedbackDecision && !busy && !actionError)) return false;
+    if (!explicitRetry && !retryCommandId && state && deriveWorkspaceUXState(state, activeAgentRequest, { busy, error: actionError }).mutationLocked && !(feedbackDecision && !busy && !actionError)) return false;
     submitting.current = true;
     const agentAction = agentActionForCommand(body.action);
     const commandId = retryCommandId ?? crypto.randomUUID();
@@ -122,5 +122,5 @@ export default function HomePage() {
     {loadError && <><p role="alert">{loadError}</p><button onClick={() => { setLoadError(""); void refresh().catch((cause) => setLoadError(cause instanceof Error ? cause.message : String(cause))); }}>Try again</button></>}
   </main>;
 
-  return <WorkspaceView state={state} busy={busy} error={actionError} text={text} answer={answer} correction={correction} activeRequest={activeRequest.current} activeAgentRequest={activeAgentRequest} onTextChange={setText} onAnswerChange={setAnswer} onCorrectionChange={setCorrection} onChooseFile={chooseFile} onCancelRun={() => activeRequest.current?.abort()} onRetryAction={failedAgentCommand ? () => act(failedAgentCommand.body, failedAgentCommand.commandId) : undefined} onRefreshWorkspace={async () => { try { await refresh(); setActionError(undefined); } catch (cause) { setActionError(createWorkspaceActionError({ code: "PERSISTENCE_ERROR", technicalMessage: cause instanceof Error ? cause.message : String(cause) })); } }} onDismissError={() => setActionError(undefined)} onAction={(body) => act(body.action === "add_material" && !body.name ? { ...body, name: "written-brief.md", mediaType: "text/markdown" } : body)} />;
+  return <WorkspaceView state={state} busy={busy} error={actionError} text={text} answer={answer} correction={correction} activeRequest={activeRequest.current} activeAgentRequest={activeAgentRequest} onTextChange={setText} onAnswerChange={setAnswer} onCorrectionChange={setCorrection} onChooseFile={chooseFile} onCancelRun={() => activeRequest.current?.abort()} onRetryAction={failedAgentCommand ? () => act(failedAgentCommand.body, actionError?.outcomeUnknown ? failedAgentCommand.commandId : undefined, true) : undefined} onRefreshWorkspace={async () => { try { await refresh(); setActionError(undefined); } catch (cause) { setActionError(createWorkspaceActionError({ code: "PERSISTENCE_ERROR", technicalMessage: cause instanceof Error ? cause.message : String(cause) })); } }} onDismissError={() => setActionError(undefined)} onAction={(body) => act(body.action === "add_material" && !body.name ? { ...body, name: "written-brief.md", mediaType: "text/markdown" } : body)} />;
 }

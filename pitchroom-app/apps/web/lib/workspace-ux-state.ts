@@ -104,6 +104,8 @@ export function createWorkspaceActionError(input: {
   const outcomeUnknown = input.outcomeUnknown ?? ["NETWORK_ERROR", "PERSISTENCE_ERROR"].includes(input.code);
   const message = input.code === "CONFLICT"
     ? "This workspace changed since the action began. Refresh before continuing."
+    : input.code === "PROVIDER_TIMEOUT"
+      ? "The generation service timed out. Your existing work was preserved. Retry when you are ready."
     : input.code === "PROPOSAL_REJECTED"
       ? "The generated draft did not pass the evidence or safety checks. Your existing work was preserved."
       : input.code === "PERSISTENCE_ERROR"
@@ -116,7 +118,7 @@ export function createWorkspaceActionError(input: {
 
   const recovery = input.code === "CONFLICT"
     ? "refresh"
-    : input.action && ["PERSISTENCE_ERROR", "NETWORK_ERROR", "PROPOSAL_REJECTED"].includes(input.code)
+    : input.action && ["PERSISTENCE_ERROR", "NETWORK_ERROR", "PROPOSAL_REJECTED", "PROVIDER_TIMEOUT"].includes(input.code)
       ? "retry"
       : ["INVALID_INPUT", "INVALID_REQUEST", "INVALID_TRANSITION"].includes(input.code)
         ? "review"

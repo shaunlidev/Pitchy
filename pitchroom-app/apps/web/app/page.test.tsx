@@ -177,6 +177,29 @@ describe("HomePage review interactions", () => {
     expect(commandIds).toHaveLength(2);
     expect(commandIds[1]).toBe(commandIds[0]);
   });
+
+  it("starts a new attempt only after explicitly retrying a confirmed timeout", async () => {
+    const reviewed = readFixtureState();
+    acceptFixture(reviewed.project.revision);
+    const commandIds: string[] = [];
+    vi.mocked(fetch).mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (!init?.method) return jsonResponse(readFixtureState());
+      const body = JSON.parse(String(init.body));
+      if (body.action !== "generate_positioning") throw new Error("Unexpected test action");
+      commandIds.push(body.commandId);
+      if (commandIds.length === 1) return jsonResponse({ code: "PROVIDER_TIMEOUT", error: "Positioning timed out.", requestId: "timeout" }, 504);
+      return jsonResponse(generateFixturePositioning(body.expectedRevision));
+    });
+    const user = userEvent.setup();
+    render(<HomePage />);
+    await user.click(await screen.findByRole("button", { name: "Positioning", exact: true }));
+    await user.click(screen.getByRole("button", { name: "Create positioning directions" }));
+    await screen.findByRole("button", { name: "Retry positioning directions" });
+    expect(commandIds).toHaveLength(1);
+    await user.click(screen.getByRole("button", { name: "Retry positioning directions" }));
+    await waitFor(() => expect(commandIds).toHaveLength(2));
+    expect(commandIds[1]).not.toBe(commandIds[0]);
+  });
 });
 
 // These fixtures never open a browser or call a model.

@@ -92,6 +92,14 @@ describe("workspace UX state", () => {
     expect(failure.outcomeUnknown).toBe(true);
     expect(failure.commandId).toBe("deck-1");
   });
+
+  it("offers an explicit retry for a confirmed provider timeout without blaming the input", () => {
+    const failure = createWorkspaceActionError({ code: "PROVIDER_TIMEOUT", technicalMessage: "response_headers", action: "positioning", commandId: "timed-out" });
+    expect(failure.message).toContain("timed out");
+    expect(failure.message).toContain("preserved");
+    expect(failure.recovery).toBe("retry");
+    expect(failure.outcomeUnknown).toBe(false);
+  });
 });
 
 describe("P1 next action and access", () => {

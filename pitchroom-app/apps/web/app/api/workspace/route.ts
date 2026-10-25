@@ -61,7 +61,7 @@ export async function POST(request: Request) {
   } catch (error) {
     const domainCode = error instanceof PitchroomError ? error.code : undefined;
     const code = domainCode ?? (error instanceof SyntaxError ? "INVALID_JSON" : "INVALID_REQUEST");
-    const status = domainCode === "NOT_FOUND" ? 404 : domainCode === "CONFLICT" ? 409 : domainCode === "PERSISTENCE_ERROR" ? 500 : 400;
+    const status = domainCode === "NOT_FOUND" ? 404 : domainCode === "CONFLICT" ? 409 : domainCode === "PROVIDER_TIMEOUT" ? 504 : domainCode === "PERSISTENCE_ERROR" ? 500 : 400;
     const envelope = errorEnvelopeSchema.parse({ code, error: error instanceof Error ? error.message : "Unknown error", requestId, details: error instanceof PitchroomError ? error.details : undefined });
     return NextResponse.json(envelope, { status, headers: headers(requestId) });
   }

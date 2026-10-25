@@ -96,6 +96,12 @@ export class ResponsesPositioningRunner implements PositioningAgentRunner {
     input = { ...input, understanding: activeUnderstanding(input.understanding) };
     const deepSeek = new URL(this.config.baseURL).hostname === "api.deepseek.com";
     const request = this.config.fetch ?? fetch;
+    const providerFailure = (phase: "response_headers" | "response_body") => (error: unknown): never => {
+      if (error instanceof Error && error.name === "TimeoutError") {
+        throw new PitchroomError("PROVIDER_TIMEOUT", "The positioning provider timed out. Your existing work was preserved; retry only when you are ready.", { stage: "positioning", phase, timeoutMs: this.timeoutMs });
+      }
+      throw error;
+    };
     const response = await request(`${this.config.baseURL.replace(/\/+$/, "")}/responses`, {
       method: "POST",
       headers: { authorization: `Bearer ${this.config.apiKey}`, "content-type": "application/json" },
@@ -113,8 +119,8 @@ export class ResponsesPositioningRunner implements PositioningAgentRunner {
         max_output_tokens: deepSeek ? 16_000 : 5_000, ...(deepSeek ? { reasoning: { effort: "low" }, store: false } : {}),
       }),
       signal: AbortSignal.timeout(this.timeoutMs),
-    });
-    const payload = await response.json() as { status?: string; error?: { message?: string }; output?: Array<{ type?: string; content?: Array<{ type?: string; text?: string }> }> };
+    }).catch(providerFailure("response_headers"));
+    const payload = await response.json().catch(providerFailure("response_body")) as { status?: string; error?: { message?: string }; output?: Array<{ type?: string; content?: Array<{ type?: string; text?: string }> }> };
     if (!response.ok || payload.status === "failed") throw new PitchroomError("PROPOSAL_REJECTED", payload.error?.message ?? `Positioning request failed with HTTP ${response.status}.`);
     if (payload.status === "incomplete") throw new PitchroomError("PROPOSAL_REJECTED", "Provider output was incomplete (output limit or filter); no draft was applied.");
     const text = responseText(payload);
