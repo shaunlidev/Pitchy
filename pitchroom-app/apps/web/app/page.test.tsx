@@ -192,7 +192,7 @@ describe("HomePage review interactions", () => {
     });
     const user = userEvent.setup();
     render(<HomePage />);
-    await user.click(await screen.findByRole("button", { name: "Positioning", exact: true }));
+    await user.click(await screen.findByRole("button", { name: "Positioning" }));
     await user.click(screen.getByRole("button", { name: "Create positioning directions" }));
     await screen.findByRole("button", { name: "Retry positioning directions" });
     expect(commandIds).toHaveLength(1);
