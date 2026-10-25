@@ -14,6 +14,18 @@ beforeEach(() => {
 });
 
 describe("workspace API", () => {
+  it("refuses an invalid runtime without reading or mutating project state", async () => {
+    process.env.PITCHROOM_RUNTIME = "liv-typo";
+    const read = vi.fn(() => fixtureStore.readFixtureState());
+    const response = await workspaceResponse(read);
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({ code: "INVALID_CONFIGURATION" });
+    expect(response.headers.get("x-pitchroom-mode")).toBe("invalid");
+    expect(read).not.toHaveBeenCalled();
+    expect((await POST(request({ action: "run", commandId: "invalid-mode" }))).status).toBe(503);
+    expect(fixtureStore.readFixtureState().project.phase).toBe("empty");
+  });
+
   it("reports a provider timeout as 504 and preserves the workspace", async () => {
     const before = await (await GET()).json();
     vi.spyOn(fixtureStore, "generateFixturePositioning").mockImplementation(() => {

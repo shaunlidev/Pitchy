@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { healthResponse } from "./route";
 
 const original = { runtime: process.env.PITCHROOM_RUNTIME, key: process.env.OPENAI_API_KEY, model: process.env.OPENAI_MODEL, database: process.env.DATABASE_URL, ack: process.env.PITCHROOM_LIVE_TRANSFER_ACK };
@@ -9,6 +9,16 @@ afterEach(() => {
 });
 
 describe("health readiness", () => {
+  it("rejects an unknown runtime before probing storage or reporting ready", async () => {
+    process.env.PITCHROOM_RUNTIME = "liv-typo";
+    process.env.DATABASE_URL = "postgres://synthetic/test";
+    const probe = vi.fn(async () => true);
+    const response = await healthResponse(probe);
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({ status: "not_ready", runtime: "invalid", checks: { configuration: false, database: false, liveModel: false } });
+    expect(probe).not.toHaveBeenCalled();
+  });
+
   it("is ready in isolated fixture mode", async () => {
     process.env.PITCHROOM_RUNTIME = "fixture";
     const response = await healthResponse();

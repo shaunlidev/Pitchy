@@ -1,3 +1,4 @@
+import { readRuntimeMode, invalidRuntimeResponse } from "../../../../lib/runtime-mode";
 import { readFixtureState } from "../../../../lib/fixture-store";
 import { readPersistentState } from "../../../../lib/persistent-workspace";
 import { workspaceEventSchema } from "../../../../lib/api-contract";
@@ -7,7 +8,9 @@ export const dynamic = "force-dynamic";
 export async function GET(request: Request) {
   let cursor = Number(request.headers.get("last-event-id") ?? "0");
   if (!Number.isFinite(cursor)) cursor = 0;
-  const runtime = process.env.PITCHROOM_RUNTIME ?? "fixture";
+  const configured = readRuntimeMode();
+  if (!configured.success) return invalidRuntimeResponse();
+  const runtime = configured.data;
   const read = async () => runtime === "fixture" ? readFixtureState() : readPersistentState(runtime === "live" ? "live" : "postgres-fake");
   const encode = (events: ReturnType<typeof workspaceEventSchema.parse>[]) => events.map((event) => `id: ${event.sequence}\nevent: workspace\ndata: ${JSON.stringify(event)}\n\n`).join("");
   const initialState = await read();

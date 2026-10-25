@@ -29,6 +29,10 @@ Browser Print remains available. PDF fidelity and native assistive-technology va
 
 Both file pickers accept multiple UTF-8 TXT/MD files. Each file saves independently; a failed item leaves successful sources intact and can be retried separately. An unconfirmed save retries the same operation identity. Uploading files preserves an unsaved written brief. Selected files and retry controls live in the current tab; reload keeps saved sources but requires reselecting failed files.
 
+## Runtime validation
+
+The HTTP workspace, health and SSE boundaries accept only `fixture`, `postgres-fake` and `live`. Unknown or empty `PITCHROOM_RUNTIME` values return 503 before accessing project storage or starting work. Omitting the value retains the local fixture default; production deployment policy and credentials remain separate release gates.
+
 ## Working-position recovery
 
 The same browser restores each project's destination, inspected Clarify topic and saved Deck/page selection after reload. Removed versions and inaccessible destinations fall back safely. This browser record stores navigation identifiers only; unsaved text still has tab lifetime and is not a durable draft. Navigation does not accept, apply or generate work. Browser storage failure leaves saved server work unchanged.
