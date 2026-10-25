@@ -1,0 +1,7 @@
+# PIT-5 dependency investigation — 2026-10-25
+
+Installed `next/package.json`, the web manifest and pnpm lock agree on Next 16.4.0. A fresh QA dev startup also emitted the known-security-vulnerability notice and stopped; its supported unchanged retry started the fixture service. No suppression flag or dependency modification was used.
+
+The [official October 14 update](https://nextjs.org/blog/nextjs-security-update-october-14-2026) identifies 16.4.1 as the patched active-LTS release. Its advisory list covers cache-component typed-array RCE, SVG image-optimization RCE on glibc Linux, and App Router Server Action DoS. Current app/config source has no `use cache`, `cacheComponents`, `use server`, `next/image`, `ImageResponse`, SVG opt-in or remote-image patterns. That scoped inspection does not clear the dependency or future hosting configurations. This local machine is macOS; production topology remains undecided.
+
+Status: investigated, **not fixed**. Successful compilation is not security remediation. A separate approval request is pending for upgrading existing Next 16.4.0 to 16.4.1 and necessary lockfile companions. After approval: preserve unrelated work, inspect the exact dependency diff, run workspace checks and isolated synthetic browser regressions, retain failed output, and report the deployed version separately. No install, cloud resource change or deployment has occurred.
