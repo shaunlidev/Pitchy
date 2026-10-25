@@ -1,0 +1,4 @@
+interface:
+  display_name: "Pitchroom review to Multica"
+  short_description: "Preview review-linked tasks and safely sync local Multica"
+  default_prompt: "Use $pitchroom-review-to-multica to turn the current Pitchroom review into a deduplicated local Multica task preview and wait for approval before syncing."

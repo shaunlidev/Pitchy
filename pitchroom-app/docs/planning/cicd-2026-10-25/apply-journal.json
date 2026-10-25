@@ -1,0 +1,137 @@
+{
+  "approval": "用户在本对话确认：好",
+  "preview_sha256": "85c79cc8d8462443bf21a03293b42a5eb839a31a4a2d69e0a511b00a26b67062",
+  "results": [
+    {
+      "operation": "create",
+      "key": "release-baseline",
+      "id": "01a17173-639b-7dfa-bb6f-36d057346971",
+      "identifier": "PIT-30",
+      "title": "建立完整的 GitHub 代码基线与发布文件边界",
+      "verified": true,
+      "runs": [],
+      "status": "backlog",
+      "assignee_id": null
+    },
+    {
+      "operation": "create",
+      "key": "hosting-topology",
+      "id": "01a17173-b6a4-75bc-9240-caff7e433cda",
+      "identifier": "PIT-31",
+      "title": "确认 Web、Clarify worker 与数据库的部署拓扑",
+      "verified": true,
+      "runs": [],
+      "status": "backlog",
+      "assignee_id": null
+    },
+    {
+      "operation": "create",
+      "key": "neon-isolation",
+      "id": "01a17173-b6cf-726e-b159-373befdb7b66",
+      "identifier": "PIT-32",
+      "title": "隔离 Neon 的 dev、staging 与 prod 数据及凭据",
+      "verified": true,
+      "runs": [],
+      "status": "backlog",
+      "assignee_id": null
+    },
+    {
+      "operation": "create",
+      "key": "ci-gates",
+      "id": "01a17173-b6f7-79bf-9d2e-d019c38625ae",
+      "identifier": "PIT-33",
+      "title": "建立可复现且隔离数据的 PR CI 门禁",
+      "verified": true,
+      "runs": [],
+      "status": "backlog",
+      "assignee_id": null
+    },
+    {
+      "operation": "create",
+      "key": "env-runtime",
+      "id": "01a17173-b717-73b6-903a-e0839cc79224",
+      "identifier": "PIT-34",
+      "title": "建立环境配置契约与生产拒绝错误配置的启动检查",
+      "verified": true,
+      "runs": [],
+      "status": "backlog",
+      "assignee_id": null
+    },
+    {
+      "operation": "create",
+      "key": "identity-access",
+      "id": "01a17173-b735-7e21-a59d-9a5af480aa89",
+      "identifier": "PIT-35",
+      "title": "接入身份与逐项目授权，移除固定共享项目入口",
+      "verified": true,
+      "runs": [],
+      "status": "backlog",
+      "assignee_id": null
+    },
+    {
+      "operation": "create",
+      "key": "worker-operations",
+      "id": "01a17173-b757-7c0d-8d91-665ac362227f",
+      "identifier": "PIT-36",
+      "title": "建立 Clarify worker 的托管、健康监控与重启恢复",
+      "verified": true,
+      "runs": [],
+      "status": "backlog",
+      "assignee_id": null
+    },
+    {
+      "operation": "create",
+      "key": "staging-release",
+      "id": "01a17173-b77a-73c7-a139-182ff9b67c9c",
+      "identifier": "PIT-37",
+      "title": "建立自动 staging 发布、串行迁移与持久化冒烟",
+      "verified": true,
+      "runs": [],
+      "status": "backlog",
+      "assignee_id": null
+    },
+    {
+      "operation": "create",
+      "key": "prod-recovery",
+      "id": "01a17173-b797-77f6-b2fd-0c124fb20cce",
+      "identifier": "PIT-38",
+      "title": "建立 prod 手动晋级、备份恢复及回滚演练",
+      "verified": true,
+      "runs": [],
+      "status": "backlog",
+      "assignee_id": null
+    },
+    {
+      "operation": "create",
+      "key": "cost-observability",
+      "id": "01a17173-b7b8-740a-a2e1-e38c09cda3b4",
+      "identifier": "PIT-39",
+      "title": "补齐线上限流、全局模型预算与可观测性",
+      "verified": true,
+      "runs": [],
+      "status": "backlog",
+      "assignee_id": null
+    },
+    {
+      "operation": "create",
+      "key": "release-evidence",
+      "id": "01a17173-b7d6-7210-9f3b-7e231cd5b79c",
+      "identifier": "PIT-40",
+      "title": "刷新部署证据清单并对齐实际 Web/worker 模型验收",
+      "verified": true,
+      "runs": [],
+      "status": "backlog",
+      "assignee_id": null
+    },
+    {
+      "operation": "update",
+      "identifier": "PIT-11",
+      "verified": true,
+      "runs_unchanged": true
+    }
+  ],
+  "uncertain": false,
+  "pit11_runs_before": [],
+  "reconciliation": "PIT-30 already created; server removes terminal newline only. Readback and empty run history verified; no duplicate create.",
+  "complete": true
+}

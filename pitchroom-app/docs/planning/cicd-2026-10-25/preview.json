@@ -1,0 +1,358 @@
+{
+  "scope": "deployment-readiness-separate-from-v6-local-core",
+  "target": {
+    "server": "http://localhost:8180",
+    "workspace": "824f2f2e-b815-4117-90d5-af284a4eccec",
+    "project": "e9b58af4-e44d-40a3-b0d6-65efd204356f"
+  },
+  "review_sha256": "1d08f250b5326cc85c23677631c8d5b0cd449b2dc42eb66d4386dca72b7a079f",
+  "creates": [
+    {
+      "key": "release-baseline",
+      "title": "建立完整的 GitHub 代码基线与发布文件边界",
+      "priority": "high",
+      "status": "backlog",
+      "assignee": null,
+      "description": "## 1. 用户结果与证据\n本地未配置 remote；当前 main 为 fb61981，但大量实现未提交/未跟踪；可访问 GitHub 账号及组织未找到 Pitchroom 仓库。\n来源：本对话与 /Users/shaun/Documents/ChatGPT/ai-slide-generator/pitchroom-app/docs/planning/cicd-2026-10-25/review.md；SHA256 1d08f250b5326cc85c23677631c8d5b0cd449b2dc42eb66d4386dca72b7a079f\n\n## 2. 优先级\nhigh；服务发布关键路径或真实用户数据边界；不要求抢占V6产品批次。\n\n## 3. 前置与顺序\n引用现有任务：PIT-11。本预览新任务的建议顺序：基线/拓扑/数据→CI/环境/身份/worker→staging→prod。依赖仅规划，不是调度门禁；实施前补齐精确硬依赖及签收证据。\n\n## 4. 有界交付\n确定仓库账号、可见性与发布范围；保留 dirty 工作，排除密钥、业务数据、archive、原始 QA 证据和不必要产物；获单独授权后形成完整远端版本。\n\n## 5. 范围与保护\n仅规划建单，执行授权pending。保留来源、未知、手工编辑、明确Apply、历史及Undo；不改archive、pitchroom-v6/prototype、原始证据、私密数据库或密钥。编辑范围扩大需重新确认。\n\n## 6. 源码与依据\nfile_plan_status=partial；以下为只读参考，不是最终实施编辑清单：\n- .gitignore:1 sha256=48ff89a05820427cc26c41dead9b14541fa9b27205e9d131a8027717e1447712\n- pitchroom-app/package.json:1 sha256=8a0c1464c9b8581814c21f033525777cdfde994a252ab9309b094258b0f7c82d\n- SOURCE_OF_TRUTH.md:1 sha256=2ffee5ade0602dbf511ee5f235e2714888bf4c2b7c0a0e5221a6b202b4886c21\n\n## 7. 验收草案\n正常：从干净 checkout 可按锁文件还原当前完整应用；记录 commit SHA 和文件清单；仓库不含敏感资料。\n拒绝：缺授权、缺配置或目标无法确认时拒绝执行并保留已有状态。\n失败：如实记录原始失败，不弱化断言或把跳过当通过。\n恢复：保留版本与原数据，按本卡确认的恢复方案重试；不自动覆盖或删除。\n\n## 8. 验证与未决\n确定性/DB/浏览器/真实模型/人工验收分别记录；只使用隔离合成状态；真实模型、录制及资源变更单独确认。\n未决：仓库归属、可见性、首批提交范围；本卡不授权提交或推送。\n\n## 9. 启动和完成门禁\nstart_approval=pending；建单不等于启动。实施前确认决策、精确文件/配置范围、依赖及验收。状态backlog、负责人空；不派发Agent，不自动done。交付实际结果及未验证项后人工签收。\n",
+      "source_receipts": [
+        {
+          "path": ".gitignore",
+          "role": "read_only",
+          "line": 1,
+          "sha256": "48ff89a05820427cc26c41dead9b14541fa9b27205e9d131a8027717e1447712",
+          "reason": "后续实施前复核范围；当前不是批准编辑集"
+        },
+        {
+          "path": "pitchroom-app/package.json",
+          "role": "read_only",
+          "line": 1,
+          "sha256": "8a0c1464c9b8581814c21f033525777cdfde994a252ab9309b094258b0f7c82d",
+          "reason": "后续实施前复核范围；当前不是批准编辑集"
+        },
+        {
+          "path": "SOURCE_OF_TRUTH.md",
+          "role": "read_only",
+          "line": 1,
+          "sha256": "2ffee5ade0602dbf511ee5f235e2714888bf4c2b7c0a0e5221a6b202b4886c21",
+          "reason": "后续实施前复核范围；当前不是批准编辑集"
+        }
+      ]
+    },
+    {
+      "key": "hosting-topology",
+      "title": "确认 Web、Clarify worker 与数据库的部署拓扑",
+      "priority": "medium",
+      "status": "backlog",
+      "assignee": null,
+      "description": "## 1. 用户结果与证据\nVercel pitchroom-app 已存在但没有部署、环境变量或 Git link；框架未显式配置；Clarify 需要独立 worker。\n来源：本对话与 /Users/shaun/Documents/ChatGPT/ai-slide-generator/pitchroom-app/docs/planning/cicd-2026-10-25/review.md；SHA256 1d08f250b5326cc85c23677631c8d5b0cd449b2dc42eb66d4386dca72b7a079f\n\n## 2. 优先级\nmedium；服务发布关键路径或真实用户数据边界；不要求抢占V6产品批次。\n\n## 3. 前置与顺序\n引用现有任务：PIT-11。本预览新任务的建议顺序：基线/拓扑/数据→CI/环境/身份/worker→staging→prod。依赖仅规划，不是调度门禁；实施前补齐精确硬依赖及签收证据。\n\n## 4. 有界交付\n比较保留 Vercel Web + 单独 worker 与统一托管；确定 staging/prod 服务、区域、域名、启动命令、运行时与发布兼容窗口。\n\n## 5. 范围与保护\n仅规划建单，执行授权pending。保留来源、未知、手工编辑、明确Apply、历史及Undo；不改archive、pitchroom-v6/prototype、原始证据、私密数据库或密钥。编辑范围扩大需重新确认。\n\n## 6. 源码与依据\nfile_plan_status=partial；以下为只读参考，不是最终实施编辑清单：\n- pitchroom-app/apps/web/package.json:1 sha256=293b4ee4b19dc4f695cf311180b3f064fa188e2fcae41009074e3fc05f889d6c\n- pitchroom-app/scripts/clarification-worker.ts:1 sha256=3ccada7a4d031207aef03be846598c0c7c7c39dc2f68b4e46c78be7f32bf0aec\n- pitchroom-app/apps/web/next.config.ts:1 sha256=f5b84fa0eb2c4d706cc46cc7dda6b396ab8b84ed82ff694ea5e95c2de7d200f8\n\n## 7. 验收草案\n正常：选定方案覆盖 60 秒模型请求、25 秒 SSE、常驻 worker、连接池、端口、secret 注入和版本标识；费用与限制有依据；不把平台自动部署视为原子发布。\n拒绝：缺授权、缺配置或目标无法确认时拒绝执行并保留已有状态。\n失败：如实记录原始失败，不弱化断言或把跳过当通过。\n恢复：保留版本与原数据，按本卡确认的恢复方案重试；不自动覆盖或删除。\n\n## 8. 验证与未决\n确定性/DB/浏览器/真实模型/人工验收分别记录；只使用隔离合成状态；真实模型、录制及资源变更单独确认。\n未决：平台、预算、域名、worker 托管和服务区域；Railway 只是候选。\n\n## 9. 启动和完成门禁\nstart_approval=pending；建单不等于启动。实施前确认决策、精确文件/配置范围、依赖及验收。状态backlog、负责人空；不派发Agent，不自动done。交付实际结果及未验证项后人工签收。\n",
+      "source_receipts": [
+        {
+          "path": "pitchroom-app/apps/web/package.json",
+          "role": "read_only",
+          "line": 1,
+          "sha256": "293b4ee4b19dc4f695cf311180b3f064fa188e2fcae41009074e3fc05f889d6c",
+          "reason": "后续实施前复核范围；当前不是批准编辑集"
+        },
+        {
+          "path": "pitchroom-app/scripts/clarification-worker.ts",
+          "role": "read_only",
+          "line": 1,
+          "sha256": "3ccada7a4d031207aef03be846598c0c7c7c39dc2f68b4e46c78be7f32bf0aec",
+          "reason": "后续实施前复核范围；当前不是批准编辑集"
+        },
+        {
+          "path": "pitchroom-app/apps/web/next.config.ts",
+          "role": "read_only",
+          "line": 1,
+          "sha256": "f5b84fa0eb2c4d706cc46cc7dda6b396ab8b84ed82ff694ea5e95c2de7d200f8",
+          "reason": "后续实施前复核范围；当前不是批准编辑集"
+        }
+      ]
+    },
+    {
+      "key": "neon-isolation",
+      "title": "隔离 Neon 的 dev、staging 与 prod 数据及凭据",
+      "priority": "high",
+      "status": "backlog",
+      "assignee": null,
+      "description": "## 1. 用户结果与证据\nNeon pitchroom 只有 production 默认分支、neondb、neondb_owner；本地 live 的直连与 pooled URL 指向同一端点；尚无 staging。\n来源：本对话与 /Users/shaun/Documents/ChatGPT/ai-slide-generator/pitchroom-app/docs/planning/cicd-2026-10-25/review.md；SHA256 1d08f250b5326cc85c23677631c8d5b0cd449b2dc42eb66d4386dca72b7a079f\n\n## 2. 优先级\nhigh；服务发布关键路径或真实用户数据边界；不要求抢占V6产品批次。\n\n## 3. 前置与顺序\n引用现有任务：PIT-8, PIT-11。本预览新任务的建议顺序：基线/拓扑/数据→CI/环境/身份/worker→staging→prod。依赖仅规划，不是调度门禁；实施前补齐精确硬依赖及签收证据。\n\n## 4. 有界交付\n先确认现有 production 分支实际用途，不查询业务内容；设计独立环境数据、端点、凭据、最小权限应用角色与迁移角色；确定空库/仅结构/脱敏测试数据方案。\n\n## 5. 范围与保护\n仅规划建单，执行授权pending。保留来源、未知、手工编辑、明确Apply、历史及Undo；不改archive、pitchroom-v6/prototype、原始证据、私密数据库或密钥。编辑范围扩大需重新确认。\n\n## 6. 源码与依据\nfile_plan_status=partial；以下为只读参考，不是最终实施编辑清单：\n- pitchroom-app/compose.yaml:1 sha256=1209d5631c7740b17e576402654a531d35fdfe1eaeab558ba21f8177ac97bf02\n- pitchroom-app/packages/persistence/src/repository.ts:1 sha256=da7fec61bffdc0f35597901ae44b443684b12f0bf6bb0ca0f216d8fe46ff3505\n- pitchroom-app/packages/persistence/drizzle.config.ts:1 sha256=9f4b5dc9e2b68839abb152405456a14f9adf3cd191a34eb01db98998e0dbd6d0\n\n## 7. 验收草案\n正常：环境映射可复核；dev/staging 凭据不能访问 prod；应用不能执行迁移管理操作；直连与 pooled 明确分工；任何测试不能误指向现有分支。\n拒绝：缺授权、缺配置或目标无法确认时拒绝执行并保留已有状态。\n失败：如实记录原始失败，不弱化断言或把跳过当通过。\n恢复：保留版本与原数据，按本卡确认的恢复方案重试；不自动覆盖或删除。\n\n## 8. 验证与未决\n确定性/DB/浏览器/真实模型/人工验收分别记录；只使用隔离合成状态；真实模型、录制及资源变更单独确认。\n未决：分支或独立项目、现有数据归属、凭据隔离方式、权限策略；建资源与改配置待批准。\n\n## 9. 启动和完成门禁\nstart_approval=pending；建单不等于启动。实施前确认决策、精确文件/配置范围、依赖及验收。状态backlog、负责人空；不派发Agent，不自动done。交付实际结果及未验证项后人工签收。\n",
+      "source_receipts": [
+        {
+          "path": "pitchroom-app/compose.yaml",
+          "role": "read_only",
+          "line": 1,
+          "sha256": "1209d5631c7740b17e576402654a531d35fdfe1eaeab558ba21f8177ac97bf02",
+          "reason": "后续实施前复核范围；当前不是批准编辑集"
+        },
+        {
+          "path": "pitchroom-app/packages/persistence/src/repository.ts",
+          "role": "read_only",
+          "line": 1,
+          "sha256": "da7fec61bffdc0f35597901ae44b443684b12f0bf6bb0ca0f216d8fe46ff3505",
+          "reason": "后续实施前复核范围；当前不是批准编辑集"
+        },
+        {
+          "path": "pitchroom-app/packages/persistence/drizzle.config.ts",
+          "role": "read_only",
+          "line": 1,
+          "sha256": "9f4b5dc9e2b68839abb152405456a14f9adf3cd191a34eb01db98998e0dbd6d0",
+          "reason": "后续实施前复核范围；当前不是批准编辑集"
+        }
+      ]
+    },
+    {
+      "key": "ci-gates",
+      "title": "建立可复现且隔离数据的 PR CI 门禁",
+      "priority": "high",
+      "status": "backlog",
+      "assignee": null,
+      "description": "## 1. 用户结果与证据\n本地无 .github；pnpm 已固定版本但 Node 未约束；现有集成脚本硬编码本地 DB 且未纳入全部 suite；历史 pnpm check 被安全提示阻断。\n来源：本对话与 /Users/shaun/Documents/ChatGPT/ai-slide-generator/pitchroom-app/docs/planning/cicd-2026-10-25/review.md；SHA256 1d08f250b5326cc85c23677631c8d5b0cd449b2dc42eb66d4386dca72b7a079f\n\n## 2. 优先级\nhigh；服务发布关键路径或真实用户数据边界；不要求抢占V6产品批次。\n\n## 3. 前置与顺序\n引用现有任务：PIT-5, PIT-11。本预览新任务的建议顺序：基线/拓扑/数据→CI/环境/身份/worker→staging→prod。依赖仅规划，不是调度门禁；实施前补齐精确硬依赖及签收证据。\n\n## 4. 有界交付\n固定 Node/pnpm/lockfile；类型、单测、全部隔离 DB suites、离线 eval、构建；明确串行迁移和测试；浏览器检查使用合成状态。\n\n## 5. 范围与保护\n仅规划建单，执行授权pending。保留来源、未知、手工编辑、明确Apply、历史及Undo；不改archive、pitchroom-v6/prototype、原始证据、私密数据库或密钥。编辑范围扩大需重新确认。\n\n## 6. 源码与依据\nfile_plan_status=partial；以下为只读参考，不是最终实施编辑清单：\n- pitchroom-app/package.json:1 sha256=8a0c1464c9b8581814c21f033525777cdfde994a252ab9309b094258b0f7c82d\n- pitchroom-app/packages/persistence/package.json:1 sha256=49c65f22b7b35d72b3750d50467aae267f7e0527e992a1dd0e077ae9f3c8b815\n- pitchroom-app/apps/web/playwright.config.ts:1 sha256=50a1695365864bcd0ceaaecc12085585c141a8e0bb9951a53ae03899379bd917\n\n## 7. 验收草案\n正常：PR 检查失败不可放行；临时 DB 不接触 Neon；不跳过构建安全阻断；不上传原始 trace/截图；冻结允许脱敏日志及证据输出政策。\n拒绝：缺授权、缺配置或目标无法确认时拒绝执行并保留已有状态。\n失败：如实记录原始失败，不弱化断言或把跳过当通过。\n恢复：保留版本与原数据，按本卡确认的恢复方案重试；不自动覆盖或删除。\n\n## 8. 验证与未决\n确定性/DB/浏览器/真实模型/人工验收分别记录；只使用隔离合成状态；真实模型、录制及资源变更单独确认。\n未决：CI 浏览器供应方式、证据政策；新增安装/下载另授权。\n\n## 9. 启动和完成门禁\nstart_approval=pending；建单不等于启动。实施前确认决策、精确文件/配置范围、依赖及验收。状态backlog、负责人空；不派发Agent，不自动done。交付实际结果及未验证项后人工签收。\n",
+      "source_receipts": [
+        {
+          "path": "pitchroom-app/package.json",
+          "role": "read_only",
+          "line": 1,
+          "sha256": "8a0c1464c9b8581814c21f033525777cdfde994a252ab9309b094258b0f7c82d",
+          "reason": "后续实施前复核范围；当前不是批准编辑集"
+        },
+        {
+          "path": "pitchroom-app/packages/persistence/package.json",
+          "role": "read_only",
+          "line": 1,
+          "sha256": "49c65f22b7b35d72b3750d50467aae267f7e0527e992a1dd0e077ae9f3c8b815",
+          "reason": "后续实施前复核范围；当前不是批准编辑集"
+        },
+        {
+          "path": "pitchroom-app/apps/web/playwright.config.ts",
+          "role": "read_only",
+          "line": 1,
+          "sha256": "50a1695365864bcd0ceaaecc12085585c141a8e0bb9951a53ae03899379bd917",
+          "reason": "后续实施前复核范围；当前不是批准编辑集"
+        }
+      ]
+    },
+    {
+      "key": "env-runtime",
+      "title": "建立环境配置契约与生产拒绝错误配置的启动检查",
+      "priority": "high",
+      "status": "backlog",
+      "assignee": null,
+      "description": "## 1. 用户结果与证据\nfixture/postgres-fake/live 是运行模式；多处默认 fixture；health 对 fixture 可 ready；Vercel 无 env；DATABASE_URL_POOLED 未见接入。\n来源：本对话与 /Users/shaun/Documents/ChatGPT/ai-slide-generator/pitchroom-app/docs/planning/cicd-2026-10-25/review.md；SHA256 1d08f250b5326cc85c23677631c8d5b0cd449b2dc42eb66d4386dca72b7a079f\n\n## 2. 优先级\nhigh；服务发布关键路径或真实用户数据边界；不要求抢占V6产品批次。\n\n## 3. 前置与顺序\n引用现有任务：PIT-11。本预览新任务的建议顺序：基线/拓扑/数据→CI/环境/身份/worker→staging→prod。依赖仅规划，不是调度门禁；实施前补齐精确硬依赖及签收证据。\n\n## 4. 有界交付\n明确 deployment environment 与 runtime；固定 Node及Postgres版本契约（云端18、Compose17）；区分Web/worker/迁移变量、连接池和secret；启动错误拒绝。\n\n## 5. 范围与保护\n仅规划建单，执行授权pending。保留来源、未知、手工编辑、明确Apply、历史及Undo；不改archive、pitchroom-v6/prototype、原始证据、私密数据库或密钥。编辑范围扩大需重新确认。\n\n## 6. 源码与依据\nfile_plan_status=partial；以下为只读参考，不是最终实施编辑清单：\n- pitchroom-app/scripts/check-env.mjs:1 sha256=7d3710137d32e4fa275bb85d7d3d7b3ec1e300b55ea53c2427b27be0215d4431\n- pitchroom-app/apps/web/app/api/health/route.ts:1 sha256=aa623f41963f4d80ba1761859bd7daaa4121c0fd869bc6ac66943aa31feddf7e\n- pitchroom-app/compose.yaml:1 sha256=1209d5631c7740b17e576402654a531d35fdfe1eaeab558ba21f8177ac97bf02\n\n## 7. 验收草案\n正常：staging/prod 缺 runtime/DB/model/ack 或环境目标错误即拒绝；部署不允许 fixture 假绿；health 返回版本与 schema readiness，凭据不输出；记录 shell override 行为。\n拒绝：缺授权、缺配置或目标无法确认时拒绝执行并保留已有状态。\n失败：如实记录原始失败，不弱化断言或把跳过当通过。\n恢复：保留版本与原数据，按本卡确认的恢复方案重试；不自动覆盖或删除。\n\n## 8. 验证与未决\n确定性/DB/浏览器/真实模型/人工验收分别记录；只使用隔离合成状态；真实模型、录制及资源变更单独确认。\n未决：版本对齐策略、变量来源和轮换负责人。\n\n## 9. 启动和完成门禁\nstart_approval=pending；建单不等于启动。实施前确认决策、精确文件/配置范围、依赖及验收。状态backlog、负责人空；不派发Agent，不自动done。交付实际结果及未验证项后人工签收。\n",
+      "source_receipts": [
+        {
+          "path": "pitchroom-app/scripts/check-env.mjs",
+          "role": "read_only",
+          "line": 1,
+          "sha256": "7d3710137d32e4fa275bb85d7d3d7b3ec1e300b55ea53c2427b27be0215d4431",
+          "reason": "后续实施前复核范围；当前不是批准编辑集"
+        },
+        {
+          "path": "pitchroom-app/apps/web/app/api/health/route.ts",
+          "role": "read_only",
+          "line": 1,
+          "sha256": "aa623f41963f4d80ba1761859bd7daaa4121c0fd869bc6ac66943aa31feddf7e",
+          "reason": "后续实施前复核范围；当前不是批准编辑集"
+        },
+        {
+          "path": "pitchroom-app/compose.yaml",
+          "role": "read_only",
+          "line": 1,
+          "sha256": "1209d5631c7740b17e576402654a531d35fdfe1eaeab558ba21f8177ac97bf02",
+          "reason": "后续实施前复核范围；当前不是批准编辑集"
+        }
+      ]
+    },
+    {
+      "key": "identity-access",
+      "title": "接入身份与逐项目授权，移除固定共享项目入口",
+      "priority": "high",
+      "status": "backlog",
+      "assignee": null,
+      "description": "## 1. 用户结果与证据\n本地只有 Clerk test keys，未见 SDK/Provider/middleware；持久化入口固定 atelier；Web API与SSE缺真实用户授权。\n来源：本对话与 /Users/shaun/Documents/ChatGPT/ai-slide-generator/pitchroom-app/docs/planning/cicd-2026-10-25/review.md；SHA256 1d08f250b5326cc85c23677631c8d5b0cd449b2dc42eb66d4386dca72b7a079f\n\n## 2. 优先级\nhigh；服务发布关键路径或真实用户数据边界；不要求抢占V6产品批次。\n\n## 3. 前置与顺序\n引用现有任务：PIT-11。本预览新任务的建议顺序：基线/拓扑/数据→CI/环境/身份/worker→staging→prod。依赖仅规划，不是调度门禁；实施前补齐精确硬依赖及签收证据。\n\n## 4. 有界交付\n确认 Clerk 方案及环境划分后接入身份；明确项目归属/成员权限；覆盖读写、材料、版本和SSE，建立与认证机制匹配的CSRF/origin策略。\n\n## 5. 范围与保护\n仅规划建单，执行授权pending。保留来源、未知、手工编辑、明确Apply、历史及Undo；不改archive、pitchroom-v6/prototype、原始证据、私密数据库或密钥。编辑范围扩大需重新确认。\n\n## 6. 源码与依据\nfile_plan_status=partial；以下为只读参考，不是最终实施编辑清单：\n- pitchroom-app/apps/web/lib/persistent-workspace.ts:1 sha256=30acbd4fd7ba9c5a700d7ce13db49d7f944741d4dc0c327c909b9240e4014b13\n- pitchroom-app/apps/web/app/api/workspace/route.ts:1 sha256=63df7161271c8b78cb77ea6fe89eec6dd43ea767bcbdbb970c5e46b447cb0fbf\n- pitchroom-app/apps/web/app/api/workspace/events/route.ts:1 sha256=a752543bbc0e59ff11f9a5210f382772041f4030f9e04ef4a2ab244aed6d75bc\n\n## 7. 验收草案\n正常：未登录被拒绝；用户A不能读写用户B项目或订阅其事件；未知项目不自动共享创建；过期会话有恢复路径；既有来源/历史/Apply边界保持。\n拒绝：缺授权、缺配置或目标无法确认时拒绝执行并保留已有状态。\n失败：如实记录原始失败，不弱化断言或把跳过当通过。\n恢复：保留版本与原数据，按本卡确认的恢复方案重试；不自动覆盖或删除。\n\n## 8. 验证与未决\n确定性/DB/浏览器/真实模型/人工验收分别记录；只使用隔离合成状态；真实模型、录制及资源变更单独确认。\n未决：身份/成员模型、历史项目归属、Clerk prod配置。\n\n## 9. 启动和完成门禁\nstart_approval=pending；建单不等于启动。实施前确认决策、精确文件/配置范围、依赖及验收。状态backlog、负责人空；不派发Agent，不自动done。交付实际结果及未验证项后人工签收。\n",
+      "source_receipts": [
+        {
+          "path": "pitchroom-app/apps/web/lib/persistent-workspace.ts",
+          "role": "read_only",
+          "line": 1,
+          "sha256": "30acbd4fd7ba9c5a700d7ce13db49d7f944741d4dc0c327c909b9240e4014b13",
+          "reason": "后续实施前复核范围；当前不是批准编辑集"
+        },
+        {
+          "path": "pitchroom-app/apps/web/app/api/workspace/route.ts",
+          "role": "read_only",
+          "line": 1,
+          "sha256": "63df7161271c8b78cb77ea6fe89eec6dd43ea767bcbdbb970c5e46b447cb0fbf",
+          "reason": "后续实施前复核范围；当前不是批准编辑集"
+        },
+        {
+          "path": "pitchroom-app/apps/web/app/api/workspace/events/route.ts",
+          "role": "read_only",
+          "line": 1,
+          "sha256": "a752543bbc0e59ff11f9a5210f382772041f4030f9e04ef4a2ab244aed6d75bc",
+          "reason": "后续实施前复核范围；当前不是批准编辑集"
+        }
+      ]
+    },
+    {
+      "key": "worker-operations",
+      "title": "建立 Clarify worker 的托管、健康监控与重启恢复",
+      "priority": "medium",
+      "status": "backlog",
+      "assignee": null,
+      "description": "## 1. 用户结果与证据\nworker 独立运行；已有租约、执行上限与重试约束，尚无已确认的云端服务。\n来源：本对话与 /Users/shaun/Documents/ChatGPT/ai-slide-generator/pitchroom-app/docs/planning/cicd-2026-10-25/review.md；SHA256 1d08f250b5326cc85c23677631c8d5b0cd449b2dc42eb66d4386dca72b7a079f\n\n## 2. 优先级\nmedium；服务发布关键路径或真实用户数据边界；不要求抢占V6产品批次。\n\n## 3. 前置与顺序\n引用现有任务：PIT-11。本预览新任务的建议顺序：基线/拓扑/数据→CI/环境/身份/worker→staging→prod。依赖仅规划，不是调度门禁；实施前补齐精确硬依赖及签收证据。\n\n## 4. 有界交付\n明确 worker 启动模式与环境凭据；自动重启、优雅退出、心跳、任务积压/失败监控；验证发布与旧任务契约兼容。\n\n## 5. 范围与保护\n仅规划建单，执行授权pending。保留来源、未知、手工编辑、明确Apply、历史及Undo；不改archive、pitchroom-v6/prototype、原始证据、私密数据库或密钥。编辑范围扩大需重新确认。\n\n## 6. 源码与依据\nfile_plan_status=partial；以下为只读参考，不是最终实施编辑清单：\n- pitchroom-app/scripts/clarification-worker.ts:1 sha256=3ccada7a4d031207aef03be846598c0c7c7c39dc2f68b4e46c78be7f32bf0aec\n- pitchroom-app/packages/persistence/src/clarification-repository.ts:1 sha256=b51aa41e1016d24a8a627db84a83998e51660baf087409eb627ecb149becc24b\n\n## 7. 验收草案\n正常：Web成功不能掩盖worker缺失；合成任务入队→处理→回读完成；中途终止后按租约恢复且旧owner不能提交；live/synthetic队列隔离；不新增无限重试。\n拒绝：缺授权、缺配置或目标无法确认时拒绝执行并保留已有状态。\n失败：如实记录原始失败，不弱化断言或把跳过当通过。\n恢复：保留版本与原数据，按本卡确认的恢复方案重试；不自动覆盖或删除。\n\n## 8. 验证与未决\n确定性/DB/浏览器/真实模型/人工验收分别记录；只使用隔离合成状态；真实模型、录制及资源变更单独确认。\n未决：托管平台、健康超时、告警阈值和兼容策略。\n\n## 9. 启动和完成门禁\nstart_approval=pending；建单不等于启动。实施前确认决策、精确文件/配置范围、依赖及验收。状态backlog、负责人空；不派发Agent，不自动done。交付实际结果及未验证项后人工签收。\n",
+      "source_receipts": [
+        {
+          "path": "pitchroom-app/scripts/clarification-worker.ts",
+          "role": "read_only",
+          "line": 1,
+          "sha256": "3ccada7a4d031207aef03be846598c0c7c7c39dc2f68b4e46c78be7f32bf0aec",
+          "reason": "后续实施前复核范围；当前不是批准编辑集"
+        },
+        {
+          "path": "pitchroom-app/packages/persistence/src/clarification-repository.ts",
+          "role": "read_only",
+          "line": 1,
+          "sha256": "b51aa41e1016d24a8a627db84a83998e51660baf087409eb627ecb149becc24b",
+          "reason": "后续实施前复核范围；当前不是批准编辑集"
+        }
+      ]
+    },
+    {
+      "key": "staging-release",
+      "title": "建立自动 staging 发布、串行迁移与持久化冒烟",
+      "priority": "medium",
+      "status": "backlog",
+      "assignee": null,
+      "description": "## 1. 用户结果与证据\nVercel只有空项目；当前E2E固定fixture；无实际staging、迁移发布编排或云端冒烟。\n来源：本对话与 /Users/shaun/Documents/ChatGPT/ai-slide-generator/pitchroom-app/docs/planning/cicd-2026-10-25/review.md；SHA256 1d08f250b5326cc85c23677631c8d5b0cd449b2dc42eb66d4386dca72b7a079f\n\n## 2. 优先级\nmedium；服务发布关键路径或真实用户数据边界；不要求抢占V6产品批次。\n\n## 3. 前置与顺序\n引用现有任务：PIT-5, PIT-6, PIT-11。本预览新任务的建议顺序：基线/拓扑/数据→CI/环境/身份/worker→staging→prod。依赖仅规划，不是调度门禁；实施前补齐精确硬依赖及签收证据。\n\n## 4. 有界交付\nCI通过后部署明确SHA的Web/worker；独立迁移步骤与schema门禁；访问保护；合成持久化流程、worker和SSE冒烟；模型质量单列。\n\n## 5. 范围与保护\n仅规划建单，执行授权pending。保留来源、未知、手工编辑、明确Apply、历史及Undo；不改archive、pitchroom-v6/prototype、原始证据、私密数据库或密钥。编辑范围扩大需重新确认。\n\n## 6. 源码与依据\nfile_plan_status=partial；以下为只读参考，不是最终实施编辑清单：\n- pitchroom-app/DEPLOYMENT_CHECKLIST.md:1 sha256=66a64ebfe646b65f2c6154048ea9ca71b9e518f178d0509909a0a65d14edebde\n- pitchroom-app/RUNBOOK.md:1 sha256=c88371fd7b0b12087fe1e28b3e2de9746e5fa9761b3f44a1c8151ad515cf78c0\n- pitchroom-app/scripts/qa-persistent-http.mjs:1 sha256=92a6af538ff5027637e8dba0478b2161ea2af3b8a72e2cda97012664c27c2757\n\n## 7. 验收草案\n正常：迁移失败停止发布；Web/worker/schema版本可追踪；重复触发不并发迁移；重启后版本和历史保留；绝不使用prod或用户私密材料。\n拒绝：缺授权、缺配置或目标无法确认时拒绝执行并保留已有状态。\n失败：如实记录原始失败，不弱化断言或把跳过当通过。\n恢复：保留版本与原数据，按本卡确认的恢复方案重试；不自动覆盖或删除。\n\n## 8. 验证与未决\n确定性/DB/浏览器/真实模型/人工验收分别记录；只使用隔离合成状态；真实模型、录制及资源变更单独确认。\n未决：部署拓扑、环境隔离、CI门槛先确认；模型调用/录像预算另审批。\n\n## 9. 启动和完成门禁\nstart_approval=pending；建单不等于启动。实施前确认决策、精确文件/配置范围、依赖及验收。状态backlog、负责人空；不派发Agent，不自动done。交付实际结果及未验证项后人工签收。\n",
+      "source_receipts": [
+        {
+          "path": "pitchroom-app/DEPLOYMENT_CHECKLIST.md",
+          "role": "read_only",
+          "line": 1,
+          "sha256": "66a64ebfe646b65f2c6154048ea9ca71b9e518f178d0509909a0a65d14edebde",
+          "reason": "后续实施前复核范围；当前不是批准编辑集"
+        },
+        {
+          "path": "pitchroom-app/RUNBOOK.md",
+          "role": "read_only",
+          "line": 1,
+          "sha256": "c88371fd7b0b12087fe1e28b3e2de9746e5fa9761b3f44a1c8151ad515cf78c0",
+          "reason": "后续实施前复核范围；当前不是批准编辑集"
+        },
+        {
+          "path": "pitchroom-app/scripts/qa-persistent-http.mjs",
+          "role": "read_only",
+          "line": 1,
+          "sha256": "92a6af538ff5027637e8dba0478b2161ea2af3b8a72e2cda97012664c27c2757",
+          "reason": "后续实施前复核范围；当前不是批准编辑集"
+        }
+      ]
+    },
+    {
+      "key": "prod-recovery",
+      "title": "建立 prod 手动晋级、备份恢复及回滚演练",
+      "priority": "medium",
+      "status": "backlog",
+      "assignee": null,
+      "description": "## 1. 用户结果与证据\nNeon恢复窗口6小时，分支未保护；无部署记录或回滚目标；Free套餐无IP allowlist/VPC。\n来源：本对话与 /Users/shaun/Documents/ChatGPT/ai-slide-generator/pitchroom-app/docs/planning/cicd-2026-10-25/review.md；SHA256 1d08f250b5326cc85c23677631c8d5b0cd449b2dc42eb66d4386dca72b7a079f\n\n## 2. 优先级\nmedium；服务发布关键路径或真实用户数据边界；不要求抢占V6产品批次。\n\n## 3. 前置与顺序\n引用现有任务：PIT-8, PIT-11。本预览新任务的建议顺序：基线/拓扑/数据→CI/环境/身份/worker→staging→prod。依赖仅规划，不是调度门禁；实施前补齐精确硬依赖及签收证据。\n\n## 4. 有界交付\n确定恢复目标与保留策略；批准适当保护措施；prod只晋级staging已验证SHA；演练兼容迁移、代码回滚和数据恢复的不同步骤。\n\n## 5. 范围与保护\n仅规划建单，执行授权pending。保留来源、未知、手工编辑、明确Apply、历史及Undo；不改archive、pitchroom-v6/prototype、原始证据、私密数据库或密钥。编辑范围扩大需重新确认。\n\n## 6. 源码与依据\nfile_plan_status=partial；以下为只读参考，不是最终实施编辑清单：\n- pitchroom-app/DEPLOYMENT_CHECKLIST.md:1 sha256=66a64ebfe646b65f2c6154048ea9ca71b9e518f178d0509909a0a65d14edebde\n- pitchroom-app/RUNBOOK.md:1 sha256=c88371fd7b0b12087fe1e28b3e2de9746e5fa9761b3f44a1c8151ad515cf78c0\n\n## 7. 验收草案\n正常：备份可恢复到隔离目标并核验；失败发布停止；代码回滚不被当作数据库回滚；记录服务兼容窗口、恢复结果及人工发布决策。\n拒绝：缺授权、缺配置或目标无法确认时拒绝执行并保留已有状态。\n失败：如实记录原始失败，不弱化断言或把跳过当通过。\n恢复：保留版本与原数据，按本卡确认的恢复方案重试；不自动覆盖或删除。\n\n## 8. 验证与未决\n确定性/DB/浏览器/真实模型/人工验收分别记录；只使用隔离合成状态；真实模型、录制及资源变更单独确认。\n未决：RPO/RTO、保留周期、套餐/网络控制、备份目的地；不擅自升级付费。\n\n## 9. 启动和完成门禁\nstart_approval=pending；建单不等于启动。实施前确认决策、精确文件/配置范围、依赖及验收。状态backlog、负责人空；不派发Agent，不自动done。交付实际结果及未验证项后人工签收。\n",
+      "source_receipts": [
+        {
+          "path": "pitchroom-app/DEPLOYMENT_CHECKLIST.md",
+          "role": "read_only",
+          "line": 1,
+          "sha256": "66a64ebfe646b65f2c6154048ea9ca71b9e518f178d0509909a0a65d14edebde",
+          "reason": "后续实施前复核范围；当前不是批准编辑集"
+        },
+        {
+          "path": "pitchroom-app/RUNBOOK.md",
+          "role": "read_only",
+          "line": 1,
+          "sha256": "c88371fd7b0b12087fe1e28b3e2de9746e5fa9761b3f44a1c8151ad515cf78c0",
+          "reason": "后续实施前复核范围；当前不是批准编辑集"
+        }
+      ]
+    },
+    {
+      "key": "cost-observability",
+      "title": "补齐线上限流、全局模型预算与可观测性",
+      "priority": "medium",
+      "status": "backlog",
+      "assignee": null,
+      "description": "## 1. 用户结果与证据\n已有单次执行边界、request ID、失败分类，但独立eval预算不能视为Web/worker共享预算；SSE每500ms读取状态。\n来源：本对话与 /Users/shaun/Documents/ChatGPT/ai-slide-generator/pitchroom-app/docs/planning/cicd-2026-10-25/review.md；SHA256 1d08f250b5326cc85c23677631c8d5b0cd449b2dc42eb66d4386dca72b7a079f\n\n## 2. 优先级\nmedium；服务发布关键路径或真实用户数据边界；不要求抢占V6产品批次。\n\n## 3. 前置与顺序\n引用现有任务：PIT-6, PIT-8, PIT-11。本预览新任务的建议顺序：基线/拓扑/数据→CI/环境/身份/worker→staging→prod。依赖仅规划，不是调度门禁；实施前补齐精确硬依赖及签收证据。\n\n## 4. 有界交付\n统一环境/用户/项目成本与并发限制；模型关闭开关；关联HTTP/run/task日志；DB连接及SSE负载、延迟、失败与队列监控；脱敏。\n\n## 5. 范围与保护\n仅规划建单，执行授权pending。保留来源、未知、手工编辑、明确Apply、历史及Undo；不改archive、pitchroom-v6/prototype、原始证据、私密数据库或密钥。编辑范围扩大需重新确认。\n\n## 6. 源码与依据\nfile_plan_status=partial；以下为只读参考，不是最终实施编辑清单：\n- pitchroom-app/apps/web/app/api/workspace/events/route.ts:1 sha256=a752543bbc0e59ff11f9a5210f382772041f4030f9e04ef4a2ab244aed6d75bc\n- pitchroom-app/packages/agent/src/persisted-run.ts:1 sha256=e6000ab78b7c69a4a09d6fc1f652e4630c463c9842db38fe5095f986843b35e4\n- pitchroom-app/SECURITY.md:1 sha256=0d5ac9c8d9e46cd32165b178b2ea5e3f5348ccc2a3062c2b4101d7fd214aff27\n\n## 7. 验收草案\n正常：超预算在调用前拒绝；并发不能突破共享上限；provider失败不无限重试；告警能定位到版本/请求/任务；日志不泄露密钥和原始私密材料。\n拒绝：缺授权、缺配置或目标无法确认时拒绝执行并保留已有状态。\n失败：如实记录原始失败，不弱化断言或把跳过当通过。\n恢复：保留版本与原数据，按本卡确认的恢复方案重试；不自动覆盖或删除。\n\n## 8. 验证与未决\n确定性/DB/浏览器/真实模型/人工验收分别记录；只使用隔离合成状态；真实模型、录制及资源变更单独确认。\n未决：费用/并发/告警阈值、监控服务、日志保留及SSE优化是否必要。\n\n## 9. 启动和完成门禁\nstart_approval=pending；建单不等于启动。实施前确认决策、精确文件/配置范围、依赖及验收。状态backlog、负责人空；不派发Agent，不自动done。交付实际结果及未验证项后人工签收。\n",
+      "source_receipts": [
+        {
+          "path": "pitchroom-app/apps/web/app/api/workspace/events/route.ts",
+          "role": "read_only",
+          "line": 1,
+          "sha256": "a752543bbc0e59ff11f9a5210f382772041f4030f9e04ef4a2ab244aed6d75bc",
+          "reason": "后续实施前复核范围；当前不是批准编辑集"
+        },
+        {
+          "path": "pitchroom-app/packages/agent/src/persisted-run.ts",
+          "role": "read_only",
+          "line": 1,
+          "sha256": "e6000ab78b7c69a4a09d6fc1f652e4630c463c9842db38fe5095f986843b35e4",
+          "reason": "后续实施前复核范围；当前不是批准编辑集"
+        },
+        {
+          "path": "pitchroom-app/SECURITY.md",
+          "role": "read_only",
+          "line": 1,
+          "sha256": "0d5ac9c8d9e46cd32165b178b2ea5e3f5348ccc2a3062c2b4101d7fd214aff27",
+          "reason": "后续实施前复核范围；当前不是批准编辑集"
+        }
+      ]
+    },
+    {
+      "key": "release-evidence",
+      "title": "刷新部署证据清单并对齐实际 Web/worker 模型验收",
+      "priority": "medium",
+      "status": "backlog",
+      "assignee": null,
+      "description": "## 1. 用户结果与证据\n部署清单部分状态过时；10月25日真实合成链路跑通，但整体pnpm check与产品验收未过，PDF/AT未完成；独立eval与生产prompt不同。\n来源：本对话与 /Users/shaun/Documents/ChatGPT/ai-slide-generator/pitchroom-app/docs/planning/cicd-2026-10-25/review.md；SHA256 1d08f250b5326cc85c23677631c8d5b0cd449b2dc42eb66d4386dca72b7a079f\n\n## 2. 优先级\nmedium；服务发布关键路径或真实用户数据边界；不要求抢占V6产品批次。\n\n## 3. 前置与顺序\n引用现有任务：PIT-5, PIT-6, PIT-8, PIT-9, PIT-10, PIT-11。本预览新任务的建议顺序：基线/拓扑/数据→CI/环境/身份/worker→staging→prod。依赖仅规划，不是调度门禁；实施前补齐精确硬依赖及签收证据。\n\n## 4. 有界交付\n区分CI、DB、浏览器、真实模型语义、人类验收和上线；将实际adapter纳入发布质量口径；复用现有产品任务，不重复建单。\n\n## 5. 范围与保护\n仅规划建单，执行授权pending。保留来源、未知、手工编辑、明确Apply、历史及Undo；不改archive、pitchroom-v6/prototype、原始证据、私密数据库或密钥。编辑范围扩大需重新确认。\n\n## 6. 源码与依据\nfile_plan_status=partial；以下为只读参考，不是最终实施编辑清单：\n- pitchroom-app/docs/verification/2026-10-25-live-full-flow.md:1 sha256=96e695394afff200eba302725db89217d97c9cd50f8d8ebbb5ce782a70ea637f\n- pitchroom-app/DEPLOYMENT_CHECKLIST.md:1 sha256=66a64ebfe646b65f2c6154048ea9ca71b9e518f178d0509909a0a65d14edebde\n- pitchroom-app/README.md:1 sha256=0fa095857c69c5dcf3798ab05248dfd80282fd02c8c2bae5f56ff2e304890a1d\n\n## 7. 验收草案\n正常：每条门禁有版本/日期/范围和PASS/FAIL/未运行；PIT-5/6/8/9/10及语言/V6任务作为既有门禁；定位密度和上传弹窗恢复明确归属，不把旧记录冒充新通过。\n拒绝：缺授权、缺配置或目标无法确认时拒绝执行并保留已有状态。\n失败：如实记录原始失败，不弱化断言或把跳过当通过。\n恢复：保留版本与原数据，按本卡确认的恢复方案重试；不自动覆盖或删除。\n\n## 8. 验证与未决\n确定性/DB/浏览器/真实模型/人工验收分别记录；只使用隔离合成状态；真实模型、录制及资源变更单独确认。\n未决：本轮发布是否承诺PDF/AT；质量阈值与人工接受标准。\n\n## 9. 启动和完成门禁\nstart_approval=pending；建单不等于启动。实施前确认决策、精确文件/配置范围、依赖及验收。状态backlog、负责人空；不派发Agent，不自动done。交付实际结果及未验证项后人工签收。\n",
+      "source_receipts": [
+        {
+          "path": "pitchroom-app/docs/verification/2026-10-25-live-full-flow.md",
+          "role": "read_only",
+          "line": 1,
+          "sha256": "96e695394afff200eba302725db89217d97c9cd50f8d8ebbb5ce782a70ea637f",
+          "reason": "后续实施前复核范围；当前不是批准编辑集"
+        },
+        {
+          "path": "pitchroom-app/DEPLOYMENT_CHECKLIST.md",
+          "role": "read_only",
+          "line": 1,
+          "sha256": "66a64ebfe646b65f2c6154048ea9ca71b9e518f178d0509909a0a65d14edebde",
+          "reason": "后续实施前复核范围；当前不是批准编辑集"
+        },
+        {
+          "path": "pitchroom-app/README.md",
+          "role": "read_only",
+          "line": 1,
+          "sha256": "0fa095857c69c5dcf3798ab05248dfd80282fd02c8c2bae5f56ff2e304890a1d",
+          "reason": "后续实施前复核范围；当前不是批准编辑集"
+        }
+      ]
+    }
+  ],
+  "updates": [
+    {
+      "id": "01a17145-8e51-705d-8499-2365d1d9d5e2",
+      "identifier": "PIT-11",
+      "expected_revision": 1,
+      "old_description_sha256": "5ef6576064e4a2c6bcbe6fcb951b5e250426fdd5641ad3f0cb790da81dea8ae3",
+      "description": "审阅稿：未经用户批准不得执行。状态保留 Backlog，负责人留空，不触发 Agent。\n\n来源：[PIT-3 只读调查](http://localhost:3100/pitchroom/issues/PIT-3)。项目根目录：/Users/shaun/Documents/ChatGPT/ai-slide-generator。以下依据来自该静态调查，历史执行结果不等于本次复验。\n\n优先级：high。\n\n前置依赖（人工检查，不自动调度）：\n- [PIT-5](http://localhost:3100/pitchroom/issues/PIT-5)\n- [PIT-8](http://localhost:3100/pitchroom/issues/PIT-8)\n\n问题：本地闭环不构成生产部署背书；尚无完整上线证据。\n证据：pitchroom-app/SECURITY.md:33–46；首批验收报告 open[4]。\n范围：先形成用户可批准的部署和数据方案，再实施验证；本卡本身不授权公开上线。优先级是上线前高优先级，当前产品迭代可独立推进。\n依赖说明：安全公告处置完成；材料任务的数据留存/删除范围先确定。公开发布还需语言、质量及核心恢复达到发布门槛；若声明 PDF/辅助技术支持，也须相应验收。\n验收条件：\n- 批准部署、身份/项目授权、数据流、留存/删除、加密、限流成本与备份方案。\n- 保存越权拒绝、CSRF、传输安全、限流/成本、删除及备份恢复的实际证据。\n- 在隔离环境验证发布、健康检查与回滚，明确剩余风险、负责人和发布门槛。\n- 用户单独批准正式发布；部署证据与客户验收分别记录，不互相替代。\n\n交付规则：交回实际修改/验证/未验证项和证据，进入 in_review，由用户验收；不自动标 done、提交、推送或部署。\n\n## 本轮部署隔离审查补充（待批准同步）\n# 本对话部署审查记录（2026-10-25）\n用户目标：搭建CI/CD、staging和prod；当前只读核对后整理到Multica，不授权实施。\n已观察：无Git remote；可访问GitHub账号/组织未找到Pitchroom仓库，其他账号未知。Vercel已有pitchroom-app但无部署/env/git link，默认域名已绑定；groundai.app/com未绑定Pitchroom。\nNeon控制台已读：pitchroom / production默认唯一分支 / neondb / neondb_owner；新加坡Free，Postgres18，1compute，6小时恢复，未保护，公网任意IP凭凭据可达。env本地比对直连和pooled均同端点，live。未查询业务数据，未验证迁移/数据内容/恢复。\n应用已有Web、独立Clarify worker、Postgres；产品测试基础和模型全链路记录不构成部署/用户验收。现有本地代码含大量未提交实现。\n建议而非决策：CI自动验证，自动staging，人工prod晋级；平台拓扑尚未定，Railway只是候选，Vercel已有资源应纳入比较。\n保护：不上传原始QA/私密资料；不改v6原型/证据；不启动Agent、模型、安装、迁移、提交、部署、建资源、付费。\n远端观察均为本对话时点快照，实施前复核。\n\n建议独立规划任务：\n- 建立完整的 GitHub 代码基线与发布文件边界\n- 确认 Web、Clarify worker 与数据库的部署拓扑\n- 隔离 Neon 的 dev、staging 与 prod 数据及凭据\n- 建立可复现且隔离数据的 PR CI 门禁\n- 建立环境配置契约与生产拒绝错误配置的启动检查\n- 接入身份与逐项目授权，移除固定共享项目入口\n- 建立 Clarify worker 的托管、健康监控与重启恢复\n- 建立自动 staging 发布、串行迁移与持久化冒烟\n- 建立 prod 手动晋级、备份恢复及回滚演练\n- 补齐线上限流、全局模型预算与可观测性\n- 刷新部署证据清单并对齐实际 Web/worker 模型验收\n复用 PIT-5（安全）、PIT-6（质量）、PIT-8（留存/删除）、PIT-9（用户）、PIT-10（PDF/AT）及现有V6六批计划，不重复创建；不改状态/负责人/父级/阶段/标签/订阅。\n"
+    }
+  ],
+  "reuse": [
+    "PIT-5",
+    "PIT-6",
+    "PIT-8",
+    "PIT-9",
+    "PIT-10",
+    "PIT-18",
+    "PIT-29"
+  ],
+  "writes_performed": 0,
+  "approval": "pending"
+}
