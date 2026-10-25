@@ -25,6 +25,12 @@ The labelled synthetic fixture supports offline checks. In fixture mode, choose 
 
 Browser Print remains available. PDF fidelity and native assistive-technology validation are outside the current acceptance scope.
 
+## Working-position recovery
+
+The same browser restores each project's destination, inspected Clarify topic and saved Deck/page selection after reload. Removed versions and inaccessible destinations fall back safely. This browser record stores navigation identifiers only; unsaved text still has tab lifetime and is not a durable draft. Navigation does not accept, apply or generate work. Browser storage failure leaves saved server work unchanged.
+
+For isolated synthetic browser checks alongside an existing dev server, use `PITCHROOM_RUNTIME=fixture PITCHROOM_ISOLATED_QA=1 pnpm --filter @pitchroom/web exec next dev -H 127.0.0.1 -p 43875`. The QA build lives in `.next-qa`; it does not share the ordinary dev build lock. Do not use an existing private project as a QA target.
+
 ## Workspace boundaries
 
 - `apps/web`: browser UI and server routes.

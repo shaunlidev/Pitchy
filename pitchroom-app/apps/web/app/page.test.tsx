@@ -7,6 +7,8 @@ import { submitFixtureClarification, decideFixtureClarification, runFixtureClari
 import HomePage from "./page";
 import { WorkspaceView } from "../lib/workspace-view";
 
+beforeEach(() => localStorage.clear());
+
 class FakeEventSource {
   addEventListener() {}
   close() {}

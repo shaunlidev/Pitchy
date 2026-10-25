@@ -1,3 +1,5 @@
+import { useWorkspacePosition } from "./use-workspace-position";
+import type { WorkspacePosition } from "./workspace-position";
 import { StoryPanel, StoryTrace, type StoryDraft } from "./story-panel";
 import { ClarificationPanel } from "./clarification-panel";
 import { deriveDownstreamSyncStatus } from "@pitchroom/domain";
@@ -14,6 +16,9 @@ type WorkspaceViewProps = {
   onChooseFile: (file?: File) => boolean | Promise<boolean>; onCancelRun: () => void; onAction: (body: Record<string, unknown>) => boolean | Promise<boolean>;
   onRetryAction?: () => boolean | Promise<boolean>; onRefreshWorkspace?: () => void | Promise<void>; onDismissError?: () => void;
   initialDestination?: Destination;
+  rememberPosition?: boolean;
+  workspacePosition?: WorkspacePosition;
+  onWorkspacePosition?: (patch: Partial<WorkspacePosition>) => void;
   primary?: string;
   onClarificationAction?: WorkspaceViewProps["onAction"];
   clarificationBusy?: boolean;
@@ -43,7 +48,9 @@ function phaseCopy(phase: FixtureState["project"]["phase"]) {
 export function WorkspaceView(props: WorkspaceViewProps) {
   const { state, busy, error } = props;
   const current = useMemo(() => state.versions.find((version) => version.id === state.currentVersionId), [state]);
-  const [destination, setDestination] = useState<Destination>(props.initialDestination ?? "materials");
+  const { position, updatePosition, storageNotice } = useWorkspacePosition(state, props.rememberPosition, props.initialDestination);
+  const destination = position.destination;
+  const setDestination = (destination: Destination) => updatePosition({ destination });
   const initialVersion = useRef(state.currentVersionId);
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [positioningDraft, setPositioningDraft] = useState({ selectedId: state.positioning?.appliedDirectionId ?? "original", adjustment: "" });
@@ -67,7 +74,7 @@ export function WorkspaceView(props: WorkspaceViewProps) {
     if (["accept", "run", "generate_positioning", "apply_positioning", "generate_deck"].includes(String(body.action)) && (props.text.trim() || props.answer.trim() || props.correction.trim() || positioningDraft.adjustment.trim())) { setDraftGate(true); return false; }
     return props.onAction(body);
   };
-  const viewProps = { ...props, storyDraft, onStoryDraft: setStoryDraft, busy: ux.mutationLocked, primary: ux.primary, clarificationDrafts, onClarificationDraft: (id: string, result: import("@pitchroom/domain").ClarificationResult) => setClarificationDrafts(drafts=>({...drafts,[id]:result})), onClarificationAction: guardedAction, clarificationBusy: props.busy || Boolean(props.error) || Boolean(ux.running), runningAction: ux.running ? activity?.kind : undefined, onAction: guardedAction, onChooseFile: props.busy || ux.running ? () => false : props.onChooseFile, positioningDraft, onPositioningDraft: setPositioningDraft, deckEditor, onDeckEditor: setDeckEditor, correctionTarget, onCorrectionTarget: setCorrectionTarget };
+  const viewProps = { ...props, workspacePosition: position, onWorkspacePosition: updatePosition, storyDraft, onStoryDraft: setStoryDraft, busy: ux.mutationLocked, primary: ux.primary, clarificationDrafts, onClarificationDraft: (id: string, result: import("@pitchroom/domain").ClarificationResult) => setClarificationDrafts(drafts=>({...drafts,[id]:result})), onClarificationAction: guardedAction, clarificationBusy: props.busy || Boolean(props.error) || Boolean(ux.running), runningAction: ux.running ? activity?.kind : undefined, onAction: guardedAction, onChooseFile: props.busy || ux.running ? () => false : props.onChooseFile, positioningDraft, onPositioningDraft: setPositioningDraft, deckEditor, onDeckEditor: setDeckEditor, correctionTarget, onCorrectionTarget: setCorrectionTarget };
   const agentBusy = activity?.status === "queued" || activity?.status === "running";
   useEffect(() => { if (!initialVersion.current && state.currentVersionId) setDestination("clarify"); initialVersion.current = state.currentVersionId; }, [state.currentVersionId]);
 
@@ -76,6 +83,7 @@ export function WorkspaceView(props: WorkspaceViewProps) {
     <header className="topbar"><div className="topInner"><div className="logo">PITCHROOM</div><div className="projectId"><strong>{state.project.name}</strong><span className="demoLabel">{state.mode === "live" ? "DeepSeek live" : "Local agent"}</span></div></div></header>
     <div className="navShell"><div className="navInner"><nav className="nav" aria-label="Project workspace">{(["materials", "clarify", "positioning", "deck"] as Destination[]).map(item => <button key={item} aria-current={destination === item ? "page" : undefined} aria-label={item[0].toUpperCase() + item.slice(1)} data-locked={!ux.access[item].allowed} aria-describedby={!ux.access[item].allowed ? `lock-${item}` : undefined} onClick={() => navigate(item)}>{item[0].toUpperCase() + item.slice(1)}{!ux.access[item].allowed && <span className="srOnly" id={`lock-${item}`}> — {ux.access[item].reason}</span>}</button>)}</nav><span className="navNote">{state.mode === "live" ? "DeepSeek · Persistent project" : "Synthetic project · Local session"}</span></div></div>
     <div className="announcer" aria-live="polite">{activity ? `${activity.title}: ${activity.status}` : busy ? "Saving…" : `Project state: ${phaseLabel(state.project.phase)}`}</div>
+    {storageNotice && <p role="status" className="capabilityHint">{storageNotice}</p>}
     {error && <ActionRecovery busy={busy} error={error} onRetry={props.onRetryAction} onRefresh={props.onRefreshWorkspace} onDismiss={props.onDismissError} />}
     {!error && state.project.phase === "failed" && <div className="recoveryNotice" role="status"><strong>The agent did not create a new understanding.</strong><span>Your material is saved. You can safely retry the agent.</span></div>}
     <AgentStream activity={activity} />
@@ -133,9 +141,9 @@ function MaterialsView({ state, busy, primary, runningAction, text, onTextChange
   return <section className="materialLibrary"><header className="libraryHeading"><div><h1>Your project materials.</h1><p>Add to the project without restarting the conversation.</p></div><button className="btn" disabled={busy} onClick={() => setUploadOpen(true)}>Add files <Arrow /></button></header><p className="stateContract">{phaseCopy(state.project.phase)}</p>{reviewCount > 0 && <div className="materialSafetySummary" role="status"><div><strong>{reviewCount} source{reviewCount === 1 ? "" : "s"} need agent review</strong><span>The original text is preserved below. Flagged passages stay outside Agent-generated understanding, positioning, and deck content.</span></div></div>}<div className="libraryInventory"><div className="inventoryHeading"><h2>Source files</h2><span>{state.sources.length} file{state.sources.length === 1 ? "" : "s"}</span></div>{state.sources.map((source) => <div className={source.agentReview ? "fileRowShell needsAgentReview" : "fileRowShell"} key={source.sourceId}><details className="fileRow"><summary><span className="fileType">{source.mediaType === "text/markdown" ? "MD" : "TXT"}</span><span className="grow"><span className="fileName">{source.name}</span><span className="fileMeta">{source.chunks.length} citeable passage{source.chunks.length === 1 ? "" : "s"}</span>{source.agentReview && <span className="agentReviewBadge">Agent review required</span>}</span><span className="fileView">View source</span></summary>{source.agentReview && <div className="sourceSafetyNotice"><strong>{source.agentReview.affectedChunks} passage{source.agentReview.affectedChunks === 1 ? "" : "s"} isolated</strong><p>{source.agentReview.message}</p></div>}<ol>{source.chunks.map((chunk) => <li key={chunk.id}><code>{chunk.id}</code><p>{chunk.text}</p></li>)}</ol></details><button className="plain removeMaterial" disabled={busy} onClick={() => setDeleteSource(source)} aria-label={`Remove ${source.name}`}>Remove</button></div>)}</div><details className="materialBrief"><summary>Add another source <span>Optional</span></summary><label className="editLabel" htmlFor="written-brief">Your brief or notes</label><textarea id="written-brief" aria-label="Written brief" value={text} onChange={(event) => onTextChange(event.target.value)} /><div className="briefActions"><span className="small muted">Your words are stored as source material.</span><button className={primary === "add_material" ? "btn primary" : "btn"} disabled={busy || !text.trim()} onClick={() => onAction({ action: "add_material", text })}>Add material</button></div></details><div className="libraryFooter"><div /><div className="footerButtons">{canRun && <button className={primary === "run" ? "btn primary" : "btn"} disabled={busy} onClick={() => onAction({ action: "run" })}>{runningAction === "understanding" ? "Reading material…" : state.project.phase === "materials_ready" ? "Run understanding agent" : "Retry agent"}<Arrow /></button>}<button className={primary === "clarify" ? "btn primary" : "btn"} disabled={!state.currentVersionId} onClick={onContinue}>Back to Clarify <Arrow /></button></div></div>{uploadOpen && <div className="modalBackdrop" role="presentation"><section className="modalCard" role="dialog" aria-modal="true" aria-labelledby="upload-title"><h2 id="upload-title">Add source material</h2><p>Choose a UTF-8 text or Markdown file. It will be added immediately and the current understanding will wait for a new run.</p><label className="uploadPicker" htmlFor="upload-material-file">Choose file<input id="upload-material-file" className="fileInputOverlay" disabled={busy} type="file" accept=".txt,.md,text/plain,text/markdown" aria-label="Choose a UTF-8 text or Markdown file" onChange={async (event) => { const input = event.currentTarget; try { await onChooseFile(input.files?.[0]); } finally { setUploadOpen(false); input.value = ""; } }} /></label><div className="dialogActions"><button className="btn" onClick={() => setUploadOpen(false)}>Cancel</button></div></section></div>}{deleteSource && <div className="modalBackdrop" role="presentation"><section className="modalCard" role="alertdialog" aria-modal="true" aria-labelledby="delete-title"><h2 id="delete-title">Remove this source?</h2><p><strong>{deleteSource.name}</strong> will leave the active project. Existing understanding versions remain in history, but you must run the agent again before continuing.</p><div className="dialogActions"><button className="btn" onClick={() => setDeleteSource(undefined)}>Keep file</button><button className="btn danger" disabled={busy} onClick={async () => { await onAction({ action: "remove_material", sourceId: deleteSource.sourceId }); setDeleteSource(undefined); }}>Remove file</button></div></section></div>}</section>;
 }
 
-function ClarifyView({ state, busy, primary, onClarificationAction, clarificationBusy, clarificationDrafts, onClarificationDraft, answer, correction, activeRequest, onAnswerChange, onCorrectionChange, onCancelRun, onAction, current, onMaterials, onPositioning }: WorkspaceViewProps & { current?: FixtureState["versions"][number]; onMaterials: () => void; onPositioning: () => void }) {
-  const [overviewSelection, setOverviewSelection] = useState("theme:0");
-  useEffect(() => { setOverviewSelection("theme:0"); }, [current?.id]);
+function ClarifyView({ workspacePosition, onWorkspacePosition, state, busy, primary, onClarificationAction, clarificationBusy, clarificationDrafts, onClarificationDraft, answer, correction, activeRequest, onAnswerChange, onCorrectionChange, onCancelRun, onAction, current, onMaterials, onPositioning }: WorkspaceViewProps & { current?: FixtureState["versions"][number]; onMaterials: () => void; onPositioning: () => void }) {
+  const overviewSelection = workspacePosition?.overviewSelection ?? "theme:0";
+  const setOverviewSelection = (overviewSelection: string) => onWorkspacePosition?.({ overviewSelection });
 
   if (!current) return <section className="clarifyWaiting"><header className="workspaceHeading"><h1>Find the story in the material.</h1><span className="small muted">Keep unknowns open.</span></header><div className="waitingCard"><span className="eyebrow">{state.project.phase === "reading" ? "Reading material" : state.project.phase === "structuring" ? "Checking source links" : "Ready to begin"}</span><h2>{phaseCopy(state.project.phase)}</h2><p>No understanding version appears until every supported claim has a valid exact quote.</p>{state.project.phase === "materials_ready" ? <button className="btn primary" disabled={busy} onClick={() => onAction({ action: "run" })}>Run understanding agent <Arrow /></button> : state.project.phase === "cancelled" || state.project.phase === "failed" ? <button className="btn" disabled={busy} onClick={() => onAction({ action: "run" })}>Retry agent</button> : activeRequest && <button className="btn" onClick={onCancelRun}>Cancel run</button>}</div></section>;
 
@@ -237,18 +245,21 @@ function PositioningView(props: WorkspaceViewProps & { onDeck: () => void }) {
   </>;
 }
 
-function DeckView({ state, busy, onAction, onPositioning, deckEditor, onDeckEditor }: WorkspaceViewProps & { onPositioning: () => void }) {
+function DeckView({ workspacePosition, onWorkspacePosition, state, busy, onAction, onPositioning, deckEditor, onDeckEditor }: WorkspaceViewProps & { onPositioning: () => void }) {
   const current = state.deck;
-  const [viewId, setViewId] = useState(current?.id ?? "");
-  const [pageIndex, setPageIndex] = useState(() => Math.max(0, current?.proposal.pages.findIndex(page => page.id === deckEditor?.pageId) ?? 0));
+  const viewId = workspacePosition?.deckId ?? current?.id ?? "";
+  const setViewId = (deckId: string) => onWorkspacePosition?.({ deckId });
+  const previousDeck = useRef(current?.id);
   const [reviewAll, setReviewAll] = useState(false);
   const editing = Boolean(deckEditor?.editing);
   const editTitle = deckEditor?.title ?? ""; const editBody = deckEditor?.body ?? "";
   const setEditing = (editing: boolean) => { if (!editing) onDeckEditor?.(undefined); };
   const setEditTitle = (title: string) => { if (deckEditor) onDeckEditor?.({ ...deckEditor, title }); };
   const setEditBody = (body: string) => { if (deckEditor) onDeckEditor?.({ ...deckEditor, body }); };
-  useEffect(() => { if (current?.id) setViewId(current.id); }, [current?.id]);
+  useEffect(() => { if (previousDeck.current !== current?.id) { if (current?.id) setViewId(current.id); previousDeck.current = current?.id; } }, [current?.id]);
   const viewed = state.deckVersions.find((version) => version.id === viewId) ?? current;
+  const pageIndex = Math.max(0, viewed?.proposal.pages.findIndex(page => page.id === (deckEditor?.pageId ?? workspacePosition?.pageId)) ?? 0);
+  const setPageIndex = (index: number) => onWorkspacePosition?.({ pageId: viewed?.proposal.pages[index]?.id });
   if (!current || !viewed) return <section className="deckPage"><h1>No deck draft yet.</h1><button className="btn" onClick={onPositioning}>Return to Positioning</button></section>;
   const historical = viewed.id !== current.id; const page = viewed.proposal.pages[pageIndex] ?? viewed.proposal.pages[0]!;
   const startEdit = () => onDeckEditor?.({ editing: true, title: page.title, body: page.body, deckId: current.id, deckVersion: current.number, pageId: page.id });
