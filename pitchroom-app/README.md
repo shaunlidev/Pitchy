@@ -1,6 +1,6 @@
 # Pitchroom application
 
-> **2026-10-25 first-loop verification:**受众修订、自由故事判断、真实变化预览、明确采用与 Deck 追溯已在隔离合成项目中用真实 DeepSeek 跑通。已验证原样承接、Keep、Undo、人工编辑/旧稿、过期提示和重启恢复。此结论属于修复后的首批闭环验收，不代表首次生成可靠性、客户验收或上线就绪。原验收标准保持不变。详见 [本轮证据与限制](.artifacts/first-loop-20261025/acceptance-report.json)。Next.js 安全公告仍待处理。
+> **2026-10-25 first-loop verification:**受众修订、自由故事判断、真实变化预览、明确采用与 Deck 追溯已在隔离合成项目中用真实 DeepSeek 跑通。已验证原样承接、Keep、Undo、人工编辑/旧稿、过期提示和重启恢复。此结论属于修复后的首批闭环验收，不代表首次生成可靠性、客户验收或上线就绪。原验收标准保持不变。详见 [本轮证据与限制](.artifacts/first-loop-20261025/acceptance-report.json)。Next.js 现已升级至公告修复版 16.4.1，并完成隔离构建和 HTTP 验证；原有服务/部署进程尚未由此验证重启。
 
 
 > **2026-10-25 current verification:** a fresh `pitchroom-app/` implementation exists. The live web journey has now exercised real DeepSeek Understanding → worker Clarify → Positioning → Deck on an isolated synthetic PostgreSQL project. This supersedes older “not built / live not run” status statements for that narrow scope. Product acceptance remains **not passed**. See [full test matrix, DoD, actual failures and correction plan](docs/verification/2026-10-25-live-full-flow.md).
