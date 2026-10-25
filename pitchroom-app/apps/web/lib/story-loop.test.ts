@@ -112,11 +112,36 @@ it("advertises a wire contract that rejects external IDs while preserving saved 
   const identityConfusion=structuredClone(valid);
   identityConfusion.story.bases[0]!.id="external-understanding-basis";
   expect(wire.safeParse(identityConfusion).success).toBe(false);
+  const overlong=structuredClone(valid);
+  overlong.story.blocks[1]!.body=Array(47).fill("word").join(" ");
+  expect(wire.safeParse(overlong).success).toBe(false);
+  overlong.story.blocks[1]!.body=Array(45).fill("word").join(" ");
+  expect(wire.safeParse(overlong).success).toBe(true);
   return new Response(JSON.stringify({status:"completed",output:[{type:"message",content:[{type:"output_text",text:JSON.stringify(valid)}]}]}));
  };
  const result=await new ResponsesStoryRunner({apiKey:"offline",model:"offline",baseURL:"https://example.test",fetch:transport}).run(snapshot);
  expect(result.story.bases).toEqual(story.bases);
  expect(result.story.strategicRationale.basisRefs).toEqual(story.strategicRationale.basisRefs);
+});
+
+it("preserves an exact saved human body beyond the generated word limit", async () => {
+ const {story,snapshot}=await readyStory();
+ story.blocks[1]!.body=Array(60).fill("human").join(" ");
+ story.blocks[1]!.wording="user_edited_unreviewed";
+ snapshot.before=structuredClone(story);
+ const {schemaVersion,origin,...content}=structuredClone(story);
+ const transport: typeof fetch = async (_url,init) => {
+  const request=z.object({text:z.object({format:z.object({schema:z.record(z.string(),z.unknown())})})}).parse(JSON.parse(String(init?.body)));
+  const wire=z.fromJSONSchema(request.text.format.schema);
+  const valid={story:content,responseToJudgment:"The exact human wording remains unchanged."};
+  expect(wire.safeParse(valid).success).toBe(true);
+  const invented=structuredClone(valid); invented.story.blocks[1]!.body+=" added";
+  expect(wire.safeParse(invented).success).toBe(false);
+  return new Response(JSON.stringify({status:"completed",output:[{type:"message",content:[{type:"output_text",text:JSON.stringify(valid)}]}]}));
+ };
+ const result=await new ResponsesStoryRunner({apiKey:"offline",model:"offline",baseURL:"https://example.test",fetch:transport}).run(snapshot);
+ expect(result.story.blocks[1]!.body).toBe(story.blocks[1]!.body);
+ expect(snapshot.before).toEqual(story);
 });
 
 it("rejects a confused response without remapping references or exposing schema value lists", async () => {

@@ -4,7 +4,7 @@ import { z } from "zod";
 import { activeUnderstanding, PitchroomError, storyContentSchema, understandingStoryUnknowns, validateStory, type StorySnapshot } from "@pitchroom/domain";
 import { isInstructionLikeSourceText } from "./prompt-safety";
 
-export const storyPromptVersion = "story-v4-local-references";
+export const storyPromptVersion = "story-v5-body-budget";
 export type StoryRunner = { run(snapshot: StorySnapshot): Promise<{ story: ReturnType<typeof validateStory>; responseToJudgment: string }> };
 export class ResponsesStoryRunner implements StoryRunner {
   constructor(private readonly config: { apiKey: string; model: string; baseURL: string; fetch?: typeof fetch }) {}
