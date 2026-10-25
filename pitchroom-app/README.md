@@ -2,6 +2,8 @@
 
 > **2026-10-25 bounded English continuation:** actual HTTP Positioning succeeded in 50.5 seconds, but the subsequent real Story output was rejected for an invalid local evidence reference. The prior Understanding, sources and adopted state were preserved. Two of three authorized model requests were used; Chinese Story revision and Deck continuation were not run. This is not an English full-loop PASS. See the [local attempt report](.artifacts/english-pit17-resume-20261025-01/acceptance-report.json).
 
+> **Offline follow-up:** Story prompt `story-v4-local-references` supplies a separate local reference vocabulary and constrains the model response schema to it, while preserving saved local IDs. The domain validator still rejects references to undefined bases; no automatic ID repair or adoption was added. `pnpm check` passed with 432 Vitest cases, 4 Node guard checks, types and build. No further provider call was made; live Story and full-loop acceptance remain open.
+
 > **2026-10-25 first-loop verification:**受众修订、自由故事判断、真实变化预览、明确采用与 Deck 追溯已在隔离合成项目中用真实 DeepSeek 跑通。已验证原样承接、Keep、Undo、人工编辑/旧稿、过期提示和重启恢复。此结论属于修复后的首批闭环验收，不代表首次生成可靠性、客户验收或上线就绪。原验收标准保持不变。详见 [本轮证据与限制](.artifacts/first-loop-20261025/acceptance-report.json)。Next.js 现已升级至公告修复版 16.4.1，并完成隔离构建和 HTTP 验证；原有服务/部署进程尚未由此验证重启。
 
 

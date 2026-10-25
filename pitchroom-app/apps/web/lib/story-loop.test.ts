@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { beforeEach, describe, expect, it } from "vitest";
 import { compareStories, validateStory, assertStoryHead, exactStoryEdit, storySchema, storyContentSchema, type StorySnapshot } from "@pitchroom/domain";
 import { ResponsesStoryRunner } from "@pitchroom/agent";
@@ -92,4 +93,53 @@ it("keeps English story instructions with Chinese saved context and feedback wit
  const output=await new ResponsesStoryRunner({apiKey:"offline",model:"offline",baseURL:"https://example.test",fetch:transport}).run(snapshot);
  expect(output.story.coreMessage).toBe(story.coreMessage);
  expect(story).toEqual(before);
+});
+
+it("advertises a wire contract that rejects external IDs while preserving saved local links", async () => {
+ const {story,snapshot}=await readyStory(); snapshot.before=story;
+ const {schemaVersion,origin,...content}=structuredClone(story);
+ const transport: typeof fetch = async (_url, init) => {
+  const request=z.object({text:z.object({format:z.object({schema:z.record(z.string(),z.unknown())})})}).parse(JSON.parse(String(init?.body)));
+  const wire=z.fromJSONSchema(request.text.format.schema);
+  const valid={story:content,responseToJudgment:"Saved local links remain available."};
+  expect(wire.safeParse(valid).success).toBe(true);
+  const confused=structuredClone(valid);
+  confused.story.strategicRationale.basisRefs=["external-understanding-basis"];
+  expect(wire.safeParse(confused).success).toBe(false);
+  const blockConfusion=structuredClone(valid);
+  blockConfusion.story.blocks[1]!.basisRefs=["external-understanding-basis"];
+  expect(wire.safeParse(blockConfusion).success).toBe(false);
+  const identityConfusion=structuredClone(valid);
+  identityConfusion.story.bases[0]!.id="external-understanding-basis";
+  expect(wire.safeParse(identityConfusion).success).toBe(false);
+  return new Response(JSON.stringify({status:"completed",output:[{type:"message",content:[{type:"output_text",text:JSON.stringify(valid)}]}]}));
+ };
+ const result=await new ResponsesStoryRunner({apiKey:"offline",model:"offline",baseURL:"https://example.test",fetch:transport}).run(snapshot);
+ expect(result.story.bases).toEqual(story.bases);
+ expect(result.story.strategicRationale.basisRefs).toEqual(story.strategicRationale.basisRefs);
+});
+
+it("rejects a confused response without remapping references or exposing schema value lists", async () => {
+ const {story,snapshot}=await readyStory(); snapshot.before=story;
+ const {schemaVersion,origin,...content}=structuredClone(story);
+ content.strategicRationale.basisRefs=["external-understanding-basis"];
+ const transport: typeof fetch = async () => new Response(JSON.stringify({status:"completed",output:[{type:"message",content:[{type:"output_text",text:JSON.stringify({story:content,responseToJudgment:"Review this candidate."})}]}]}));
+ await expect(new ResponsesStoryRunner({apiKey:"offline",model:"offline",baseURL:"https://example.test",fetch:transport}).run(snapshot)).rejects.toMatchObject({code:"PROPOSAL_REJECTED",message:"The generated story contained invalid structure or evidence links. Your saved story was preserved."});
+ expect(content.strategicRationale.basisRefs).toEqual(["external-understanding-basis"]);
+ expect(snapshot.before).toEqual(story);
+});
+
+it("still rejects an allowed local reference that has no defined Story basis", async () => {
+ const {story,snapshot}=await readyStory(); snapshot.before=story;
+ const {schemaVersion,origin,...content}=structuredClone(story);
+ const transport: typeof fetch = async (_url,init) => {
+  const request=z.object({input:z.array(z.object({content:z.string()}))}).parse(JSON.parse(String(init?.body)));
+  const input=z.object({referenceContract:z.object({localBasisIds:z.array(z.string())})}).parse(JSON.parse(request.input[1]!.content));
+  const undefinedId=input.referenceContract.localBasisIds.find(id=>!content.bases.some(basis=>basis.id===id));
+  if(!undefinedId) throw Error("Missing unused local slot");
+  content.strategicRationale.basisRefs=[undefinedId];
+  return new Response(JSON.stringify({status:"completed",output:[{type:"message",content:[{type:"output_text",text:JSON.stringify({story:content,responseToJudgment:"Review this candidate."})}]}]}));
+ };
+ await expect(new ResponsesStoryRunner({apiKey:"offline",model:"offline",baseURL:"https://example.test",fetch:transport}).run(snapshot)).rejects.toThrow("Story has an unknown or duplicate basis reference.");
+ expect(snapshot.before).toEqual(story);
 });
