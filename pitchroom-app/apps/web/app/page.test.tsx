@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { submitFixtureClarification, decideFixtureClarification, runFixtureClarification, acceptFixture, applyFixturePositioning, generateFixturePositioning, generateFixtureDeck, addFixtureMaterial, answerFixtureQuestion, correctFixtureClaim, readFixtureState, removeFixtureMaterial, resetFixtureState, runFixtureAgent } from "../lib/fixture-store";
 import HomePage from "./page";
 import { WorkspaceView } from "../lib/workspace-view";
+import { workspaceCommandSchema } from "../lib/api-contract";
 
 beforeEach(() => localStorage.clear());
 
@@ -120,6 +121,78 @@ describe("HomePage review interactions", () => {
     expect(screen.getByRole("alertdialog", { name: "Remove this source?" })).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "Remove file" }));
     await waitFor(() => expect(screen.queryByText("brief.md")).toBeNull());
+  });
+
+  it("saves valid files in a mixed batch and reports the rejected item separately", async () => {
+    const user = userEvent.setup({ applyAccept: false });
+    render(<HomePage />);
+    await screen.findByRole("heading", { name: "Your project materials." });
+    await user.click(screen.getByText(/Add another source/));
+    await user.type(screen.getByLabelText("Written brief"), "Keep this unsent written brief.");
+    await user.click(await screen.findByRole("button", { name: /Add files/ }));
+    await user.upload(screen.getByLabelText("Choose a UTF-8 text or Markdown file"), [
+      new File(["First source."], "first.txt", { type: "text/plain" }),
+      new File(["{}"], "rejected.json", { type: "application/json" }),
+      new File(["Last source."], "last.md", { type: "text/markdown" }),
+    ]);
+    await waitFor(() => expect(readFixtureState().sources.map(source => source.name)).toEqual(["brief.md", "first.txt", "last.md"]));
+    const results = screen.getByRole("region", { name: "File import results" });
+    expect(results.textContent).toContain("first.txt — Saved");
+    expect(results.textContent).toContain("last.md — Saved");
+    expect(results.textContent).toContain("rejected.json — Not imported");
+    expect(results.textContent).toContain("UTF-8");
+    expect((screen.getByLabelText("Written brief") as HTMLTextAreaElement).value).toBe("Keep this unsent written brief.");
+  });
+
+  it("retries only the uncertain file with its original operation identity", async () => {
+    const normalFetch = vi.mocked(fetch).getMockImplementation()!;
+    const commands: { name: string; commandId: string | undefined }[] = [];
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      if (!init?.method) return normalFetch(input, init);
+      const body = workspaceCommandSchema.parse(JSON.parse(String(init.body)));
+      if (body.action !== "add_material") return normalFetch(input, init);
+      commands.push({ name: body.name, commandId: body.commandId });
+      if (body.name === "uncertain.md") {
+        if (commands.filter(command => command.name === body.name).length === 1) {
+          await normalFetch(input, init);
+          throw new Error("Response lost after save");
+        }
+        return jsonResponse(readFixtureState());
+      }
+      return normalFetch(input, init);
+    });
+    const user = userEvent.setup(); render(<HomePage />);
+    await user.click(await screen.findByRole("button", { name: /Add files/ }));
+    await user.upload(screen.getByLabelText("Choose a UTF-8 text or Markdown file"), [
+      new File(["Saved first."], "saved.txt", { type: "text/plain" }),
+      new File(["Save before response loss."], "uncertain.md", { type: "text/markdown" }),
+    ]);
+    const retry = await screen.findByRole("button", { name: "Retry uncertain.md" });
+    expect((retry as HTMLButtonElement).disabled).toBe(false);
+    await user.click(retry);
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Retry uncertain.md" })).toBeNull());
+    expect(commands.filter(command => command.name === "saved.txt")).toHaveLength(1);
+    const attempts = commands.filter(command => command.name === "uncertain.md");
+    expect(attempts).toHaveLength(2); expect(attempts[1]!.commandId).toBe(attempts[0]!.commandId);
+    expect(readFixtureState().sources.map(source => source.name)).toEqual(["brief.md", "saved.txt", "uncertain.md"]);
+  });
+
+  it("continues after a file read failure and retries only that file after reopening Materials", async () => {
+    const file = new File(["Recovered source."], "read-retry.md", { type: "text/markdown" });
+    const read = file.arrayBuffer.bind(file);
+    const reader = vi.spyOn(file, "arrayBuffer").mockImplementation(read).mockRejectedValueOnce(new Error("Transient read failure"));
+    const user = userEvent.setup(); render(<HomePage />);
+    await user.click(await screen.findByRole("button", { name: /Add files/ }));
+    await user.upload(screen.getByLabelText("Choose a UTF-8 text or Markdown file"), [
+      new File(["First saved."], "before.txt", { type: "text/plain" }), file,
+      new File(["Last saved."], "after.txt", { type: "text/plain" }),
+    ]);
+    await waitFor(() => expect(readFixtureState().sources.map(source => source.name)).toEqual(["brief.md", "before.txt", "after.txt"]));
+    await user.click(screen.getByRole("button", { name: "Clarify" }));
+    await user.click(screen.getByRole("button", { name: "Materials" }));
+    await user.click(screen.getByRole("button", { name: "Retry read-retry.md" }));
+    await waitFor(() => expect(readFixtureState().sources.map(source => source.name)).toEqual(["brief.md", "before.txt", "after.txt", "read-retry.md"]));
+    expect(reader).toHaveBeenCalledTimes(2);
   });
 
   it("uploads the first file from the designed dropzone and refreshes the inventory", async () => {

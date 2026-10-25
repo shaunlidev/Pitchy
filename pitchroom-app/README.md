@@ -25,6 +25,10 @@ The labelled synthetic fixture supports offline checks. In fixture mode, choose 
 
 Browser Print remains available. PDF fidelity and native assistive-technology validation are outside the current acceptance scope.
 
+## File imports
+
+Both file pickers accept multiple UTF-8 TXT/MD files. Each file saves independently; a failed item leaves successful sources intact and can be retried separately. An unconfirmed save retries the same operation identity. Uploading files preserves an unsaved written brief. Selected files and retry controls live in the current tab; reload keeps saved sources but requires reselecting failed files.
+
 ## Working-position recovery
 
 The same browser restores each project's destination, inspected Clarify topic and saved Deck/page selection after reload. Removed versions and inaccessible destinations fall back safely. This browser record stores navigation identifiers only; unsaved text still has tab lifetime and is not a durable draft. Navigation does not accept, apply or generate work. Browser storage failure leaves saved server work unchanged.
