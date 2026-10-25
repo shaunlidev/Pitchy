@@ -18,7 +18,7 @@ export function resolveWorkspacePosition(state: FixtureState, saved?: WorkspaceP
   const requested = saved?.destination ?? "materials";
   const destination = access[requested].allowed ? requested : access[requested].target;
   const understanding = state.versions.find(version => version.id === state.currentVersionId);
-  let overviewSelection = "theme:0";
+  let overviewSelection = `theme:${understanding?.proposal.nextQuestion.relatedThemeIndexes[0] ?? 0}`;
   if (saved && saved.understandingId === understanding?.id) {
     const match = /^(theme|gap):(\d+)$/.exec(saved?.overviewSelection ?? "");
     if (match) {

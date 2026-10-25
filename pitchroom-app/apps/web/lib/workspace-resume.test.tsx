@@ -50,3 +50,17 @@ it("recovers from corrupt browser position without losing server work", async ()
   await screen.findByRole("heading", { name: "Your project materials." });
   expect(readFixtureState()).toEqual(before);
 });
+
+it("does not invite an answer to another topic's question", async () => {
+  const state = readFixtureState();
+  const version = state.versions.find(candidate => candidate.id === state.currentVersionId)!;
+  version.proposal.themes.push({ title: "Unrelated topic", summary: "No question is associated with this topic.", claims: structuredClone(version.proposal.themes[0]!.claims) });
+  const user = userEvent.setup(); const onAction = vi.fn(() => true);
+  render(<WorkspaceView initialDestination="clarify" state={state} busy={false} text="" answer="Preserve this unsent answer" correction="" onTextChange={() => {}} onAnswerChange={() => {}} onCorrectionChange={() => {}} onChooseFile={() => true} onCancelRun={() => {}} onAction={onAction} />);
+  await user.click(screen.getByRole("button", { name: /Unrelated topic/ }));
+  expect(screen.queryByRole("textbox", { name: "Answer the agent’s question" })).toBeNull();
+  expect(screen.getByText("No question is linked to this topic yet.")).toBeTruthy();
+  await user.click(screen.getByRole("button", { name: "Back to the current useful question" }));
+  expect((screen.getByRole("textbox", { name: "Answer the agent’s question" }) as HTMLTextAreaElement).value).toBe("Preserve this unsent answer");
+  expect(onAction).not.toHaveBeenCalled();
+});
