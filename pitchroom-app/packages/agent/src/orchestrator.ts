@@ -8,6 +8,7 @@ import {
 } from "@pitchroom/domain";
 import { executeAgentTool, type AgentToolCall, type ToolRepository } from "./tools";
 import { validateAgentAuthorship } from "./controller";
+import { validateNoUntrustedInstructionEcho } from "./prompt-safety";
 
 export type AgentAction =
   | { type: "tool"; call: AgentToolCall }
@@ -100,6 +101,7 @@ export async function orchestrateUnderstandingRun(input: {
         validateAgentAuthorship(proposal);
         const sources = await input.repository.listSources(input.projectId);
         validateProposalEvidence(proposal, sources.flatMap((source) => source.chunks));
+        validateNoUntrustedInstructionEcho({ proposal, publicSummary: action.publicSummary, chunks: sources.flatMap((source) => source.chunks) });
         append("phase_changed", { from: "reading", to: "structuring" });
         append("version_created", { schemaVersion: proposal.schemaVersion });
         append("phase_changed", { from: "structuring", to: "review_required" });

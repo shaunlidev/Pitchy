@@ -1,5 +1,13 @@
 # Harness status
 
+> **2026-10-25 first-loop verification:**受众修订、自由故事判断、真实变化预览、明确采用与 Deck 追溯已在隔离合成项目中用真实 DeepSeek 跑通。已验证原样承接、Keep、Undo、人工编辑/旧稿、过期提示和重启恢复。此结论属于修复后的首批闭环验收，不代表首次生成可靠性、客户验收或上线就绪。原验收标准保持不变。详见 [本轮证据与限制](.artifacts/first-loop-20261025/acceptance-report.json)。Next.js 安全公告仍待处理。
+
+
+> **2026-10-25 current verification:** a fresh `pitchroom-app/` implementation exists. The live web journey has now exercised real DeepSeek Understanding → worker Clarify → Positioning → Deck on an isolated synthetic PostgreSQL project. This supersedes older “not built / live not run” status statements for that narrow scope. Product acceptance remains **not passed**. See [full test matrix, DoD, actual failures and correction plan](docs/verification/2026-10-25-live-full-flow.md).
+
+The dated audit below is retained as historical evidence. Its counts and live-status labels are not the current campaign result.
+
+
 Last verified: 2026-10-15
 
 This file separates implementation evidence from planned or authorized-later work.
@@ -76,3 +84,8 @@ prove grader mechanics and case coverage, not model quality.
     allowing an accidental second click to create a duplicate version. Successful
     submissions and synthetic reset now clear those drafts; browser revalidation
     confirmed both submit buttons return to disabled.
+
+
+### 2026-10-25 calibration acceptance (current scoped round)
+
+Five user-requested repairs and real DeepSeek synthetic-material browser chain completed, without commits. PDF/assistive technology deferred by user. 385 tests, 17 PostgreSQL checks, 7 browser journeys; standalone build passed, aggregate command security-notice interruption retained. Original eight criteria unchanged; case 7 legacy keyword false-negative remains explicitly recorded. See [scoped report](docs/verification/2026-10-25-calibration-dod.md). This is engineering/assistant acceptance, not customer acceptance.

@@ -36,6 +36,20 @@ export const initialEvalCases: UnderstandingEvalCase[] = [
 
 export type DeterministicGrade = { passed: boolean; checks: Array<{ name: string; passed: boolean; message?: string }> };
 
+function proposalSurfaceText(proposal: z.infer<typeof understandingProposalV1Schema>, publicSummary = ""): string {
+  return [
+    publicSummary,
+    ...proposal.themes.flatMap((theme) => [
+      theme.title,
+      theme.summary,
+      ...theme.claims.flatMap((claim) => [claim.statement, ...claim.evidence.map((evidence) => evidence.quote)]),
+    ]),
+    ...proposal.gaps.flatMap((gap) => [gap.description, gap.whyItMatters]),
+    proposal.nextQuestion.question,
+    proposal.nextQuestion.whyItMatters,
+  ].join("\n").toLocaleLowerCase("en-US");
+}
+
 export function gradeDeck(input: { proposal: unknown; chunks: SourceChunk[]; understandingVersionId: string; positioningVersionId: string; appliedDirectionId: string }): DeterministicGrade {
   const checks: DeterministicGrade["checks"] = [];
   const parsed = deckProposalV1Schema.safeParse(input.proposal);
@@ -54,7 +68,7 @@ export function gradeDeck(input: { proposal: unknown; chunks: SourceChunk[]; und
   return { passed: checks.every((check) => check.passed), checks };
 }
 
-export function gradeProposal(input: { evalCase: UnderstandingEvalCase; proposal: unknown; chunks: SourceChunk[]; terminalPhase: string; stepCount: number; maxSteps: number }): DeterministicGrade {
+export function gradeProposal(input: { evalCase: UnderstandingEvalCase; proposal: unknown; publicSummary?: string; chunks: SourceChunk[]; terminalPhase: string; stepCount: number; maxSteps: number }): DeterministicGrade {
   const checks: DeterministicGrade["checks"] = [];
   const parsed = understandingProposalV1Schema.safeParse(input.proposal);
   checks.push({ name: "schema_valid", passed: parsed.success, message: parsed.success ? undefined : parsed.error.message });
@@ -65,7 +79,7 @@ export function gradeProposal(input: { evalCase: UnderstandingEvalCase; proposal
   } catch (error) {
     checks.push({ name: "evidence_valid", passed: false, message: error instanceof Error ? error.message : "Invalid evidence" });
   }
-  const combined = parsed.data.themes.flatMap((theme) => theme.claims.map((claim) => claim.statement)).join("\n").toLocaleLowerCase("en-US");
+  const combined = proposalSurfaceText(parsed.data, input.publicSummary);
   for (const phrase of input.evalCase.requiredPhrases) checks.push({ name: `required:${phrase}`, passed: combined.includes(phrase.toLocaleLowerCase("en-US")) });
   for (const phrase of input.evalCase.forbiddenPhrases) checks.push({ name: `forbidden:${phrase}`, passed: !combined.includes(phrase.toLocaleLowerCase("en-US")) });
   const states = new Set(parsed.data.themes.flatMap((theme) => theme.claims.map((claim) => claim.evidenceState)));

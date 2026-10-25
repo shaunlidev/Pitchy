@@ -1,12 +1,41 @@
-import { DeterministicDeckRunner, DeterministicPositioningRunner, DeterministicUnderstandingRunner, createLiveDeckRunner, createLivePositioningRunner, createLiveUnderstandingRunner, executePersistedUnderstandingRun } from "@pitchroom/agent";
-import { createDatabase, PitchroomRepository } from "@pitchroom/persistence";
+import { workflowEventLabel } from "./workspace-ux-state";
+import { proposeStory } from "./story-service";
+import { recordClaimCorrection } from "@pitchroom/domain";
+import { DeterministicDeckRunner, DeterministicPositioningRunner, DeterministicUnderstandingRunner, createLiveDeckRunner, createLivePositioningRunner, createLiveUnderstandingRunner, executePersistedUnderstandingRun, understandingLivePromptVersion } from "@pitchroom/agent";
+import { StoryRepository, ClarificationRepository, bindDatabase, createDatabase, PitchroomRepository } from "@pitchroom/persistence";
 import { PitchroomError, type UnderstandingProposalV1 } from "@pitchroom/domain";
-import type { FixtureState } from "./fixture-store";
+import { agentReviewForChunks, type FixtureState } from "./fixture-store";
 
 const globals = globalThis as typeof globalThis & { __pitchroomDatabase?: ReturnType<typeof createDatabase>; __pitchroomRepository?: PitchroomRepository };
 
+const requiredQueryTables = [
+  "clarificationTasks",
+  "projects",
+  "sources",
+  "commandReceipts",
+  "agentRuns",
+  "userInputs",
+  "understandingVersions",
+  "approvals",
+  "positioningVersions",
+  "workflowRuns",
+  "deckVersions",
+  "storyProposals",
+  "storyVersions",
+] as const;
+
 export function repositoryNeedsRefresh(value: unknown): boolean {
   return !value || Object.getPrototypeOf(value) !== PitchroomRepository.prototype;
+}
+
+export function databaseNeedsRefresh(value: unknown): boolean {
+  if (!value || typeof value !== "object" || !("db" in value)) return true;
+  const query = (value as { db?: { query?: Record<string, unknown> } }).db?.query;
+  if (!query) return true;
+  return requiredQueryTables.some((table) => {
+    const entry = query[table];
+    return !entry || typeof entry !== "object" || typeof (entry as { findFirst?: unknown }).findFirst !== "function";
+  });
 }
 
 function repository() {
@@ -14,9 +43,11 @@ function repository() {
   if (!url) throw new Error("DATABASE_URL is required for postgres-fake mode.");
   globals.__pitchroomDatabase ??= createDatabase(url);
   // Next.js preserves globalThis across development hot reloads. Comparing the
-  // complete prototype identity prevents any newly added repository method from
-  // being missed by a one-off capability check.
-  if (repositoryNeedsRefresh(globals.__pitchroomRepository)) {
+  // complete prototype identity catches repository changes. The Drizzle object
+  // must also be rebound because it captures the schema at construction time.
+  const refreshRepository = repositoryNeedsRefresh(globals.__pitchroomRepository);
+  if (refreshRepository || databaseNeedsRefresh(globals.__pitchroomDatabase)) {
+    globals.__pitchroomDatabase = bindDatabase(globals.__pitchroomDatabase.client);
     globals.__pitchroomRepository = new PitchroomRepository(globals.__pitchroomDatabase.db);
   }
   return globals.__pitchroomRepository!;
@@ -36,8 +67,24 @@ async function recoverPersistedWorkflowResult(input: { projectId: string; idempo
 }
 
 function eventView(type: string, payload: Record<string, unknown>) {
-  const labels: Record<string, string> = { run_started: "Agent started", phase_changed: "Phase changed", proposal_received: "Proposal received", version_created: "Version created", run_completed: "Review required", run_failed: "Agent failed" };
+  const labels: Record<string, string> = { run_started: "Agent started", phase_changed: "Phase changed", tool_called: "Using a source tool", tool_succeeded: payload.quarantined ? "Source passage isolated" : "Source tool completed", tool_failed: "Source tool failed", proposal_received: "Draft received", version_created: "Validated version created", run_completed: "Review required", run_failed: "Agent failed" };
   return { label: labels[type] ?? type.replaceAll("_", " "), detail: Object.entries(payload).map(([key, value]) => `${key}: ${String(value)}`).join(" · ") || "Recorded" };
+}
+
+export function mergeWorkspaceStreamEvents(
+  understandingEvents: Array<Omit<FixtureState["events"][number], "sequence">>,
+  workflowRuns: FixtureState["workflowRuns"],
+): FixtureState["events"] {
+  return [
+    ...understandingEvents.map((event, index) => ({ order: index, ...event })),
+    ...workflowRuns.flatMap((run, runIndex) => run.events.map((event, eventIndex) => ({
+      order: understandingEvents.length + runIndex * 1000 + eventIndex,
+      label: workflowEventLabel(run.kind, event.type),
+      detail: event.detail,
+      at: event.at,
+    }))),
+  ].sort((left, right) => left.at.localeCompare(right.at) || left.order - right.order)
+    .map(({ order: _order, ...event }, index) => ({ sequence: index + 1, ...event }));
 }
 
 export function reconstructSourceContent(chunks: Array<{ startOffset: number; text: string }>) {
@@ -48,19 +95,26 @@ export function reconstructSourceContent(chunks: Array<{ startOffset: number; te
 
 export async function readPersistentState(mode: "postgres-fake" | "live" = "postgres-fake"): Promise<FixtureState> {
   const currentProject = await project();
-  const [sources, versions, eventRows, positioning, deck, deckVersions, workflowRuns] = await Promise.all([repository().listSources(currentProject.id), repository().listVersions(currentProject.id), repository().listEvents(currentProject.id), repository().getCurrentPositioning(currentProject.id), repository().getCurrentDeck(currentProject.id), repository().listDeckVersions(currentProject.id), repository().listWorkflowRuns(currentProject.id)]);
-  const deckStale = Boolean(deck && (deck.understandingId !== currentProject.currentUnderstandingId || deck.positioningId !== currentProject.currentPositioningId || deck.appliedDirectionId !== positioning?.appliedDirectionId));
+  const [sources, versions, eventRows, positioning, positioningVersions, deck, deckVersions, workflowRuns] = await Promise.all([repository().listSources(currentProject.id), repository().listVersions(currentProject.id), repository().listEvents(currentProject.id), repository().getCurrentPositioning(currentProject.id), repository().listPositioningVersions(currentProject.id), repository().getCurrentDeck(currentProject.id), repository().listDeckVersions(currentProject.id), repository().listWorkflowRuns(currentProject.id)]);
+  const story = await new StoryRepository(repository().db).read(currentProject.id);
+  const deckStale = Boolean(deck && (deck.proposal.schemaVersion === 2 ? story.stale || deck.proposal.storyVersionId !== story.head.storyId || deck.proposal.storyGeneration !== story.head.generation : (deck.understandingId !== currentProject.currentUnderstandingId || deck.positioningId !== currentProject.currentPositioningId || deck.appliedDirectionId !== positioning?.appliedDirectionId)));
+  const streamedEvents = mergeWorkspaceStreamEvents(
+    eventRows.map(({ event }) => ({ ...eventView(event.type, event.payload), at: event.createdAt.toISOString() })),
+    workflowRuns.map((run) => ({ id: run.id, kind: run.kind as "positioning" | "deck" | "story", status: run.status as "running" | "completed" | "failed", failureMessage: run.failureMessage ?? undefined, events: run.events })),
+  );
   return {
-    mode,
+    mode, story,
+    clarifications: await new ClarificationRepository(repository().db).refresh(currentProject.id),
     project: { id: currentProject.id, name: currentProject.name, phase: currentProject.phase, revision: currentProject.version },
-    sources: sources.map((source) => ({ sourceId: source.id, name: source.name, mediaType: source.mediaType as "text/plain" | "text/markdown", content: reconstructSourceContent(source.chunks), contentHash: source.contentHash, chunks: source.chunks.map((chunk, ordinal) => ({ ...chunk, ordinal })) })),
-    versions: versions.map((version) => ({ id: version.id, number: version.version, proposal: version.proposal, createdBy: version.createdBy === "user" ? "user" : "agent", createdAt: version.createdAt.toISOString() })),
+    sources: sources.map((source) => ({ sourceId: source.id, name: source.name, mediaType: source.mediaType as "text/plain" | "text/markdown", content: reconstructSourceContent(source.chunks), contentHash: source.contentHash, chunks: source.chunks.map((chunk, ordinal) => ({ ...chunk, ordinal })), agentReview: agentReviewForChunks(source.chunks) })),
+    versions: versions.map((version) => ({ id: version.id, number: version.version, parentUnderstandingId: version.parentUnderstandingId ?? undefined, clarificationTaskId: version.clarificationTaskId ?? undefined, proposal: version.proposal, createdBy: version.createdBy === "user" ? "user" : "agent", createdAt: version.createdAt.toISOString() })),
     currentVersionId: currentProject.currentUnderstandingId ?? undefined,
     positioning: positioning ? { id: positioning.id, number: positioning.version, proposal: positioning.proposal, appliedDirectionId: positioning.appliedDirectionId ?? undefined, previousAppliedDirectionId: positioning.previousAppliedDirectionId ?? undefined, createdAt: positioning.createdAt.toISOString() } : undefined,
+    positioningVersions: positioningVersions.map((version) => ({ id: version.id, number: version.version, proposal: version.proposal, appliedDirectionId: version.appliedDirectionId ?? undefined, previousAppliedDirectionId: version.previousAppliedDirectionId ?? undefined, createdAt: version.createdAt.toISOString() })),
     deck: deck ? { id: deck.id, number: deck.version, proposal: deck.proposal, createdBy: deck.createdBy === "user" ? "user" as const : "agent" as const, createdAt: deck.createdAt.toISOString(), stale: deckStale } : undefined,
     deckVersions: deckVersions.map((version) => ({ id: version.id, number: version.version, proposal: version.proposal, createdBy: version.createdBy === "user" ? "user" as const : "agent" as const, createdAt: version.createdAt.toISOString() })),
-    workflowRuns: workflowRuns.map((run) => ({ id: run.id, kind: run.kind as "positioning" | "deck", status: run.status as "running" | "completed" | "failed", failureMessage: run.failureMessage ?? undefined, events: run.events })),
-    events: eventRows.map(({ event }, index) => ({ sequence: index + 1, ...eventView(event.type, event.payload), at: event.createdAt.toISOString() })),
+    workflowRuns: workflowRuns.map((run) => ({ id: run.id, kind: run.kind as "positioning" | "deck" | "story", status: run.status as "running" | "completed" | "failed", failureMessage: run.failureMessage ?? undefined, events: run.events })),
+    events: streamedEvents,
   };
 }
 
@@ -80,7 +134,7 @@ export async function runPersistentAgent(idempotencyKey: string, mode: "postgres
   const currentProject = await project();
   if (mode === "live" && process.env.PITCHROOM_LIVE_TRANSFER_ACK !== "authorized") throw new PitchroomError("INVALID_INPUT", "PITCHROOM_LIVE_TRANSFER_ACK=authorized is required before external model transfer.");
   const runner = mode === "live" ? createLiveUnderstandingRunner(repository(), { apiKey: process.env.OPENAI_API_KEY, model: process.env.OPENAI_MODEL, baseURL: process.env.OPENAI_BASE_URL }) : new DeterministicUnderstandingRunner();
-  await executePersistedUnderstandingRun({ projectId: currentProject.id, idempotencyKey, promptVersion: mode === "live" ? "understanding-live-v1" : "deterministic-v1", model: mode === "live" ? process.env.OPENAI_MODEL! : "deterministic-local", runner, store: repository(), signal });
+  await executePersistedUnderstandingRun({ projectId: currentProject.id, idempotencyKey, promptVersion: mode === "live" ? understandingLivePromptVersion : "deterministic-v1", model: mode === "live" ? process.env.OPENAI_MODEL! : "deterministic-local", runner, store: repository(), signal });
   return readPersistentState(mode);
 }
 
@@ -96,7 +150,7 @@ export async function correctPersistentClaim(text: string, themeIndex: number, c
   const { currentProject, proposal } = await currentProposal(expectedRevision);
   const claim = proposal.themes[themeIndex]?.claims[claimIndex];
   if (!claim) throw new PitchroomError("INVALID_INPUT", "The selected claim is no longer available. Refresh and choose it again.");
-  proposal.themes[themeIndex]!.claims[claimIndex] = { statement: text.trim(), evidenceState: "user_asserted", evidence: [], userInputIds: ["assigned-transactionally"] };
+  recordClaimCorrection(proposal, themeIndex, claimIndex, text, "assigned-transactionally");
   await repository().createUserVersion({ projectId: currentProject.id, expectedRevision, kind: "correction", text, actorId: "synthetic-local-user", idempotencyKey, proposal });
   return readPersistentState();
 }
@@ -140,6 +194,7 @@ export async function generatePersistentPositioning(expectedRevision: number, id
   }
   try {
     await repository().appendWorkflowEvent(run.id, "context_loaded", `${chunks.length} source chunks locked`);
+    await repository().appendWorkflowEvent(run.id, "model_requested", "Generating distinct positioning directions");
     const proposal = await runner.run({ understandingVersionId: version.id, understanding: version.proposal, chunks });
     await repository().appendWorkflowEvent(run.id, "proposal_validated", `${proposal.directions.length} directions passed evidence validation`);
     const created = await repository().createPositioning({ projectId: currentProject.id, understandingId: version.id, expectedRevision, proposal, idempotencyKey });
@@ -188,6 +243,7 @@ export async function generatePersistentDeck(expectedRevision: number, idempoten
   }
   try {
     await repository().appendWorkflowEvent(run.id, "inputs_locked", `understanding ${understanding.id}; positioning ${positioning.id}`);
+    await repository().appendWorkflowEvent(run.id, "model_requested", "Building the discussion deck from the applied direction");
     const proposal = await runner.run({ understandingVersionId: understanding.id, understanding: understanding.proposal, positioningVersionId: positioning.id, positioning: positioning.proposal, appliedDirectionId: positioning.appliedDirectionId, chunks });
     await repository().appendWorkflowEvent(run.id, "draft_validated", "five-page schema and evidence passed");
     const deck = await repository().createDeck({ projectId: currentProject.id, understandingId: understanding.id, positioningId: positioning.id, appliedDirectionId: positioning.appliedDirectionId, expectedRevision, proposal, idempotencyKey });
@@ -202,4 +258,27 @@ export async function editPersistentDeckPage(deckId: string, expectedDeckVersion
   const currentProject = await project();
   await repository().editDeckPage({ projectId: currentProject.id, deckId, expectedDeckVersion, pageId, title, body, idempotencyKey });
   return readPersistentState();
+}
+
+export async function submitPersistentClarification(input: { text: string; expectedRevision: number; commandId: string; rebaseTaskId?: string }) {
+  const current = await project();
+  await new ClarificationRepository(repository().db).submit({ ...input, projectId: current.id, actorId: "synthetic-local-user", runMode: process.env.PITCHROOM_RUNTIME === "live" ? "live" : "synthetic" });
+  return readPersistentState(process.env.PITCHROOM_RUNTIME === "live" ? "live" : "postgres-fake");
+}
+export async function decidePersistentClarification(input: { taskId: string; action: "apply" | "dismiss" | "retry"; commandId: string; result?: import("@pitchroom/domain").ClarificationResult }) {
+  const current = await project(); await new ClarificationRepository(repository().db).decide({ ...input, projectId: current.id });
+  return readPersistentState(process.env.PITCHROOM_RUNTIME === "live" ? "live" : "postgres-fake");
+}
+
+export async function proposePersistentStory(input: { expected: import("@pitchroom/domain").StoryHead; commandId: string; request: import("@pitchroom/domain").StoryRequest; retryOf?: string }, mode: "postgres-fake" | "live") {
+  const current = await project(); await proposeStory(repository(), { ...input, projectId: current.id }, mode); return readPersistentState(mode);
+}
+export async function decidePersistentStory(input: { proposalId: string; expected: import("@pitchroom/domain").StoryHead; commandId: string; decision: "apply" | "keep_current" }, mode: "postgres-fake" | "live") {
+  const current = await project(); await new StoryRepository(repository().db).decide({ ...input, projectId: current.id }); return readPersistentState(mode);
+}
+export async function undoPersistentStory(input: { expected: import("@pitchroom/domain").StoryHead; commandId: string }, mode: "postgres-fake" | "live") {
+  const current = await project(); await new StoryRepository(repository().db).undo({ ...input, projectId: current.id }); return readPersistentState(mode);
+}
+export async function createPersistentStoryDeck(input: { expected: import("@pitchroom/domain").StoryHead; commandId: string }, mode: "postgres-fake" | "live") {
+  const current = await project(); await new StoryRepository(repository().db).createDeck({ ...input, projectId: current.id }); return readPersistentState(mode);
 }

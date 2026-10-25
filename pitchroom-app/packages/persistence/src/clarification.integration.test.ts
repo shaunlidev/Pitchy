@@ -1,0 +1,30 @@
+import { afterAll,beforeAll,describe,expect,it } from "vitest";
+import { migrate } from "drizzle-orm/postgres-js/migrator";
+import { buildClarificationCandidate, type UnderstandingProposalV1 } from "@pitchroom/domain";
+import { createDatabase,PitchroomRepository } from "./repository";
+import { ClarificationRepository } from "./clarification-repository";
+const database=createDatabase(process.env.DATABASE_URL!);const repository=new PitchroomRepository(database.db);const feedback=new ClarificationRepository(database.db);
+beforeAll(async()=>{await migrate(database.db,{migrationsFolder:new URL("../migrations",import.meta.url).pathname});});
+afterAll(async()=>database.client.end());
+describe("PostgreSQL clarification transactions",()=>{
+ it("queues once, claims with ownership, applies atomically and rejects changed command bodies",async()=>{
+  const project=await repository.createProject("Synthetic Clarify integration");
+  await repository.addMaterial(project.id,{name:"brief.md",mediaType:"text/markdown",text:"Northwind sells menu planning."},"material");
+  const source=(await repository.listSources(project.id))[0]!;const chunk=source.chunks[0]!;
+  const proposal:UnderstandingProposalV1={schemaVersion:1,themes:[{title:"Audience",summary:"Consumer focus",claims:[{statement:chunk.text,evidenceState:"supported",evidence:[{sourceId:source.id,chunkId:chunk.id,quote:chunk.text}],userInputIds:[]}]}],gaps:[],nextQuestion:{question:"Who decides?",whyItMatters:"Changes the audience",relatedThemeIndexes:[0]}};
+  const run=await repository.createRun(project.id,"understanding","test","fake");await repository.completeRun({projectId:project.id,runId:run.id,expectedRevision:0,proposal});
+  const before=(await repository.getProject(project.id))!;
+  const input={projectId:project.id,text:"Procurement approves the pilot.",commandId:"answer",expectedRevision:before.version,actorId:"synthetic-test-user"};
+  const [a,b]=await Promise.all([feedback.submit(input),feedback.submit(input)]);expect(a.id).toBe(b.id);
+  expect((await repository.getProject(project.id))!.currentUnderstandingId).toBe(before.currentUnderstandingId);
+  await expect(repository.acceptUnderstanding({projectId:project.id,understandingId:before.currentUnderstandingId!,expectedRevision:before.version,actorId:"synthetic-test-user",idempotencyKey:"accept"})).rejects.toThrow(/Resolve/);
+  const claimed=await feedback.claim("fake","synthetic",project.id);expect(claimed!.id).toBe(a.id);expect(await feedback.claim("fake","synthetic",project.id)).toBeUndefined();
+  const result={reason:"User clarified the decision-maker",operations:[{type:"update_summary" as const,themeId:claimed!.base.themes[0]!.id!,text:"Procurement should assess a pilot."},{type:"add_answer" as const,themeId:claimed!.base.themes[0]!.id!}]};
+  await feedback.finish(claimed!,{result,candidate:buildClarificationCandidate(claimed!,result)});
+  const applied=await feedback.decide({projectId:project.id,taskId:a.id,action:"apply",commandId:"apply"});
+  expect((await repository.getProject(project.id))!.version).toBe(before.version+1);
+  const replay=await feedback.decide({projectId:project.id,taskId:a.id,action:"apply",commandId:"apply"});expect(replay.resultVersionId).toBe(applied.resultVersionId);
+  expect(await repository.listVersions(project.id)).toHaveLength(2);
+  await expect(feedback.decide({projectId:project.id,taskId:a.id,action:"apply",commandId:"apply",result:{...result,reason:"different body"}})).rejects.toThrow(/resolved/);
+ });
+});

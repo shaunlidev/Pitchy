@@ -44,6 +44,8 @@ export function buildDeterministicUnderstanding(input: UnderstandingAgentInput):
 
 export class DeterministicUnderstandingRunner implements UnderstandingAgentRunner {
   async run(input: UnderstandingAgentInput): Promise<UnderstandingAgentResult> {
-    return buildDeterministicUnderstanding(input);
+    const result = buildDeterministicUnderstanding(input);
+    for (const event of result.trace ?? []) await input.onTrace?.(event);
+    return result;
   }
 }

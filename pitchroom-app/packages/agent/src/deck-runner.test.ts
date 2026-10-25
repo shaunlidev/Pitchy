@@ -1,3 +1,4 @@
+import { coreMessageWireFixture, liveDeckWireFixture } from "./presentation.testkit";
 import { describe, expect, it } from "vitest";
 import { buildDeterministicDeck, ResponsesDeckRunner } from "./deck-runner";
 
@@ -21,7 +22,7 @@ describe("deck runner", () => {
     let requestBody: Record<string, unknown> | undefined;
     const mockFetch = (async (_url: string | URL | Request, init?: RequestInit) => {
       requestBody = JSON.parse(String(init?.body));
-      return new Response(JSON.stringify({ status: "completed", output: [{ type: "message", content: [{ type: "output_text", text: JSON.stringify(proposal) }] }] }), { status: 200, headers: { "content-type": "application/json" } });
+      return new Response(JSON.stringify({ status: "completed", output: [{ type: "message", content: [{ type: "output_text", text: JSON.stringify(liveDeckWireFixture(proposal,input.positioning.directions[0]!.coreMessage)) }] }] }), { status: 200, headers: { "content-type": "application/json" } });
     }) as typeof fetch;
     const result = await new ResponsesDeckRunner({ apiKey: "test-key", model: "pinned-model", baseURL: "https://example.test/v1/", fetch: mockFetch }).run(input);
     expect(result.pages).toHaveLength(5);
@@ -30,7 +31,14 @@ describe("deck runner", () => {
 
   it("rejects a mocked live deck aimed at stale upstream state", async () => {
     const proposal = { ...buildDeterministicDeck(input), positioningVersionId: "stale" };
-    const mockFetch = (async () => new Response(JSON.stringify({ status: "completed", output: [{ type: "message", content: [{ type: "output_text", text: JSON.stringify(proposal) }] }] }), { status: 200 })) as typeof fetch;
+    const mockFetch = (async () => new Response(JSON.stringify({ status: "completed", output: [{ type: "message", content: [{ type: "output_text", text: JSON.stringify(liveDeckWireFixture(proposal,input.positioning.directions[0]!.coreMessage)) }] }] }), { status: 200 })) as typeof fetch;
     await expect(new ResponsesDeckRunner({ apiKey: "test-key", model: "pinned-model", baseURL: "https://example.test/v1", fetch: mockFetch }).run(input)).rejects.toThrow("stale upstream versions");
   });
+});
+
+it("reports provider truncation and sets bounded DeepSeek reasoning/output explicitly",async()=>{
+ let body:any;
+ const transport=(async(_url:unknown,init?:RequestInit)=>{body=JSON.parse(String(init?.body));return new Response(JSON.stringify({status:"incomplete",output:[]}),{status:200});}) as typeof fetch;
+ await expect(new ResponsesDeckRunner({apiKey:"offline",model:"deepseek-flash",baseURL:"https://api.deepseek.com",fetch:transport}).run(input)).rejects.toThrow("Provider output was incomplete");
+ expect(body.max_output_tokens).toBe(16000);expect(body.reasoning).toEqual({effort:"low"});expect(body.store).toBe(false);
 });

@@ -1,0 +1,42 @@
+{
+  "id": "splitwise-v1",
+  "evaluationProfile": "generic_core_message",
+  "originalFraming": "An app for splitting expenses with friends and family.",
+  "sources": [
+    {
+      "id": "official-getting-started",
+      "authority": "official_documentation",
+      "url": "https://kb.splitwise.com/getting-started/how-do-i-use-splitwise",
+      "material": "Splitwise lets friends and family record shared expenses, see who owes whom, and settle when they are ready. Groups support ongoing situations such as apartments, trips, and family vacations. When an expense is saved, every participant's balance updates automatically.",
+      "boundary": "Official documentation establishes intended mechanics, not whether people feel less conflict or reliably repay one another."
+    },
+    {
+      "id": "official-simplify-debts",
+      "authority": "official_documentation",
+      "url": "https://kb.splitwise.com/balances-and-expenses/what-is-simplify-debts",
+      "material": "Simplify Debts restructures who owes whom inside a group to minimize the number of payments required to settle, without changing anyone's total balance. New expenses or payments cause the group balances to be simplified again automatically.",
+      "boundary": "The feature reduces payment paths; it does not guarantee payment, eliminate disagreement, or preserve a specific person-to-person debt path."
+    },
+    {
+      "id": "official-about",
+      "authority": "official_company_description",
+      "url": "https://secure.splitwise.com/about",
+      "material": "Splitwise organizes shared expenses and IOUs in one place so participants can see who they owe across situations such as rent, trips, and meals.",
+      "boundary": "Vendor-authored positioning supports the intended use case, not independent evidence of relationship outcomes."
+    },
+    {
+      "id": "review-patterns",
+      "authority": "aggregated_public_reviews",
+      "url": "https://apps.apple.com/us/app/splitwise/id458023433?see-all=reviews",
+      "material": "Public reviews describe using Splitwise for group trips, roommates, families, and recurring bills. Positive accounts value shared visibility into who paid and who owes. Critical accounts mention free-plan transaction limits, subscription prompts, confusing balances, manual entry, and friction when other participants do not use the app consistently.",
+      "boundary": "Public reviews are directional and self-selected. They do not establish prevalence, causality, or market-wide satisfaction."
+    },
+    {
+      "id": "social-friction-signal",
+      "authority": "community_discussion_summary",
+      "url": "https://www.reddit.com/r/AskIndia/comments/1g8msmf/",
+      "material": "Community discussions describe a recurring discomfort: someone can know exactly what friends owe while still feeling awkward about asking them to settle. Shared-expense tools can externalize the record, but they do not make another person pay or remove every difficult conversation.",
+      "boundary": "Anecdotal discussions support a hypothesis about social friction; they are not controlled research and may overrepresent unresolved cases."
+    }
+  ]
+}

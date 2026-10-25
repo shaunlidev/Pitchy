@@ -39,11 +39,14 @@ describe("DeepSeek Responses adapter", () => {
       .mockResolvedValueOnce(jsonResponse({ status: "completed", output: [{ type: "function_call", call_id: "2", name: "read_chunk", arguments: JSON.stringify({ chunkId: chunk.id }) }] }))
       .mockResolvedValueOnce(jsonResponse({ status: "completed", usage: { total_tokens: 42 }, output: [{ type: "message", content: [{ type: "output_text", text: JSON.stringify({ proposal: { schemaVersion: 1, themes: [{ title: "Growth", summary: "Revenue grew.", claims: [{ statement: "Revenue grew 40 percent.", evidenceState: "supported", evidence: [{ sourceId: chunk.sourceId, chunkId: chunk.id, quote: chunk.text }], userInputIds: [] }] }], gaps: [], nextQuestion: { question: "What drove growth?", whyItMatters: "It explains the result.", relatedThemeIndexes: [0] } }, publicSummary: "One supported growth claim." }) }] }] }));
     const runner = new DeepSeekUnderstandingRunner(repository, { apiKey: "key", model: "deepseek-flash", baseURL: "https://api.deepseek.com", fetch: fetchMock });
-    const result = await runner.run({ projectId: "project-1", chunks: [chunk] });
+    const streamed: string[] = [];
+    const result = await runner.run({ projectId: "project-1", chunks: [chunk], onTrace: (event) => { streamed.push(event.type); } });
     expect(result.proposal.themes[0]?.claims[0]?.evidenceState).toBe("supported");
     expect(result.trace?.map((event) => event.type)).toEqual(["tool_called", "tool_succeeded", "tool_called", "tool_succeeded"]);
+    expect(streamed).toEqual(["tool_called", "tool_succeeded", "tool_called", "tool_succeeded"]);
     expect(result.metrics).toMatchObject({ provider: "deepseek-responses", toolCallCount: 2 });
     expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toMatchObject({
+      input: expect.arrayContaining([expect.objectContaining({role:"system",content:expect.stringContaining("Pitchroom is English-only")})]),
       tool_choice: "auto",
       text: { format: { type: "json_schema", name: "pitchroom_understanding_v1" } },
     });
@@ -67,4 +70,8 @@ describe("DeepSeek Responses adapter", () => {
       expect((error as { trace?: unknown[] }).trace).toHaveLength(2);
     }
   });
+});
+
+it("publishes the same public-summary length limit enforced by the local parser",async()=>{
+ const {deepSeekOutputJsonSchema}=await import("./deepseek-runner");expect(deepSeekOutputJsonSchema.properties.publicSummary).toMatchObject({maxLength:1000});
 });

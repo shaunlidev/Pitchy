@@ -1,6 +1,6 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import { createLiveUnderstandingRunner, runUnderstandingAgent } from "@pitchroom/agent";
+import { createLiveUnderstandingRunner, runUnderstandingAgent, understandingLivePromptVersion } from "@pitchroom/agent";
 import { ingestMaterial, type SourceRecord, type ToolRepository } from "@pitchroom/domain";
 import { writeRunArtifactBundle } from "@pitchroom/testkit";
 import { gradeProposal, initialEvalCases } from "./index.ts";
@@ -30,9 +30,9 @@ for (const evalCase of selected) {
   const startedAt = new Date();
   const outcome = await runUnderstandingAgent("materials_ready", { projectId, chunks: sources.flatMap((source) => source.chunks) }, runner);
   const latencyMs = Date.now() - startedAt.getTime();
-  const grade = gradeProposal({ evalCase, proposal: outcome.proposal, chunks: sources.flatMap((source) => source.chunks), terminalPhase: outcome.phase, stepCount: Number(outcome.metrics?.stepCount ?? 8), maxSteps: 8 });
+  const grade = gradeProposal({ evalCase, proposal: outcome.proposal, publicSummary: outcome.publicSummary, chunks: sources.flatMap((source) => source.chunks), terminalPhase: outcome.phase, stepCount: Number(outcome.metrics?.stepCount ?? 8), maxSteps: 8 });
   const runId = `${batchId}-${evalCase.id}`;
-  await writeRunArtifactBundle({ root, manifest: { runId, mode: "live-model", codeVersion: "working-tree", schemaVersion: 1, promptVersion: "understanding-live-v1", model: process.env.OPENAI_MODEL, startedAt: startedAt.toISOString() }, inputs: { caseId: evalCase.id, sourceHashes: materials.map((material) => material.contentHash) }, events: outcome.trace.map((event, index) => ({ runId, sequence: index + 1, type: event.type, timestamp: startedAt.toISOString(), payload: event.payload })), proposal: outcome.proposal, outcome: { phase: outcome.phase, latencyMs, metrics: outcome.metrics }, scores: grade });
+  await writeRunArtifactBundle({ root, manifest: { runId, mode: "live-model", codeVersion: "working-tree", schemaVersion: 1, promptVersion: understandingLivePromptVersion, model: process.env.OPENAI_MODEL, startedAt: startedAt.toISOString() }, inputs: { caseId: evalCase.id, sourceHashes: materials.map((material) => material.contentHash) }, events: outcome.trace.map((event, index) => ({ runId, sequence: index + 1, type: event.type, timestamp: startedAt.toISOString(), payload: event.payload })), proposal: outcome.proposal, outcome: { phase: outcome.phase, latencyMs, metrics: outcome.metrics }, scores: grade });
   results.push({ id: evalCase.id, passed: grade.passed, latencyMs, failures: grade.checks.filter((check) => !check.passed).map((check) => check.name) });
   if (!grade.passed && evalCase.critical) break;
 }

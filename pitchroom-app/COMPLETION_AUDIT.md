@@ -1,5 +1,10 @@
 # V6 local-loop completion audit
 
+> **2026-10-25 current verification:** a fresh `pitchroom-app/` implementation exists. The live web journey has now exercised real DeepSeek Understanding → worker Clarify → Positioning → Deck on an isolated synthetic PostgreSQL project. This supersedes older “not built / live not run” status statements for that narrow scope. Product acceptance remains **not passed**. See [full test matrix, DoD, actual failures and correction plan](docs/verification/2026-10-25-live-full-flow.md).
+
+The dated audit below is retained as historical evidence. Its counts and live-status labels are not the current campaign result.
+
+
 Last audited: 2026-10-15
 
 ## Complete local loop added after the first slice
@@ -64,3 +69,8 @@ deployment were authorized on 2026-10-14. Authorization is not evidence of a
 successful gate: T90 still lacks credentials, T100 still needs screen-reader,
 live-runtime, and user judgments, and T110 still needs concrete production
 identity, retention, backup, hosting, and rollback decisions.
+
+
+### 2026-10-25 calibration acceptance (current scoped round)
+
+Five user-requested repairs and real DeepSeek synthetic-material browser chain completed, without commits. PDF/assistive technology deferred by user. 385 tests, 17 PostgreSQL checks, 7 browser journeys; standalone build passed, aggregate command security-notice interruption retained. Original eight criteria unchanged; case 7 legacy keyword false-negative remains explicitly recorded. See [scoped report](docs/verification/2026-10-25-calibration-dod.md). This is engineering/assistant acceptance, not customer acceptance.

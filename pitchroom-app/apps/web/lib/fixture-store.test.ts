@@ -41,7 +41,10 @@ describe("synthetic browser fixture", () => {
     const corrected = correctFixtureClaim("The audience should review the pilot evidence.", 0, 1, answered.project.revision);
     const claims = corrected.versions.at(-1)!.proposal.themes[0]!.claims;
     expect(claims[0]!.statement).toBe("Revenue grew 40 percent.");
-    expect(claims[1]).toMatchObject({ statement: "The audience should review the pilot evidence.", evidenceState: "user_asserted" });
+    expect(claims[1]).toMatchObject({ statement: "The audience should approve the pilot.", evidenceState: "user_asserted", supersededBy: { replacementClaimId: claims[2]!.id } });
+    expect(claims[2]).toMatchObject({ statement: "The audience should review the pilot evidence.", evidenceState: "user_asserted" });
+    expect(claims[2]!.supersededBy).toBeUndefined();
+    expect(claims[1]!.supersededBy!.inputId).toBe(claims[2]!.userInputIds[0]);
   });
 
   it("preserves an unknown as a new immutable version", () => {
@@ -106,6 +109,8 @@ describe("synthetic browser fixture", () => {
     const applied = applyFixturePositioning(directionId, positioned.project.revision);
     const adjusted = adjustFixturePositioning(directionId, "headline", "Use the buyer's exact words.", applied.project.revision);
     expect(adjusted.positioning?.number).toBe(2);
+    expect(adjusted.positioningVersions.map((version) => version.number)).toEqual([1, 2]);
+    expect(adjusted.positioningVersions[0]?.proposal.directions[0]?.coreMessage).not.toBe("Use the buyer's exact words.");
     expect(adjusted.positioning?.proposal.directions[0]?.coreMessage).toBe("Use the buyer's exact words.");
     expect(adjusted.positioning?.appliedDirectionId).toBeUndefined();
     expect(() => generateFixtureDeck(adjusted.project.revision)).toThrow("Apply a current positioning direction");
@@ -124,5 +129,26 @@ describe("synthetic browser fixture", () => {
     const changed = addFixtureMaterial({ name: "late.md", mediaType: "text/markdown", text: "New evidence." });
     expect(changed.deck?.stale).toBe(true);
     expect(changed.deckVersions).toHaveLength(2);
+  });
+
+  it("propagates participant 01's applied English Core Message into the deck opening", () => {
+    const appliedMessage = "Turn felt-but-unspoken value into a positioning choice with real tradeoffs.";
+    addFixtureMaterial({
+      name: "pitchroom-product-brief.md",
+      mediaType: "text/markdown",
+      text: "Pitchroom helps consultants turn scattered client material into positioning choices with explicit tradeoffs and a clear recommendation while the consultant keeps the final decision.",
+    });
+    const reviewed = runFixtureAgent();
+    acceptFixture(reviewed.project.revision);
+    const positioned = generateFixturePositioning();
+    const directionId = positioned.positioning!.proposal.directions[0]!.id;
+    const adjusted = adjustFixturePositioning(directionId, "headline", appliedMessage, positioned.project.revision);
+    const applied = applyFixturePositioning(directionId, adjusted.project.revision);
+    const deck = generateFixtureDeck(applied.project.revision);
+
+    expect(applied.positioning?.proposal.directions.find((direction) => direction.id === directionId)?.coreMessage).toBe(appliedMessage);
+    expect(applied.positioning?.appliedDirectionId).toBe(directionId);
+    expect(deck.deck?.proposal.positioningVersionId).toBe(applied.positioning?.id);
+    expect(deck.deck?.proposal.pages[0]).toMatchObject({ kind: "positioning", body: appliedMessage });
   });
 });

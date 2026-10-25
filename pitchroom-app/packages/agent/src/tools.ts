@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { PitchroomError, type ToolRepository } from "@pitchroom/domain";
+import { isInstructionLikeSourceText, quarantineChunkForAgent } from "./prompt-safety";
 export type { SourceRecord, ToolRepository } from "@pitchroom/domain";
 
 export const toolCallSchema = z.discriminatedUnion("name", [
@@ -55,7 +56,7 @@ export async function executeAgentTool(
     case "read_chunk": {
       const chunk = await repository.getChunk(projectId, call.arguments.chunkId);
       if (!chunk) throw new PitchroomError("NOT_FOUND", "Chunk was not found in this project.");
-      return chunk;
+      return quarantineChunkForAgent(chunk);
     }
     case "search_chunks": {
       const sources = await repository.listSources(projectId);
@@ -65,7 +66,9 @@ export async function executeAgentTool(
         .filter(({ score }) => score > 0)
         .sort((left, right) => right.score - left.score || left.chunk.id.localeCompare(right.chunk.id))
         .slice(0, call.arguments.limit)
-        .map(({ chunk, score }) => ({ ...chunk, score }));
+        .map(({ chunk, score }) => isInstructionLikeSourceText(chunk.text)
+          ? { ...quarantineChunkForAgent(chunk), score }
+          : { ...chunk, score });
     }
   }
 }

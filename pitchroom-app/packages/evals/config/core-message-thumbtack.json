@@ -1,0 +1,21 @@
+{
+  "id": "thumbtack-local-service-v1",
+  "evaluationProfile": "generic_core_message",
+  "originalFraming": "A marketplace for finding local home-service professionals.",
+  "sources": [
+    {
+      "id": "thumbtack-product",
+      "authority": "official_product_page",
+      "url": "https://www.thumbtack.com/",
+      "material": "Find local pros for repairs, upgrades, and projects big or small — all in one place. Share details about your project in your own words, so we can find your best fit. Only see local, trusted pros. No calls or text until you message a pro. Sometimes getting started is the hardest part. We've got expert guidance for your next project.",
+      "boundary": "Vendor-authored marketplace claims. Matching, profiles, reviews and guidance do not independently guarantee fit, availability, price, safety, or service quality."
+    },
+    {
+      "id": "thumbtack-terms",
+      "authority": "official_terms",
+      "url": "https://www.thumbtack.com/terms",
+      "material": "The Platform is an online web-and app-based marketplace that enables Service Professionals and Consumers to connect. Thumbtack does not sell or otherwise provide Pro Services. Consumers understand that any such facilitation does not constitute a warranty, guarantee, or endorsement in relation to the Pro Services. Service Professionals understand and agree that using the Platform does not guarantee that anyone will engage them for Pro Services.",
+      "boundary": "The terms explicitly limit outcome claims: the platform facilitates connection but does not warrant, guarantee or endorse the underlying service."
+    }
+  ]
+}

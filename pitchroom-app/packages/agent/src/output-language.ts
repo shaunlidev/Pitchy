@@ -1,0 +1,2 @@
+export const outputLanguage = "English";
+export const outputLanguageInstruction = "Pitchroom is English-only. Write all newly generated prose in English, including summaries, questions, explanations, recommendations, narrative and slide text, regardless of source language, saved question language or consultant feedback language. Preserve exact source quotations, proper names, original framing and exact human wording in their original language; do not translate or overwrite saved versions. Non-English feedback is input, not a request to change the output language.";

@@ -1,0 +1,21 @@
+{
+  "id": "duolingo-education-v1",
+  "evaluationProfile": "generic_core_message",
+  "originalFraming": "A free, fun and personalized learning app.",
+  "sources": [
+    {
+      "id": "duolingo-product",
+      "authority": "official_product_page",
+      "url": "https://en.duolingo.com/",
+      "material": "With quick, bite-sized lessons, you’ll earn points and unlock new levels while gaining real-world communication skills. We make it easy to form a habit of language learning with game-like features, fun challenges, and reminders from our friendly mascot, Duo the owl. Combining the best of AI and language science, lessons are tailored to help you learn at just the right level and pace.",
+      "boundary": "Vendor-authored product and efficacy framing. It supports lesson format, motivation features and intended personalization, not guaranteed fluency or equal outcomes for every learner."
+    },
+    {
+      "id": "duolingo-usage-boundary",
+      "authority": "official_learning_guidance",
+      "url": "https://blog.duolingo.com/how-well-does-duolingo-work/",
+      "material": "Just like signing up for a gym membership or enrolling in a dance class, it's not the act of downloading Duolingo that will teach you a language. It's all about how you use it. You may just need a single three-minute lesson to keep your Duolingo streak alive, but to make progress and improve your proficiency, you'll need longer study sessions. Staying motivated is the hardest part of learning something new.",
+      "boundary": "Official guidance explicitly separates engagement and streak maintenance from proficiency. Do not imply that reminders, points or short sessions guarantee learning outcomes."
+    }
+  ]
+}

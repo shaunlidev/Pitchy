@@ -33,9 +33,18 @@ export async function executePersistedUnderstandingRun(input: {
   const append = (type: AgentEvent["type"], payload: Record<string, unknown>) => input.store.appendEvent({ runId: run.id, sequence: ++sequence, type, timestamp: now(), payload });
   await append("run_started", { projectId: input.projectId, promptVersion: input.promptVersion, model: input.model });
   await append("phase_changed", { from: startingPhase, to: "reading" });
+  let streamedTraceCount = 0;
   try {
-    const result = await runUnderstandingAgent("materials_ready", { projectId: input.projectId, chunks: sources.flatMap((source) => source.chunks), signal: input.signal }, input.runner);
-    for (const traceEvent of result.trace) await append(traceEvent.type, traceEvent.payload);
+    const result = await runUnderstandingAgent("materials_ready", {
+      projectId: input.projectId,
+      chunks: sources.flatMap((source) => source.chunks),
+      signal: input.signal,
+      onTrace: async (traceEvent) => {
+        await append(traceEvent.type, traceEvent.payload);
+        streamedTraceCount += 1;
+      },
+    }, input.runner);
+    for (const traceEvent of result.trace.slice(streamedTraceCount)) await append(traceEvent.type, traceEvent.payload);
     await append("proposal_received", { schemaVersion: result.proposal.schemaVersion });
     const version = await input.store.completeRun({ projectId: input.projectId, runId: run.id, expectedRevision: project.version, proposal: result.proposal });
     await append("version_created", { understandingId: version.id, version: version.version });
@@ -47,7 +56,7 @@ export async function executePersistedUnderstandingRun(input: {
     const failedTrace = error && typeof error === "object" && "trace" in error && Array.isArray(error.trace)
       ? error.trace as AgentEvent[]
       : [];
-    for (const traceEvent of failedTrace) await append(traceEvent.type, traceEvent.payload);
+    for (const traceEvent of failedTrace.slice(streamedTraceCount)) await append(traceEvent.type, traceEvent.payload);
     if (input.signal?.aborted || (error instanceof PitchroomError && error.code === "CANCELLED")) {
       await append("phase_changed", { from: "reading", to: "cancelled" });
       await append("run_cancelled", { message });

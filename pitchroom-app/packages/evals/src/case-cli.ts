@@ -57,6 +57,7 @@ const repository: ToolRepository = {
 
 let events: AgentEvent[];
 let terminalProposal = proposal;
+let terminalPublicSummary = evalCase.annotation;
 let stepCount: number;
 
 if (state === "user_asserted") {
@@ -82,11 +83,12 @@ if (state === "user_asserted") {
   const result = await orchestrateUnderstandingRun({ runId, projectId, currentPhase: "materials_ready", repository, agent, now: () => timestamp, budgets: { maxSteps: 8, maxRepeatedCall: 2, maxConsecutiveToolFailures: 3 } });
   events = result.events;
   terminalProposal = result.proposal;
+  terminalPublicSummary = result.publicSummary;
   stepCount = Number([...result.events].reverse().find((event: AgentEvent) => event.type === "run_completed")?.payload.step ?? actions.length);
 }
 
 const terminalPhase = replayTerminalPhase(events) ?? "review_required";
-const grade = gradeProposal({ evalCase, proposal: terminalProposal, chunks, terminalPhase, stepCount, maxSteps: 8 });
+const grade = gradeProposal({ evalCase, proposal: terminalProposal, publicSummary: terminalPublicSummary, chunks, terminalPhase, stepCount, maxSteps: 8 });
 const target = await writeRunArtifactBundle({ root: resolve(".artifacts/agent-runs"), manifest: { runId, mode: "offline-eval", codeVersion: "working-tree", schemaVersion: 1, promptVersion: "scripted-tool-harness-v2", model: "scripted-step-agent", startedAt: timestamp }, inputs: { caseId, sourceHashes: materials.map((material) => material.contentHash) }, events, proposal: terminalProposal, outcome: { phase: terminalPhase, passed: grade.passed }, scores: grade });
 console.log(JSON.stringify({ runId, caseId, passed: grade.passed, artifact: target, eventCount: events.length, toolCalls: events.filter((event) => event.type === "tool_called").length, failedChecks: grade.checks.filter((check) => !check.passed) }, null, 2));
 if (!grade.passed) process.exitCode = 1;

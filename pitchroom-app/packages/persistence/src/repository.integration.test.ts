@@ -163,6 +163,7 @@ describe("PostgreSQL repository contract", () => {
     await repository.applyPositioning({ projectId: project.id, directionId: "proof", expectedRevision: 1, idempotencyKey: "positioning-reapply" });
     const adjusted = await repository.adjustPositioning({ projectId: project.id, directionId: "proof", mode: "headline", text: "Use the buyer's exact words.", expectedRevision: 1, idempotencyKey: "positioning-adjust" });
     expect(adjusted?.proposal.directions[0]?.coreMessage).toBe("Use the buyer's exact words.");
+    expect((await repository.listPositioningVersions(project.id)).map((version) => version.version)).toEqual([1, 2]);
     expect(adjusted?.appliedDirectionId).toBeNull();
     await repository.applyPositioning({ projectId: project.id, directionId: "proof", expectedRevision: 1, idempotencyKey: "positioning-adjusted-apply" });
     const page = (id: string, kind: DeckProposalV1["pages"][number]["kind"], title: string) => ({ id, kind, title, body: title, evidence: kind === "open_questions" ? [] : [{ sourceId: source.id, chunkId: chunk.id, quote: "Teams recover two days." }], userInputIds: [], openQuestions: kind === "open_questions" ? ["Who decides?"] : [] });

@@ -5,6 +5,7 @@ import {
   PitchroomError,
   defaultProjectCharacterLimit,
   deckProposalV1Schema,
+  deckProposalSchema,
   ingestMaterial,
   positioningProposalV1Schema,
   understandingProposalV1Schema,
@@ -20,9 +21,13 @@ import * as schema from "./schema";
 
 export type Database = PostgresJsDatabase<typeof schema>;
 
+export function bindDatabase(client: ReturnType<typeof postgres>) {
+  return { client, db: drizzle(client, { schema }) };
+}
+
 export function createDatabase(url: string) {
   const client = postgres(url, { max: 5 });
-  return { client, db: drizzle(client, { schema }) };
+  return bindDatabase(client);
 }
 
 export class PitchroomRepository implements ToolRepository {
@@ -238,13 +243,16 @@ export class PitchroomRepository implements ToolRepository {
       }
       const [locked] = await tx.execute<{ version: number; phase: string }>(sql`select version, phase from projects where id = ${input.projectId} for update`);
       if (!locked) throw new PitchroomError("NOT_FOUND", "Project was not found.");
+      const pending = await tx.execute(sql`select id from clarification_tasks where project_id = ${input.projectId} and payload->>'status' in ('queued','running','proposal_ready','no_change','failed') limit 1`);
+      if (pending.length) throw new PitchroomError("CONFLICT", "Resolve the current clarification before changing the version.");
       if (locked.phase !== "review_required" || locked.version !== input.expectedRevision) throw new PitchroomError("CONFLICT", "User input targets a stale understanding version.");
       const [userInput] = await tx.insert(schema.userInputs).values({ projectId: input.projectId, kind: input.kind, text: input.text, actorId: input.actorId, targetVersion: input.expectedRevision, idempotencyKey: input.idempotencyKey }).returning();
       if (!userInput) throw new PitchroomError("PERSISTENCE_ERROR", "User input was not recorded.");
       const attributedProposal = structuredClone(input.proposal);
       for (const theme of attributedProposal.themes) {
         for (const claim of theme.claims) {
-          if (claim.evidenceState === "user_asserted") claim.userInputIds = [userInput.id];
+          if (claim.evidenceState === "user_asserted" && claim.userInputIds.some(id => id === "assigned-transactionally" || id === "pending-at-persistence-boundary")) claim.userInputIds = [userInput.id];
+          if (claim.supersededBy?.inputId === "assigned-transactionally") { claim.supersededBy.inputId = userInput.id; claim.supersededBy.taskId = `manual:${userInput.id}`; }
         }
       }
       const validatedProposal = understandingProposalV1Schema.parse(attributedProposal);
@@ -258,6 +266,9 @@ export class PitchroomRepository implements ToolRepository {
 
   async acceptUnderstanding(input: { projectId: string; understandingId: string; expectedRevision: number; actorId: string; idempotencyKey: string }) {
     return this.db.transaction(async (tx) => {
+      await tx.execute(sql`select id from projects where id = ${input.projectId} for update`);
+      const pending = await tx.execute(sql`select id from clarification_tasks where project_id = ${input.projectId} and payload->>'status' in ('queued','running','proposal_ready','no_change','failed') limit 1`);
+      if (pending.length) throw new PitchroomError("CONFLICT", "Resolve the current clarification before accepting.");
       const project = await tx.query.projects.findFirst({ where: eq(schema.projects.id, input.projectId) });
       if (!project) throw new PitchroomError("NOT_FOUND", "Project was not found.");
       if (project.version !== input.expectedRevision || project.currentUnderstandingId !== input.understandingId || project.phase !== "review_required") {
@@ -278,6 +289,13 @@ export class PitchroomRepository implements ToolRepository {
     const project = await this.getProject(projectId);
     if (!project?.currentPositioningId) return undefined;
     return this.db.query.positioningVersions.findFirst({ where: and(eq(schema.positioningVersions.projectId, projectId), eq(schema.positioningVersions.id, project.currentPositioningId)) });
+  }
+
+  async listPositioningVersions(projectId: string) {
+    return this.db.query.positioningVersions.findMany({
+      where: eq(schema.positioningVersions.projectId, projectId),
+      orderBy: asc(schema.positioningVersions.version),
+    });
   }
 
   async createPositioning(input: { projectId: string; understandingId: string; expectedRevision: number; proposal: PositioningProposalV1; idempotencyKey: string }) {
@@ -371,7 +389,7 @@ export class PitchroomRepository implements ToolRepository {
     });
   }
 
-  async startWorkflowRun(input: { projectId: string; kind: "positioning" | "deck"; targetRevision: number; model: string; idempotencyKey: string }) {
+  async startWorkflowRun(input: { projectId: string; kind: "positioning" | "deck" | "story"; targetRevision: number; model: string; idempotencyKey: string }) {
     const [created] = await this.db.insert(schema.workflowRuns).values({ ...input, status: "running", events: [{ type: "run_started", detail: `${input.kind} generation started`, at: new Date().toISOString() }] }).onConflictDoNothing().returning();
     const run = created ?? await this.db.query.workflowRuns.findFirst({ where: and(eq(schema.workflowRuns.projectId, input.projectId), eq(schema.workflowRuns.idempotencyKey, input.idempotencyKey)) });
     if (!run) throw new PitchroomError("PERSISTENCE_ERROR", "Workflow run was not created or recovered.");
@@ -456,9 +474,10 @@ export class PitchroomRepository implements ToolRepository {
       const proposal = structuredClone(current.proposal);
       const page = proposal.pages.find((candidate) => candidate.id === input.pageId);
       if (!page) throw new PitchroomError("INVALID_INPUT", "The selected deck page does not exist.");
-      page.title = input.title.trim(); page.body = input.body.trim();
-      const validated = deckProposalV1Schema.parse(proposal);
-      const [created] = await tx.insert(schema.deckVersions).values({ projectId: input.projectId, understandingId: current.understandingId, positioningId: current.positioningId, appliedDirectionId: current.appliedDirectionId, version: current.version + 1, createdBy: "user", proposal: validated }).returning();
+      page.title = input.title; page.body = input.body;
+      if ("wording" in page) page.wording = "user_edited_unreviewed";
+      const validated = deckProposalSchema.parse(proposal);
+      const [created] = await tx.insert(schema.deckVersions).values({ projectId: input.projectId, understandingId: current.understandingId, storyId: current.storyId, positioningId: current.positioningId, appliedDirectionId: current.appliedDirectionId, version: current.version + 1, createdBy: "user", proposal: validated }).returning();
       if (!created) throw new PitchroomError("PERSISTENCE_ERROR", "Edited deck version was not created.");
       await tx.update(schema.projects).set({ currentDeckId: created.id, updatedAt: new Date() }).where(eq(schema.projects.id, input.projectId));
       await tx.insert(schema.commandReceipts).values({ projectId: input.projectId, idempotencyKey: input.idempotencyKey, commandType: "edit_deck_page", requestHash, resourceId: created.id });

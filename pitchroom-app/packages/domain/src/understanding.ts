@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { persistedSummaryGroundingV4Schema, persistedQuestionGroundingV4Schema } from "./clarification-v4";
+import { summaryGroundingSchema, questionGroundingSchema } from "./clarification-grounding";
 
 export const sourceChunkSchema = z.object({
   id: z.string().min(1),
@@ -18,6 +20,8 @@ const evidenceSchema = z.object({
 
 const claimSchema = z
   .object({
+    id: z.string().optional(),
+    supersededBy: z.object({ inputId: z.string().min(1), taskId: z.string().min(1), replacementClaimId: z.string().min(1) }).optional(),
     statement: z.string().min(1),
     evidenceState: z.enum([
       "supported",
@@ -29,6 +33,7 @@ const claimSchema = z
     userInputIds: z.array(z.string().min(1)).default([]),
   })
   .superRefine((claim, context) => {
+    if (claim.supersededBy && claim.evidenceState !== "user_asserted") context.addIssue({ code: "custom", path: ["supersededBy"], message: "Only user assertions may be superseded." });
     if (claim.evidenceState === "supported" && claim.evidence.length === 0) {
       context.addIssue({
         code: "custom",
@@ -94,6 +99,8 @@ export const understandingProposalV1Schema = z
     themes: z
       .array(
         z.object({
+          id: z.string().optional(),
+          summaryInterpretation: z.object({ inputIds: z.array(z.string()), explanation: z.string(), editedByUser: z.boolean().optional(), grounding: summaryGroundingSchema.optional(), groundingV4: persistedSummaryGroundingV4Schema.optional() }).optional(),
           title: z.string().min(1),
           summary: z.string().min(1),
           claims: z.array(claimSchema).min(1),
@@ -109,12 +116,19 @@ export const understandingProposalV1Schema = z
       }),
     ),
     nextQuestion: z.object({
+      grounding: questionGroundingSchema.optional(),
+      groundingV4: persistedQuestionGroundingV4Schema.optional(),
       question: z.string().min(1),
       whyItMatters: z.string().min(1),
       relatedThemeIndexes: z.array(z.number().int().nonnegative()).min(1),
     }),
   })
   .superRefine((proposal, context) => {
+    for (const [themeIndex, theme] of proposal.themes.entries()) for (const [claimIndex, claim] of theme.claims.entries()) {
+      if (!claim.supersededBy) continue;
+      const replacement = theme.claims.find(c => c.id === claim.supersededBy!.replacementClaimId);
+      if (!replacement || replacement.id === claim.id || replacement.evidenceState !== "user_asserted" || !replacement.userInputIds.includes(claim.supersededBy.inputId)) context.addIssue({ code: "custom", path: ["themes", themeIndex, "claims", claimIndex, "supersededBy"], message: "Correction must reference its replacement user assertion in the same theme." });
+    }
     const indexes = proposal.nextQuestion.relatedThemeIndexes;
     if (new Set(indexes).size !== indexes.length) {
       context.addIssue({
@@ -174,4 +188,23 @@ export function validateProposalEvidence(
       }
     }
   }
+}
+
+// Generation contexts contain current assertions only. Persisted versions retain history.
+export function activeUnderstanding(proposal: UnderstandingProposalV1): UnderstandingProposalV1 {
+  const copy = structuredClone(proposal);
+  copy.themes.forEach(theme => { theme.claims = theme.claims.filter(claim => !claim.supersededBy); });
+  return copy;
+}
+
+// Preserve an assertion's identity and text when a manual edit corrects it too.
+export function recordClaimCorrection(proposal: UnderstandingProposalV1, themeIndex: number, claimIndex: number, text: string, inputId: string) {
+  const theme = proposal.themes[themeIndex], claim = theme?.claims[claimIndex];
+  if (!theme || !claim || claim.supersededBy) throw new Error("Choose a current claim to correct; superseded assertions are history.");
+  const replacement = { id: crypto.randomUUID(), statement: text.trim(), evidenceState: "user_asserted" as const, evidence: [], userInputIds: [inputId] };
+  if (claim.evidenceState === "user_asserted") {
+    claim.id ??= crypto.randomUUID();
+    claim.supersededBy = { inputId, taskId: `manual:${inputId}`, replacementClaimId: replacement.id };
+    theme.claims.push(replacement);
+  } else theme.claims[claimIndex] = replacement;
 }

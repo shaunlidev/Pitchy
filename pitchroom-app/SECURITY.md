@@ -14,6 +14,11 @@
 
 - Accepted inputs are UTF-8 text and Markdown with explicit size limits.
 - Source and chunk access is scoped by project in repository queries and tools.
+- Instruction-like source chunks remain available in the source viewer but are
+  quarantined from agent read/search results. The agent receives only a manual-
+  review notice for those chunks.
+- A deterministic pre-persistence gate rejects proposals that cite quarantined
+  chunks or repeat their distinctive literals in any generated field.
 - Exact quotes must occur in the referenced chunk.
 - Model steps, tool calls, repeated calls, failures, and wall time have bounded
   contracts.

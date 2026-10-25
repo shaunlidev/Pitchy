@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { PitchroomError } from "@pitchroom/domain";
-import { acceptFixture, addFixtureMaterial, adjustFixturePositioning, answerFixtureQuestion, applyFixturePositioning, correctFixtureClaim, editFixtureDeckPage, generateFixtureDeck, generateFixturePositioning, keepFixtureUnknown, readFixtureState, removeFixtureMaterial, resetFixtureState, runFixtureAgent, undoFixturePositioning } from "../../../lib/fixture-store";
-import { acceptPersistent, addPersistentMaterial, adjustPersistentPositioning, answerPersistentQuestion, applyPersistentPositioning, correctPersistentClaim, editPersistentDeckPage, generatePersistentDeck, generatePersistentPositioning, keepPersistentUnknown, readPersistentState, removePersistentMaterial, runPersistentAgent, undoPersistentPositioning } from "../../../lib/persistent-workspace";
+import { proposeFixtureStory, decideFixtureStory, undoFixtureStory, createFixtureStoryDeck, submitFixtureClarification, decideFixtureClarification, acceptFixture, addFixtureMaterial, adjustFixturePositioning, answerFixtureQuestion, applyFixturePositioning, correctFixtureClaim, editFixtureDeckPage, generateFixtureDeck, generateFixturePositioning, keepFixtureUnknown, readFixtureState, removeFixtureMaterial, resetFixtureState, runFixtureAgent, undoFixturePositioning } from "../../../lib/fixture-store";
+import { proposePersistentStory, decidePersistentStory, undoPersistentStory, createPersistentStoryDeck, submitPersistentClarification, decidePersistentClarification, acceptPersistent, addPersistentMaterial, adjustPersistentPositioning, answerPersistentQuestion, applyPersistentPositioning, correctPersistentClaim, editPersistentDeckPage, generatePersistentDeck, generatePersistentPositioning, keepPersistentUnknown, readPersistentState, removePersistentMaterial, runPersistentAgent, undoPersistentPositioning } from "../../../lib/persistent-workspace";
 import { errorEnvelopeSchema, workspaceCommandSchema, workspaceStateSchema } from "../../../lib/api-contract";
 export const dynamic = "force-dynamic";
 const runtime = () => process.env.PITCHROOM_RUNTIME ?? "fixture";
@@ -29,6 +29,18 @@ export async function POST(request: Request) {
     const persistent = runtime() !== "fixture";
     const commandId = body.commandId ?? requestId;
     switch (body.action) {
+      case "propose_story": state = persistent ? await proposePersistentStory(body,persistentMode()) : await proposeFixtureStory(body); break;
+      case "decide_story": state = persistent ? await decidePersistentStory(body,persistentMode()) : decideFixtureStory(body); break;
+      case "undo_story": state = persistent ? await undoPersistentStory(body,persistentMode()) : undoFixtureStory(body); break;
+      case "create_story_deck": state = persistent ? await createPersistentStoryDeck(body,persistentMode()) : createFixtureStoryDeck(body); break;
+      case "submit_clarification": state = persistent ? await submitPersistentClarification({ ...body, commandId }) : submitFixtureClarification({ ...body, commandId }); break;
+      case "apply_clarification":
+      case "dismiss_clarification":
+      case "retry_clarification": {
+        const action = body.action === "apply_clarification" ? "apply" as const : body.action === "dismiss_clarification" ? "dismiss" as const : "retry" as const;
+        const decision = { taskId: body.taskId, action, commandId, result: body.action === "apply_clarification" ? body.result : undefined };
+        state = persistent ? await decidePersistentClarification(decision) : decideFixtureClarification(decision); break;
+      }
       case "reset": if (persistent) throw new Error("Reset is disabled for persistent projects."); state = resetFixtureState(); break;
       case "add_material": state = persistent ? await addPersistentMaterial({ name: body.name, text: body.text, mediaType: body.mediaType, idempotencyKey: commandId }) : addFixtureMaterial({ name: body.name, text: body.text, mediaType: body.mediaType }); break;
       case "remove_material": state = persistent ? await removePersistentMaterial(body.sourceId) : removeFixtureMaterial(body.sourceId); break;
@@ -45,7 +57,7 @@ export async function POST(request: Request) {
       case "edit_deck_page": state = persistent ? await editPersistentDeckPage(body.deckId, body.expectedDeckVersion, body.pageId, body.title, body.body, commandId) : editFixtureDeckPage(body.deckId, body.expectedDeckVersion, body.pageId, body.title, body.body); break;
     }
     if (persistent && runtime() === "live") state = { ...state, mode: "live" as const };
-    return NextResponse.json(workspaceStateSchema.parse(state), { headers: headers(requestId) });
+    return NextResponse.json(workspaceStateSchema.parse(state), { status: body.action === "submit_clarification" ? 202 : 200, headers: headers(requestId) });
   } catch (error) {
     const domainCode = error instanceof PitchroomError ? error.code : undefined;
     const code = domainCode ?? (error instanceof SyntaxError ? "INVALID_JSON" : "INVALID_REQUEST");

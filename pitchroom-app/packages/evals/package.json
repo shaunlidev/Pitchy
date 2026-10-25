@@ -6,7 +6,9 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "eval:offline": "vitest run --reporter=verbose",
-    "eval:live": "node --import tsx src/live-eval-cli.ts"
+    "eval:live": "node --import tsx src/live-eval-cli.ts",
+    "eval:clarify:offline": "node --import tsx src/clarification-offline-cli.ts",
+    "eval:clarify:live": "node --import tsx src/clarification-live-cli.ts"
   },
   "dependencies": {
     "@pitchroom/agent": "workspace:*",

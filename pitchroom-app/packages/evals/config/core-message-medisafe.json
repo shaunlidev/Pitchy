@@ -1,0 +1,21 @@
+{
+  "id": "medisafe-health-behavior-v1",
+  "evaluationProfile": "generic_core_message",
+  "originalFraming": "A medication management and reminder app.",
+  "sources": [
+    {
+      "id": "medisafe-app",
+      "authority": "official_product_page",
+      "url": "https://medisafe.com/download-the-app",
+      "material": "Track medications, appointments, and measurements — all in one free, easy-to-use app. Set up your medications in minutes. Invite family members as Medfriends for extra support. Add a Medfriend—a family member or loved one who gets notified if you miss a dose. See your daily, weekly, and monthly medication progress. Share reports with your doctor before every visit. Get notified if two of your medications may cause an unhealthy interaction — before it becomes a problem.",
+      "boundary": "Vendor-authored capability claims. Reminders, alerts and reports do not guarantee medication adherence, prevent harm, replace clinical advice, or prove health outcomes."
+    },
+    {
+      "id": "medisafe-stories",
+      "authority": "vendor_hosted_user_stories",
+      "url": "https://medisafe.com/download-the-app",
+      "material": "I was put on 8 different medications and couldn't keep track of all that. I'm not relying on anybody to tell me when to take my meds anymore. He was given eight different prescriptions upon release from the hospital and it was very overwhelming to me.",
+      "boundary": "Selected testimonials show possible recognition and emotional tension, not representative prevalence, causality, medical efficacy, or a universal outcome."
+    }
+  ]
+}

@@ -64,6 +64,20 @@
       "when": 1792062000000,
       "tag": "0008_add_deck_and_workflow_runs",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1792540800000,
+      "tag": "0009_clarification_feedback",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1792886400000,
+      "tag": "0010_story_judgment_loop",
+      "breakpoints": true
     }
   ]
 }

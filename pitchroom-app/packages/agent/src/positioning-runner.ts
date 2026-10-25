@@ -1,4 +1,6 @@
-import { PitchroomError, positioningProposalV1Schema, validatePositioningEvidence, type PositioningProposalV1, type SourceChunk, type UnderstandingProposalV1 } from "@pitchroom/domain";
+import { outputLanguageInstruction, outputLanguage } from "./output-language";
+import { coreMessageJsonSchema, coreMessageSystemPrompt, parseCoreMessageProposal, type CoreMessageProposalV2 } from "./core-message-contract";
+import { activeUnderstanding, PitchroomError, positioningProposalV1Schema, validatePositioningEvidence, type PositioningProposalV1, type SourceChunk, type UnderstandingProposalV1 } from "@pitchroom/domain";
 
 export type PositioningAgentInput = {
   understandingVersionId: string;
@@ -25,7 +27,12 @@ export function buildDeterministicPositioning(input: PositioningAgentInput): Pos
     directions: [
       {
         id: "evidence-first",
+        lens: "mechanism",
         title: "Evidence first",
+        audience: "The audience named in the accepted understanding",
+        positioningThesis: `Lead with the strongest supported product behavior: ${first.statement}`,
+        mechanism: first.statement,
+        humanTension: "The audience needs a claim it can inspect before accepting a broader promise.",
         coreMessage: first.statement,
         from: original,
         to: `A story led by the strongest supported signal: ${first.statement}`,
@@ -36,7 +43,12 @@ export function buildDeterministicPositioning(input: PositioningAgentInput): Pos
       },
       {
         id: "decision-first",
+        lens: "human_tension",
         title: "Decision first",
+        audience: "The person accountable for the unresolved decision",
+        positioningThesis: `Turn the unresolved decision into the story's organizing tension: ${input.understanding.nextQuestion.question}`,
+        mechanism: "The working story keeps the unresolved decision visible beside supporting material.",
+        humanTension: "The decision owner needs to move forward without pretending uncertainty is resolved.",
         coreMessage: input.understanding.nextQuestion.question,
         from: original,
         to: `A story organized around the decision still to be made: ${input.understanding.nextQuestion.question}`,
@@ -46,6 +58,12 @@ export function buildDeterministicPositioning(input: PositioningAgentInput): Pos
         userInputIds: second.userInputIds,
       },
     ],
+    recommendation: {
+      directionId: "evidence-first",
+      judgment: "Lead with the mechanism direction because it is the strongest distinctive claim supported by the accepted material.",
+      comparison: "The mechanism direction is more concrete and defensible; the human-tension direction creates urgency but depends on an unresolved question.",
+      conditionsToReconsider: ["Prefer the human-tension direction if the decision owner confirms that unresolved uncertainty is the primary reason the audience seeks help."],
+    },
   });
   validatePositioningEvidence(proposal, input.chunks);
   return proposal;
@@ -55,21 +73,18 @@ export class DeterministicPositioningRunner implements PositioningAgentRunner {
   async run(input: PositioningAgentInput) { return buildDeterministicPositioning(input); }
 }
 
-const positioningJsonSchema = {
-  type: "object",
-  additionalProperties: false,
-  required: ["schemaVersion", "understandingVersionId", "originalFraming", "directions"],
-  properties: {
-    schemaVersion: { const: 1 },
-    understandingVersionId: { type: "string" },
-    originalFraming: { type: "object", additionalProperties: false, required: ["title", "coreMessage"], properties: { title: { const: "Original framing" }, coreMessage: { type: "string" } } },
-    directions: { type: "array", minItems: 2, maxItems: 3, items: { type: "object", additionalProperties: false, required: ["id", "title", "coreMessage", "from", "to", "tradeoff", "excludes", "evidence", "userInputIds"], properties: {
-      id: { type: "string" }, title: { type: "string" }, coreMessage: { type: "string" }, from: { type: "string" }, to: { type: "string" }, tradeoff: { type: "string" }, excludes: { type: "array", items: { type: "string" } }, judgmentNote: { type: "string" },
-      evidence: { type: "array", minItems: 1, items: { type: "object", additionalProperties: false, required: ["sourceId", "chunkId", "quote"], properties: { sourceId: { type: "string" }, chunkId: { type: "string" }, quote: { type: "string" } } } },
-      userInputIds: { type: "array", items: { type: "string" } },
-    } } },
-  },
-} as const;
+export function coreMessageToPositioning(proposal: CoreMessageProposalV2, input: PositioningAgentInput): PositioningProposalV1 {
+  const cite = (e: {sourceId:string;quote:string}) => {
+    const chunk = input.chunks.find(c=>c.sourceId===e.sourceId && c.text.includes(e.quote));
+    if (!chunk) throw new PitchroomError("PROPOSAL_REJECTED", "Positioning quote must match one exact source chunk.");
+    return {sourceId:e.sourceId,chunkId:chunk.id,quote:e.quote};
+  };
+  return positioningProposalV1Schema.parse({schemaVersion:1, understandingVersionId:input.understandingVersionId,
+    originalFraming:{title:"Original framing",coreMessage:input.understanding.themes.map(t=>t.summary).join(" ")},
+    directions:proposal.hypotheses.map(h=>({id:h.id,lens:h.lens,title:h.title,audience:h.audience,positioningThesis:h.positioningThesis,mechanism:h.mechanism,humanTension:h.audienceSituation,coreMessage:h.coreMessage,from:h.from,to:h.to,tradeoff:h.hiddenTradeoff,excludes:h.exclusions,evidence:h.supportingEvidence.map(cite),counterEvidence:h.counterEvidence.map(cite),unknowns:h.unknowns,emphasis:h.emphasis,audienceRecognition:h.audienceRecognition,humanPayoff:h.humanPayoff,userInputIds:[]})),
+    recommendation:{directionId:proposal.recommendation.hypothesisId,judgment:proposal.recommendation.judgment,comparison:proposal.recommendation.comparison,conditionsToReconsider:proposal.recommendation.conditionsToReconsider}
+  });
+}
 
 function responseText(payload: { output?: Array<{ type?: string; content?: Array<{ type?: string; text?: string }> }> }) {
   return (payload.output ?? []).filter((item) => item.type === "message").flatMap((item) => item.content ?? []).filter((part) => part.type === "output_text").map((part) => part.text ?? "").join("");
@@ -78,27 +93,41 @@ function responseText(payload: { output?: Array<{ type?: string; content?: Array
 export class ResponsesPositioningRunner implements PositioningAgentRunner {
   constructor(private readonly config: { apiKey: string; model: string; baseURL: string; fetch?: typeof fetch }, private readonly timeoutMs = 60_000) {}
   async run(input: PositioningAgentInput) {
+    input = { ...input, understanding: activeUnderstanding(input.understanding) };
+    const deepSeek = new URL(this.config.baseURL).hostname === "api.deepseek.com";
     const request = this.config.fetch ?? fetch;
     const response = await request(`${this.config.baseURL.replace(/\/+$/, "")}/responses`, {
       method: "POST",
       headers: { authorization: `Bearer ${this.config.apiKey}`, "content-type": "application/json" },
       body: JSON.stringify({
         model: this.config.model,
-        input: [{ role: "system", content: "Create 2 or 3 distinct positioning directions from the accepted understanding. Preserve the original framing. Every direction must cite only exact quotes from supplied chunks. Make tradeoffs and exclusions explicit. Return only the requested JSON." }, { role: "user", content: JSON.stringify(input) }],
-        text: { format: { type: "json_schema", name: "pitchroom_positioning_v1", schema: positioningJsonSchema } },
-        max_output_tokens: 5_000,
+        input: [{ role: "system", content: coreMessageSystemPrompt }, { role: "user", content: JSON.stringify({
+          outputLanguage,
+          languageInstruction: outputLanguageInstruction,
+          originalFraming:input.understanding.themes.map(t=>t.summary).join(" "),
+          sources:[...new Set(input.chunks.map(c=>c.sourceId))].map(id=>({id,authority:"Supplied project material; records are not automatically current or verified",material:input.chunks.filter(c=>c.sourceId===id).map(c=>c.text).join("\n"),evidenceBoundary:"Cite an exact quote within one chunk. Preserve uncertainty and source attribution."})),
+          understanding:input.understanding,
+          groundingPolicy:"Preserved claims record historical material, not necessarily current applicability. Respect summaryInterpretation groundingV4/legacy applicability, scope and attribution. User-reported requirements remain unverified; user_edited_unreviewed is not endorsed by original Agent reasoning. Never turn suggestions into requirements."
+        }) }],
+        text: { format: { type: "json_schema", name: "pitchroom_core_message_v2", schema: coreMessageJsonSchema } },
+        max_output_tokens: deepSeek ? 16_000 : 5_000, ...(deepSeek ? { reasoning: { effort: "low" }, store: false } : {}),
       }),
       signal: AbortSignal.timeout(this.timeoutMs),
     });
     const payload = await response.json() as { status?: string; error?: { message?: string }; output?: Array<{ type?: string; content?: Array<{ type?: string; text?: string }> }> };
     if (!response.ok || payload.status === "failed") throw new PitchroomError("PROPOSAL_REJECTED", payload.error?.message ?? `Positioning request failed with HTTP ${response.status}.`);
+    if (payload.status === "incomplete") throw new PitchroomError("PROPOSAL_REJECTED", "Provider output was incomplete (output limit or filter); no draft was applied.");
     const text = responseText(payload);
     if (!text) throw new PitchroomError("PROPOSAL_REJECTED", "The model returned no positioning JSON.");
     let raw: unknown;
     try { raw = JSON.parse(text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "")); }
     catch { throw new PitchroomError("PROPOSAL_REJECTED", "The model returned invalid positioning JSON."); }
-    const proposal = positioningProposalV1Schema.parse(raw);
-    if (proposal.understandingVersionId !== input.understandingVersionId) throw new PitchroomError("PROPOSAL_REJECTED", "Positioning targeted a stale understanding version.");
+    const sources=[...new Set(input.chunks.map(c=>c.sourceId))].map(id=>({id,authority:"Project source",url:"https://local.invalid",material:input.chunks.filter(c=>c.sourceId===id).map(c=>c.text).join("\n"),boundary:""}));
+    const coreProposal = parseCoreMessageProposal(raw,sources);
+    if (coreProposal.hypotheses.some((hypothesis) => /\p{Script=Han}/u.test(hypothesis.coreMessage))) {
+      throw new PitchroomError("PROPOSAL_REJECTED", `Generated positioning slogans must use ${outputLanguage}, under the English-only product policy.`);
+    }
+    const proposal = coreMessageToPositioning(coreProposal,input);
     validatePositioningEvidence(proposal, input.chunks);
     return proposal;
   }

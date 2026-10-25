@@ -7,8 +7,10 @@ import {
   type SourceChunk,
   type UnderstandingProposalV1,
 } from "@pitchroom/domain";
+import { validateNoUntrustedInstructionEcho } from "./prompt-safety";
 
 export function validateAgentAuthorship(proposal: UnderstandingProposalV1): void {
+  if (proposal.themes.some(theme=>theme.summaryInterpretation)) throw new PitchroomError("PROPOSAL_REJECTED", "Initial understanding cannot manufacture feedback attribution.");
   if (proposal.themes.some((theme) => theme.claims.some((claim) => claim.evidenceState === "user_asserted"))) {
     throw new PitchroomError("PROPOSAL_REJECTED", "An agent proposal cannot create user-attributed claims.");
   }
@@ -18,12 +20,18 @@ export type UnderstandingAgentInput = {
   projectId: string;
   chunks: SourceChunk[];
   signal?: AbortSignal;
+  onTrace?: (event: UnderstandingTraceEvent) => void | Promise<void>;
+};
+
+export type UnderstandingTraceEvent = {
+  type: "tool_called" | "tool_succeeded" | "tool_failed";
+  payload: Record<string, unknown>;
 };
 
 export type UnderstandingAgentResult = {
   proposal: UnderstandingProposalV1;
   publicSummary: string;
-  trace?: Array<{ type: "tool_called" | "tool_succeeded" | "tool_failed"; payload: Record<string, unknown> }>;
+  trace?: UnderstandingTraceEvent[];
   metrics?: Record<string, unknown>;
 };
 
@@ -51,6 +59,7 @@ export async function runUnderstandingAgent(
   const proposal = understandingProposalV1Schema.parse(result.proposal);
   validateAgentAuthorship(proposal);
   validateProposalEvidence(proposal, input.chunks);
+  validateNoUntrustedInstructionEcho({ proposal, publicSummary: result.publicSummary, chunks: input.chunks });
 
   assertPhaseTransition("structuring", "review_required");
   return {
