@@ -8,7 +8,7 @@
   "scripts": {
     "dev": "pnpm --filter @pitchroom/web dev",
     "build": "pnpm --filter @pitchroom/web build",
-    "check": "pnpm typecheck && pnpm test && pnpm build",
+    "check": "pnpm typecheck && pnpm test && pnpm test:server:guard && pnpm build",
     "typecheck": "pnpm -r --if-present typecheck && pnpm --filter @pitchroom/web exec tsc -p ../../scripts/tsconfig.json",
     "test": "pnpm -r --if-present test",
     "test:server": "pnpm --filter @pitchroom/persistence test:integration",
@@ -24,6 +24,7 @@
     "db:generate": "pnpm --filter @pitchroom/persistence db:generate",
     "db:migrate": "pnpm --filter @pitchroom/persistence db:migrate",
     "worker:clarify": "node --import tsx scripts/clarification-worker.ts",
-    "qa:clarify:persistent": "node --import tsx scripts/qa-clarification-worker.ts"
+    "qa:clarify:persistent": "node --import tsx scripts/qa-clarification-worker.ts",
+    "test:server:guard": "node --test scripts/test-persistence.test.mjs"
   }
 }

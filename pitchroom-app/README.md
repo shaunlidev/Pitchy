@@ -83,7 +83,7 @@ it does not print credentials.
 
 ```sh
 pnpm check
-pnpm test:server
+DATABASE_URL=... pnpm test:server
 pnpm eval:offline
 pnpm qa:e2e
 pnpm harness:case -- supported-growth
@@ -91,9 +91,8 @@ pnpm harness:replay -- eval-supported-growth
 ```
 
 - `pnpm check`: type checks all packages, runs deterministic tests, and builds
-  the production Next.js application.
-- `pnpm test:server`: migrates/uses the local PostgreSQL contract without
-  truncating existing projects, and verifies
+  the production Next.js application. The check also runs four database-target guard checks through `pnpm test:server:guard`; these do not connect to a database.
+- `DATABASE_URL=... pnpm test:server`: requires the dedicated `clarify_qa` user/database on localhost port `55437`, with no connection query/fragment overrides. It never loads `.env.local` or defaults to the daily development database. It discovers every persistence integration suite and runs files serially so migration hooks cannot race. It migrates the selected QA schema without truncating existing projects, and verifies
   project isolation, idempotency, transactional version creation, stale-write
   rejection, user-input attribution, positioning/deck versioning, and concurrent
   workflow replay ownership.
