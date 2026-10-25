@@ -340,3 +340,8 @@
 .storyPageTrace { margin-top:24px; font-size:14px; overflow-wrap:anywhere; }
 .storyMobileNav { display:none; }
 @media(max-width:850px){ .storyGrid{grid-template-columns:1fr;gap:20px}.storyPaper{padding:24px}.storyDirections article{display:block;width:100%;margin-right:0}.storyTask{padding:20px}.storyDiff{max-height:none}.storyMobileNav{display:flex;gap:12px;margin-bottom:20px}.storyMobileNav a{flex:1;text-align:center}.storyPaper,.storyTask{scroll-margin-top:20px} }
+
+.localDrafts { max-width: 1160px; margin: 12px auto; padding: 0 24px; }
+.localDraftRecovery { margin: 8px 0; }
+.localDraftRecovery section { padding: 12px 0; border-bottom: 1px solid #ddd; }
+.localDraftRecovery pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 200px; overflow: auto; font: inherit; }

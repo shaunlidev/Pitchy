@@ -43,7 +43,13 @@ The HTTP workspace, health and SSE boundaries accept only `fixture`, `postgres-f
 
 ## Working-position recovery
 
-The same browser restores each project's destination, inspected Clarify topic and saved Deck/page selection after reload. Removed versions and inaccessible destinations fall back safely. This browser record stores navigation identifiers only; unsaved text still has tab lifetime and is not a durable draft. Navigation does not accept, apply or generate work. Browser storage failure leaves saved server work unchanged.
+The same browser restores each project's destination, inspected Clarify topic and saved Deck/page selection after reload. Removed versions and inaccessible destinations fall back safely. Navigation does not accept, apply or generate work.
+
+Under the approved seven-day recovery rule, unsubmitted brief text, answers/corrections, Story judgments/exact edits and Deck page edits are also stored locally in this browser. Drafts are scoped to their project and input context, including saved versions and source hashes. A matching single draft restores into the editor; earlier-version drafts are offered for explicit recovery. Conflicting tabs retain separate copies and offer a choice instead of overwriting active text. Successful submission clears only the submitted snapshot, preserving later typing and other drafts. Storage failures retain tab input and show a copy-before-close notice.
+
+Opening a draft does not extend its seven-day expiry. Expired text is ignored and removed when this site next opens or its active cleanup runs; a closed browser cannot run cleanup. Draft recovery never submits or calls a model. Navigation identifiers remain in their separate browser record. This is browser-local recovery, not cross-device storage.
+
+PIT-7 verification: 446 Vitest cases, 4 Node guards, types and build passed. Isolated Chrome checks covered refresh, tab/browser reopening, conflict choice, older-version recovery, successful draft cleanup, Story/Deck edits and service restart against the unchanged synthetic PostgreSQL project. No real-model request, recording or deployment. Human acceptance remains separate. See the [local report](.artifacts/pit7-drafts-20261025-01/acceptance-report.json).
 
 For isolated synthetic browser checks alongside an existing dev server, use `PITCHROOM_RUNTIME=fixture PITCHROOM_ISOLATED_QA=1 pnpm --filter @pitchroom/web exec next dev -H 127.0.0.1 -p 43875`. The QA build lives in `.next-qa`; it does not share the ordinary dev build lock. Do not use an existing private project as a QA target.
 

@@ -43,6 +43,36 @@ describe("HomePage review interactions", () => {
     vi.unstubAllGlobals();
   });
 
+  it("restores an unsubmitted answer after reopening and removes it only after successful submission", async () => {
+    const user=userEvent.setup();
+    const first=render(<HomePage/>);
+    await user.click(await screen.findByRole("button",{name:"Clarify"}));
+    await user.type(await screen.findByLabelText("Answer the agent’s question"),"Saved locally, never submitted on reopen.");
+    first.unmount();
+    const callsBefore=vi.mocked(fetch).mock.calls.filter(([,init])=>init?.method==="POST").length;
+    const reopened=render(<HomePage/>);
+    const field=await screen.findByLabelText("Answer the agent’s question");
+    await waitFor(()=>expect(field).toHaveProperty("value","Saved locally, never submitted on reopen."));
+    expect(vi.mocked(fetch).mock.calls.filter(([,init])=>init?.method==="POST")).toHaveLength(callsBefore);
+    await user.click(screen.getByRole("button",{name:"Save answer & reassess"}));
+    await waitFor(()=>expect(field).toHaveProperty("value",""));
+    reopened.unmount(); render(<HomePage/>);
+    await waitFor(()=>expect(screen.getByLabelText("Answer the agent’s question")).toHaveProperty("value",""));
+  });
+
+  it("offers an old answer instead of auto-filling it after source material changes", async () => {
+    const user=userEvent.setup();
+    const props={state:readFixtureState(),busy:false,text:"",answer:"",correction:"",rememberPosition:true,initialDestination:"clarify",onTextChange:vi.fn(),onAnswerChange:vi.fn(),onCorrectionChange:vi.fn(),onChooseFile:vi.fn(),onCancelRun:vi.fn(),onAction:vi.fn()} satisfies Parameters<typeof WorkspaceView>[0];
+    const view=render(<WorkspaceView {...props}/>);
+    await user.click(screen.getByRole("button",{name:"Clarify"}));
+    await user.type(screen.getByLabelText("Answer the agent’s question"),"Still tied to the original material.");
+    const changed=addFixtureMaterial({name:"new-context.md",mediaType:"text/markdown",text:"Synthetic new material changes the input context."});
+    view.rerender(<WorkspaceView {...props} state={{...props.state,sources:changed.sources}}/>);
+    await waitFor(()=>expect(screen.getByLabelText("Answer the agent’s question")).toHaveProperty("value",""));
+    expect(screen.getByText(/Saved answer drafts/)).toBeTruthy();
+    expect(props.onAction).not.toHaveBeenCalled();
+  });
+
   it("clears a committed answer and disables repeat submission", async () => {
     const user = userEvent.setup();
     render(<HomePage />);

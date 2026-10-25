@@ -1,3 +1,5 @@
+import { useLocalDraft, DraftRecovery } from "./use-local-draft";
+import { textDraftSchema, correctionDraftSchema, storyDraftSchema, deckDraftSchema } from "./local-drafts";
 import type { FileImportItem } from "./file-import";
 import { useWorkspacePosition } from "./use-workspace-position";
 import type { WorkspacePosition } from "./workspace-position";
@@ -65,6 +67,25 @@ export function WorkspaceView(props: WorkspaceViewProps) {
   const [deckEditor, setDeckEditor] = useState<DeckEditorDraft>();
   const [locked, setLocked] = useState<Destination>();
   const [draftGate, setDraftGate] = useState(false);
+  const draftEnabled = Boolean(props.rememberPosition);
+  const draftBase = { projectId: state.project.id, enabled: draftEnabled };
+  const sourceRevision = JSON.stringify(state.sources.map(source => ({ id: source.sourceId, hash: source.contentHash })).sort((a, b) => a.id.localeCompare(b.id)));
+  const understandingContext = JSON.stringify([state.currentVersionId, sourceRevision]);
+  const brief = useLocalDraft({ ...draftBase, kind: "brief", context: JSON.stringify(state.sources.filter(source => source.name === "written-brief.md").map(source => [source.sourceId, source.contentHash])), schema: textDraftSchema, initial: "", hasContent: value => Boolean(value) });
+  const answerDraft = useLocalDraft({ ...draftBase, kind: "answer", context: understandingContext, schema: textDraftSchema, initial: "", hasContent: value => Boolean(value) });
+  const corrections = useLocalDraft({ ...draftBase, kind: "corrections", context: understandingContext, schema: correctionDraftSchema, initial: { selectedTarget: "0:0", values: {} }, hasContent: value => Object.values(value.values).some(Boolean) });
+  const storyInput = useLocalDraft({ ...draftBase, kind: "story", context: JSON.stringify([state.currentVersionId, state.positioning?.id, state.positioning?.appliedDirectionId, state.story?.head, sourceRevision]), schema: storyDraftSchema, initial: { judgment: "", edit: null }, hasContent: value => Boolean(value.judgment || value.edit) });
+  const deckInput = useLocalDraft({ ...draftBase, kind: "deck", context: JSON.stringify([state.currentVersionId, state.positioning?.id, state.story?.head, position.deckId, position.pageId, sourceRevision]), schema: deckDraftSchema, initial: undefined, hasContent: value => Boolean(value?.editing) });
+  const effectiveText = draftEnabled ? brief.value : props.text;
+  const effectiveAnswer = draftEnabled ? answerDraft.value : props.answer;
+  const effectiveTarget = draftEnabled ? corrections.value.selectedTarget : correctionTarget;
+  const effectiveCorrection = draftEnabled ? corrections.value.values[effectiveTarget] ?? "" : props.correction;
+  const changeText = (value: string) => { if (draftEnabled) brief.set(value); props.onTextChange(value); };
+  const changeAnswer = (value: string) => { if (draftEnabled) answerDraft.set(value); props.onAnswerChange(value); };
+  const changeCorrection = (value: string) => { if (draftEnabled) corrections.set({ ...corrections.value, values: { ...corrections.value.values, [effectiveTarget]: value } }); props.onCorrectionChange(value); };
+  const changeTarget = (target: string) => { if (draftEnabled) corrections.set({ ...corrections.value, selectedTarget: target }); setCorrectionTarget(target); };
+  const changeStory = (value: StoryDraft) => { if (draftEnabled) { if (!value.judgment && !value.edit) storyInput.setIfUnchanged(storyInput.value, value); else storyInput.set(value); } setStoryDraft(value); };
+  const changeDeck = (value: DeckEditorDraft | undefined) => { if (draftEnabled) { if (!value) deckInput.setIfUnchanged(deckInput.value, value); else deckInput.set(value); } setDeckEditor(value); };
   const ux = deriveWorkspaceUXState(state, props.activeAgentRequest, { ...props, destination, selectedDirectionId: positioningDraft.selectedId, adjustment: positioningDraft.adjustment });
   const { activity } = ux;
   const navigate = (next: Destination) => {
@@ -76,10 +97,23 @@ export function WorkspaceView(props: WorkspaceViewProps) {
   const guardedAction = async (body: Record<string, unknown>) => {
     const feedbackDecision = ["apply_clarification","dismiss_clarification","retry_clarification"].includes(String(body.action));
     if (ux.mutationLocked && !(feedbackDecision && !props.busy && !props.error && !ux.running)) return false;
-    if (["accept", "run", "generate_positioning", "apply_positioning", "generate_deck"].includes(String(body.action)) && (props.text.trim() || props.answer.trim() || props.correction.trim() || positioningDraft.adjustment.trim())) { setDraftGate(true); return false; }
-    return props.onAction(body);
+    if (["accept", "run", "generate_positioning", "apply_positioning", "generate_deck"].includes(String(body.action)) && (effectiveText.trim() || effectiveAnswer.trim() || (draftEnabled ? Object.values(corrections.value.values).some(value => value.trim()) : effectiveCorrection.trim()) || positioningDraft.adjustment.trim())) { setDraftGate(true); return false; }
+    const committedBrief = brief.captureSubmission();
+    const committedAnswer = answerDraft.captureSubmission();
+    const committedCorrection = corrections.captureSubmission({ ...corrections.value, values: { ...corrections.value.values, [effectiveTarget]: "" } });
+    const committedStory = storyInput.captureSubmission();
+    const committedDeck = deckInput.captureSubmission();
+    const result = await props.onAction(body);
+    if (result && draftEnabled) {
+      if (body.action === "add_material") committedBrief();
+      if (body.action === "answer" || (body.action === "submit_clarification" && !body.rebaseTaskId)) committedAnswer();
+      if (body.action === "correct") committedCorrection();
+      if (body.action === "propose_story") committedStory();
+      if (body.action === "edit_deck_page") committedDeck();
+    }
+    return result;
   };
-  const viewProps = { ...props, workspacePosition: position, onWorkspacePosition: updatePosition, storyDraft, onStoryDraft: setStoryDraft, busy: ux.mutationLocked, primary: ux.primary, clarificationDrafts, onClarificationDraft: (id: string, result: import("@pitchroom/domain").ClarificationResult) => setClarificationDrafts(drafts=>({...drafts,[id]:result})), onClarificationAction: guardedAction, clarificationBusy: props.busy || Boolean(props.error) || Boolean(ux.running), runningAction: ux.running ? activity?.kind : undefined, onAction: guardedAction, onChooseFile: props.busy || ux.running ? () => false : props.onChooseFile, positioningDraft, onPositioningDraft: setPositioningDraft, deckEditor, onDeckEditor: setDeckEditor, correctionTarget, onCorrectionTarget: setCorrectionTarget };
+  const viewProps = { ...props, text: effectiveText, answer: effectiveAnswer, correction: effectiveCorrection, onTextChange: changeText, onAnswerChange: changeAnswer, onCorrectionChange: changeCorrection, workspacePosition: position, onWorkspacePosition: updatePosition, storyDraft: draftEnabled ? storyInput.value : storyDraft, onStoryDraft: changeStory, busy: ux.mutationLocked, primary: ux.primary, clarificationDrafts, onClarificationDraft: (id: string, result: import("@pitchroom/domain").ClarificationResult) => setClarificationDrafts(drafts=>({...drafts,[id]:result})), onClarificationAction: guardedAction, clarificationBusy: props.busy || Boolean(props.error) || Boolean(ux.running), runningAction: ux.running ? activity?.kind : undefined, onAction: guardedAction, onChooseFile: props.busy || ux.running ? () => false : props.onChooseFile, positioningDraft, onPositioningDraft: setPositioningDraft, deckEditor: draftEnabled ? deckInput.value : deckEditor, onDeckEditor: changeDeck, correctionTarget: effectiveTarget, onCorrectionTarget: changeTarget };
   const agentBusy = activity?.status === "queued" || activity?.status === "running";
   useEffect(() => { if (!initialVersion.current && state.currentVersionId) setDestination("clarify"); initialVersion.current = state.currentVersionId; }, [state.currentVersionId]);
 
@@ -88,13 +122,14 @@ export function WorkspaceView(props: WorkspaceViewProps) {
     <header className="topbar"><div className="topInner"><div className="logo">PITCHROOM</div><div className="projectId"><strong>{state.project.name}</strong><span className="demoLabel">{state.mode === "live" ? "DeepSeek live" : "Local agent"}</span></div></div></header>
     <div className="navShell"><div className="navInner"><nav className="nav" aria-label="Project workspace">{(["materials", "clarify", "positioning", "deck"] as Destination[]).map(item => <button key={item} aria-current={destination === item ? "page" : undefined} aria-label={item[0].toUpperCase() + item.slice(1)} data-locked={!ux.access[item].allowed} aria-describedby={!ux.access[item].allowed ? `lock-${item}` : undefined} onClick={() => navigate(item)}>{item[0].toUpperCase() + item.slice(1)}{!ux.access[item].allowed && <span className="srOnly" id={`lock-${item}`}> — {ux.access[item].reason}</span>}</button>)}</nav><span className="navNote">{state.mode === "live" ? "DeepSeek · Persistent project" : "Synthetic project · Local session"}</span></div></div>
     <div className="announcer" aria-live="polite">{activity ? `${activity.title}: ${activity.status}` : busy ? "Saving…" : `Project state: ${phaseLabel(state.project.phase)}`}</div>
+    {draftEnabled && <section className="localDrafts" aria-label="Local draft recovery"><small>Unsubmitted drafts stay in this browser for seven days. Nothing is submitted automatically.</small><DraftRecovery label="brief" draft={brief} describe={value => value}/><DraftRecovery label="answer" draft={answerDraft} describe={value => value}/><DraftRecovery label="correction" draft={corrections} describe={value => Object.values(value.values).filter(Boolean).join("\n\n")}/><DraftRecovery label="Story" draft={storyInput} describe={value => [value.judgment, value.edit?.title, value.edit?.body].filter(Boolean).join("\n\n")}/><DraftRecovery label="Deck" draft={deckInput} describe={value => [value?.title, value?.body].filter(Boolean).join("\n\n")}/></section>}
     {storageNotice && <p role="status" className="capabilityHint">{storageNotice}</p>}
     {error && <ActionRecovery busy={busy} error={error} onRetry={props.onRetryAction} onRefresh={props.onRefreshWorkspace} onDismiss={props.onDismissError} />}
     {!error && state.project.phase === "failed" && <div className="recoveryNotice" role="status"><strong>The agent did not create a new understanding.</strong><span>Your material is saved. You can safely retry the agent.</span></div>}
     <AgentStream activity={activity} />
     {ux.running && <p className="capabilityHint" role="status">{ux.checkpoint}</p>}
     {locked && <section className="navigationReason" role="status"><p>{ux.access[locked].reason}</p><button className="btn" onClick={() => navigate(ux.access[locked].target)}>Go to {ux.access[locked].target}</button></section>}
-    {draftGate && <section className="draftGate" role="region" aria-label="Unsaved input"><h2>Review your unsaved input first.</h2><p>Save the brief, answer, correction or positioning adjustment before continuing. Your drafts are retained when switching destinations.</p><button className="btn primary" onClick={() => setDraftGate(false)}>Keep editing</button><button className="btn" onClick={() => { props.onTextChange(""); props.onAnswerChange(""); props.onCorrectionChange(""); setPositioningDraft(draft => ({ ...draft, adjustment: "" })); setDraftGate(false); }}>Discard unsaved input</button></section>}
+    {draftGate && <section className="draftGate" role="region" aria-label="Unsaved input"><h2>Review your unsaved input first.</h2><p>Save the brief, answer, correction or positioning adjustment before continuing. Your drafts are retained when switching destinations.</p><button className="btn primary" onClick={() => setDraftGate(false)}>Keep editing</button><button className="btn" onClick={() => { changeText(""); changeAnswer(""); if (draftEnabled) { corrections.set({ selectedTarget: effectiveTarget, values: {} }); props.onCorrectionChange(""); } else changeCorrection(""); setPositioningDraft(draft => ({ ...draft, adjustment: "" })); setDraftGate(false); }}>Discard unsaved input</button></section>}
     <p className="capabilityHint">{destination === "materials" ? "Add text, Markdown or pasted notes. Sources remain inspectable." : destination === "clarify" ? "Review source-linked understanding, correct it or leave unknowns open. Only you accept a version." : destination === "positioning" ? "Compare proposals and their tradeoffs. Previewing never applies a direction." : "Review and edit the discussion draft. Saving edits creates a new version."}</p>
     <div id="workspace" data-recovery={Boolean(error || draftGate)} className="workspaceMain" tabIndex={-1}>{!ux.access[destination].allowed ? <section className="navigationReason"><h2>This step needs your review.</h2><p>{ux.access[destination].reason}</p><button className="btn primary" onClick={() => navigate(ux.access[destination].target)}>Go to {ux.access[destination].target}</button></section> : destination === "materials" ? <MaterialsView {...viewProps} onContinue={() => navigate("clarify")} /> : destination === "clarify" ? <><ClarifyView {...viewProps} current={current} onMaterials={() => navigate("materials")} onPositioning={() => navigate("positioning")} />{current && <ClaimCorrectionPanel {...viewProps} current={current} />}</> : destination === "positioning" ? <PositioningView {...viewProps} onDeck={() => setDestination("deck")} /> : <DeckView {...viewProps} onPositioning={() => navigate("positioning")} />}</div>
     {process.env.NODE_ENV !== "production" && <AgentInspector state={state} busy={busy} open={inspectorOpen} onToggle={() => setInspectorOpen((value) => !value)} />}
