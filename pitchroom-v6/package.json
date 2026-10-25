@@ -1,0 +1,19 @@
+{
+  "name": "pitchroom-v6-baseline",
+  "private": true,
+  "type": "module",
+  "engines": { "bun": "1.3.4" },
+  "scripts": {
+    "check": "bun harness/check.ts",
+    "check:workspace": "bun harness/check.ts --workspace",
+    "evidence:maintain": "bun harness/maintain-evidence.ts",
+    "evidence:maintain:apply": "bun harness/maintain-evidence.ts --apply",
+    "test:maintenance": "bun test harness/maintain-evidence.test.ts",
+    "typecheck": "tsc --noEmit --target ES2022 --module ESNext --moduleResolution Bundler --lib ES2022,DOM,DOM.Iterable --types bun --strict --skipLibCheck harness/check.ts harness/capture.ts harness/maintain-evidence.ts harness/maintain-evidence.test.ts harness/workspace.ts"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.56.1",
+    "@types/bun": "1.3.4",
+    "typescript": "5.9.3"
+  }
+}

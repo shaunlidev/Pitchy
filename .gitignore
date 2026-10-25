@@ -1,0 +1,16 @@
+node_modules/
+.next/
+.artifacts/
+.pitchroom/
+.gstack/
+.env
+.env.*.local
+build/
+test-results/
+playwright-report/
+artifacts/
+archive/
+.trash/
+pitchroom-v6/evidence/
+pitchroom-v6/screenshots/
+.DS_Store
