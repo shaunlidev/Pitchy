@@ -12,6 +12,7 @@ from sync import check
 URL = 'https://github.com/shaunlidev/pitchroom.git'
 TASK = re.compile(r'refs/heads/codex/pit-\d+-[a-z0-9-]+$')
 ZERO = re.compile(r'0+$')
+RUNTIME_PARTS = {'.pitchroom', '.gstack', '.multica', '.multica-round', '.pipeline-local', '.pipeline-artifact', '.artifacts', '.local', '.vercel', '.trash', 'archive', 'test-results', 'playwright-report', 'node_modules', 'dist', 'build', 'screenshots', 'recordings', 'artifacts', 'evidence', 'logs', 'uploads', 'storage', 'sessions', 'cache', 'tmp', 'temp', 'coverage'}
 
 
 def git(*args):
@@ -24,6 +25,9 @@ def safe_destination(local_sha, remote_ref):
 
 
 def allowed_path(path, reviewed=()):
+    parts = [part.lower() for part in Path(path).parts]
+    if any(part in RUNTIME_PARTS or part.startswith(".next") for part in parts) or any(part.startswith(".") for part in parts[:-1]):
+        return False
     if path in {'.gitignore', 'README.md', 'AGENTS.md', 'SOURCE_OF_TRUTH.md', 'docs/development/git-migration.json'}:
         return True
     if path.startswith('pitchroom-v6/'):

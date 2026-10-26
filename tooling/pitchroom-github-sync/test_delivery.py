@@ -41,6 +41,12 @@ class PushSafety(unittest.TestCase):
                 p.unlink();p.symlink_to('outside');g('add','.');g('commit','-m','Synthetic symlink')
                 with self.assertRaisesRegex(ValueError,'mode'):delivery.audit([g('rev-parse','HEAD')])
 
+    def test_runtime_directories_refuse_source_files_even_when_reviewed(self):
+        for directory in ['test-results','playwright-report','.pitchroom','.gstack','.multica','.pipeline-local','.pipeline-artifact','.artifacts','.local','.next-qa','node_modules','dist','build','archive','.trash','screenshots','recordings','artifacts','evidence','logs','uploads','storage','sessions','cache','tmp','temp','coverage','.unknown-runtime']:
+            for extension in ['ts','js']:
+                path=f'pitchroom-app/apps/web/{directory}/runtime.{extension}'
+                self.assertFalse(delivery.allowed_path(path,{path}),path)
+
     def test_private_data_and_unapproved_documents_excluded(self):
         for path in ['.multica/context.json','pitchroom-app/docs/participant.md','pitchroom-v6/evidence/result.json','data.sqlite','pitchroom-app/apps/web/private.json','pitchroom-app/packages/domain/customer.md']:
             self.assertFalse(delivery.allowed_path(path))
