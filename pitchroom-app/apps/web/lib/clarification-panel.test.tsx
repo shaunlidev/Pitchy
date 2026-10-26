@@ -6,6 +6,27 @@ import { readFileSync } from "node:fs";
 import { acceptFixture,addFixtureMaterial,decideFixtureClarification,readFixtureState,resetFixtureState,runFixtureAgent,submitFixtureClarification,runFixtureClarification } from "./fixture-store";
 import { WorkspaceView } from "./workspace-view";
 afterEach(()=>{cleanup();vi.useRealTimers();});
+it("exposes the current clarification review while keeping applied feedback collapsible", async () => {
+ resetFixtureState();
+ addFixtureMaterial({name:"brief.md",mediaType:"text/markdown",text:"The pilot audience remains unknown."});
+ const initial=runFixtureAgent();
+ const saved=submitFixtureClarification({text:"Procurement approves the pilot.",commandId:"visible-review",expectedRevision:initial.project.revision});
+ const taskId=saved.clarifications!.at(-1)!.id;
+ await runFixtureClarification(taskId);
+ const onAction=vi.fn(()=>true);
+ const props={busy:false,text:"",answer:"",correction:"",onTextChange:vi.fn(),onAnswerChange:vi.fn(),onCorrectionChange:vi.fn(),onChooseFile:()=>true,onCancelRun:vi.fn(),onAction};
+ const view=render(<WorkspaceView {...props} state={readFixtureState()} initialDestination="clarify"/>);
+ expect(screen.getByText("Saved answer · Before / Now").closest("details")).toHaveProperty("open",true);
+ expect(screen.getByRole("heading",{name:"Review the proposed changes"})).toBeTruthy();
+ expect(screen.getByRole("button",{name:"Apply changes to understanding"})).toBeTruthy();
+ expect(readFixtureState().currentVersionId).toBe(initial.currentVersionId);
+ const applied=decideFixtureClarification({taskId,action:"apply",commandId:"visible-review-apply"});
+ view.rerender(<WorkspaceView {...props} state={applied} initialDestination="clarify"/>);
+ expect(screen.getByText("Saved answer · Before / Now").closest("details")).toHaveProperty("open",false);
+ await userEvent.setup().click(screen.getByText("Saved answer · Before / Now"));
+ expect(screen.getByRole("heading",{name:/Changes applied/})).toBeTruthy();
+ expect(onAction).not.toHaveBeenCalled();
+});
 it("tracks acceptance of the current applied clarification without assigning it to historical results", async () => {
  resetFixtureState();
  addFixtureMaterial({name:"brief.md",mediaType:"text/markdown",text:"Reviewers check claims manually."});
@@ -45,7 +66,7 @@ it("keeps the accepted Understanding revision form visible with the shipped styl
  const field = screen.getByRole("textbox", { name: "Answer the agent’s question" });
  expect(getComputedStyle(field).display).not.toBe("none");
  await userEvent.setup().click(screen.getByRole("button", { name: "Propose revision to accepted understanding" }));
- expect(onAction).toHaveBeenCalledWith({action:"submit_clarification",text:answer,expectedRevision:state.project.revision});
+ expect(onAction).toHaveBeenCalledWith({action:"submit_clarification",text:answer,expectedRevision:state.project.revision,selection:{understandingId:state.currentVersionId,taskId:"legacy-next-question",themeIndex:0}});
  expect(readFixtureState().currentVersionId).toBe(state.currentVersionId);
  expect(readFixtureState().project.phase).toBe("accepted");
 });
@@ -98,4 +119,35 @@ it("v4 renders source modality independently and resolves shared basis reference
  const edited=onAction.mock.calls[0]![0]!.result as typeof result;const candidate=buildClarificationCandidate(task,edited);expect(candidate.themes[0]!.summaryInterpretation!.groundingV4!.reviewStatus).toBe("user_edited_unreviewed");expect(edited.bases).toEqual(result.bases);
  view.rerender(<ClarificationPanel understanding={{versionId:"v1",phase:"review_required"}} task={{...task,status:"failed",result:undefined,attempts:[{...task.attempts[0]!,status:"failed",error:"INVALID_JSON",failure:{stage:"syntax",code:"INVALID_JSON"}}]}} revision={1} busy={false} onAction={onAction}/>);
  expect(screen.getByText(/Analysis stopped at syntax: INVALID_JSON/)).toBeTruthy();expect(onAction).toHaveBeenCalledTimes(1);
+});
+
+it("requires an explicit current question before reassessing a saved stale answer", async () => {
+ const { newClarification, understandingProposalV1Schema } = await import("@pitchroom/domain");
+ const { ClarificationPanel } = await import("./clarification-panel");
+ const proposal = understandingProposalV1Schema.parse({ schemaVersion:1,
+  themes:["Audience","Measurement"].map(title=>({title,summary:`${title} is unknown.`,claims:[{statement:`${title} is unknown.`,evidenceState:"unknown",evidence:[]}]})),
+  gaps:[],nextQuestion:{question:"Who is the audience?",whyItMatters:"The audience is unknown.",relatedThemeIndexes:[0]},
+  topicTasks:[{id:"measurement",themeIndex:1,question:{question:"What is the measurement baseline?",whyItMatters:"The baseline is unknown.",relatedThemeIndexes:[1]}}],
+ });
+ const task = newClarification({id:"saved-stale",inputId:"saved-input",projectId:"synthetic",commandId:"saved-command",actorId:"user",versionId:"v1",revision:1,base:proposal,sources:[],answer:"原话：The baseline is still unknown.",selection:{understandingId:"v1",taskId:"measurement",themeIndex:1}});
+ task.status="stale";
+ const current=structuredClone(proposal); current.topicTasks![0]!.id="measurement-current";
+ const onAction=vi.fn(()=>true);
+ const props={task,busy:false,onAction,revision:2,understanding:{versionId:"v2",phase:"review_required" as const,proposal:current}};
+ const view=render(<ClarificationPanel {...props}/>);
+ const submit=screen.getByRole("button",{name:"Reassess against current understanding"});
+ expect(submit.hasAttribute("disabled")).toBe(true);
+ const user=userEvent.setup(); await user.click(submit); expect(onAction).not.toHaveBeenCalled();
+ await user.selectOptions(screen.getByLabelText("Current question for this saved answer"),"1:measurement-current");
+ expect(submit.hasAttribute("disabled")).toBe(false);
+ await user.click(submit);
+ expect(onAction).toHaveBeenCalledWith({action:"submit_clarification",text:task.answer,expectedRevision:2,rebaseTaskId:task.id,selection:{understandingId:"v2",taskId:"measurement-current",themeIndex:1}});
+ expect(task.inputId).toBe("saved-input"); expect(task.answer).toBe("原话：The baseline is still unknown.");
+ // A refresh to a different current version invalidates the earlier explicit choice.
+ view.rerender(<ClarificationPanel {...props} revision={3} understanding={{...props.understanding,versionId:"v3"}}/>);
+ expect(screen.getByRole("button",{name:"Reassess against current understanding"}).hasAttribute("disabled")).toBe(true);
+ onAction.mockClear();
+ view.rerender(<ClarificationPanel {...props} understanding={{...props.understanding,proposal:{...current,topicTasks:[]}}}/>);
+ expect(screen.getByRole("button",{name:"Reassess against current understanding"}).hasAttribute("disabled")).toBe(true);
+ await user.click(screen.getByRole("button",{name:"Reassess against current understanding"})); expect(onAction).not.toHaveBeenCalled();
 });

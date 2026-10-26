@@ -52,4 +52,13 @@ describe("Clarify saved answer lifecycle",()=>{
   it("prevents concurrent legacy corrections while a proposal is unresolved",()=>{
     submit();expect(()=>correctFixtureClaim("override",0,0,readFixtureState().project.revision)).toThrow(/Resolve/);
   });
+  it("replays the same selected answer command despite object key order while rejecting changed ownership",()=>{
+    const state=readFixtureState();
+    const selection={understandingId:state.currentVersionId!,taskId:"legacy-next-question",themeIndex:0};
+    const input={text:"An exact saved answer",commandId:"selected-replay",expectedRevision:state.project.revision,selection};
+    const saved=submitFixtureClarification(input).clarifications!.at(-1)!;
+    const replay=submitFixtureClarification({...input,selection:{themeIndex:0,taskId:selection.taskId,understandingId:selection.understandingId}});
+    expect(replay.clarifications).toHaveLength(1);expect(replay.clarifications![0]!.inputId).toBe(saved.inputId);
+    expect(()=>submitFixtureClarification({...input,selection:{...selection,themeIndex:1}})).toThrow(/different input/);
+  });
 });

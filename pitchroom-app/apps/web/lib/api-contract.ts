@@ -1,4 +1,4 @@
-import { topicRefSchema, topicMaterialSchema } from "@pitchroom/domain";
+import { topicTaskSelectionSchema, topicRefSchema, topicMaterialSchema } from "@pitchroom/domain";
 import { briefWorkspaceSchema, saveBriefSchema } from "@pitchroom/domain";
 import { z } from "zod";
 import { clarificationTaskSchema, clarificationResultSchema, acceptedMediaTypes, storyHeadSchema, storyRequestSchema, storyWorkspaceSchema, deckProposalSchema, positioningProposalV1Schema, sourceChunkSchema, understandingProposalV1Schema } from "@pitchroom/domain";
@@ -15,7 +15,7 @@ export const workspaceCommandSchema = z.discriminatedUnion("action", [
   z.object({ action:z.literal("decide_story"), commandId:z.string().min(1), expected:storyHeadSchema, proposalId:z.string(), decision:z.enum(["apply","keep_current"]) }),
   z.object({ action:z.literal("undo_story"), commandId:z.string().min(1), expected:storyHeadSchema }),
   z.object({ action:z.literal("create_story_deck"), commandId:z.string().min(1), expected:storyHeadSchema }),
-  z.object({ action: z.literal("submit_clarification"), commandId: z.string().min(1), expectedRevision, text: z.string().trim().min(1).max(10000), rebaseTaskId: z.string().optional() }),
+  z.object({ action: z.literal("submit_clarification"), commandId: z.string().min(1), expectedRevision, text: z.string().trim().min(1).max(10000), selection: topicTaskSelectionSchema.optional(), rebaseTaskId: z.string().optional() }),
   z.object({ action: z.literal("apply_clarification"), commandId: z.string().min(1), taskId: z.string(), result: clarificationResultSchema.optional() }),
   z.object({ action: z.literal("dismiss_clarification"), commandId: z.string().min(1), taskId: z.string() }),
   z.object({ action: z.literal("retry_clarification"), commandId: z.string().min(1), taskId: z.string() }),

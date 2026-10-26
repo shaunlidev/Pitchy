@@ -32,3 +32,17 @@ it("reads only the requested project's validated navigation identifiers", () => 
   records.set(workspacePositionKey("a"), JSON.stringify({ schemaVersion: 2, destination: "run_model" }));
   expect(readWorkspacePosition(storage, "a")).toBeUndefined();
 });
+
+it("restores only a task belonging to the saved topic and understanding", () => {
+  addFixtureMaterial({ name: "brief.md", mediaType: "text/markdown", text: "Atelier prepares client presentations." });
+  const state = runFixtureAgent();
+  const current = state.versions.find(version => version.id === state.currentVersionId)!;
+  current.proposal.topicTasks = ["baseline", "timing"].map(id => ({ id, themeIndex: 0, question: { question: `Which ${id}?`, whyItMatters: "The material leaves this unknown.", relatedThemeIndexes: [0] } }));
+  const selection = { understandingId: current.id, kind: "theme" as const, index: 0, taskId: "timing" };
+  const remembered = { ...saved, destination: "clarify" as const, understandingId: current.id, overviewSelection: "theme:0", taskSelections: [selection] };
+  expect(resolveWorkspacePosition(state, remembered).taskSelections).toEqual([selection]);
+  expect(resolveWorkspacePosition(state, { ...remembered, overviewSelection: "theme:1" }).taskSelections).toEqual([selection]);
+  for (const patch of [{ taskId: "removed" }, { index: current.proposal.themes.length }, { understandingId: "superseded" }]) {
+    expect(resolveWorkspacePosition(state, { ...remembered, taskSelections: [{ ...selection, ...patch }] }).taskSelections).toEqual([]);
+  }
+});

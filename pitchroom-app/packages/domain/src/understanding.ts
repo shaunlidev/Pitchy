@@ -93,6 +93,20 @@ const claimSchema = z
     }
   });
 
+export const clarificationQuestionSchema = z.object({
+  grounding: questionGroundingSchema.optional(),
+  groundingV4: persistedQuestionGroundingV4Schema.optional(),
+  question: z.string().min(1),
+  whyItMatters: z.string().min(1),
+  relatedThemeIndexes: z.array(z.number().int().nonnegative()).min(1),
+});
+export const topicTaskSchema = z.object({
+  id: z.string().min(1),
+  themeIndex: z.number().int().nonnegative(),
+  relatedGapIndexes: z.array(z.number().int().nonnegative()).optional(),
+  question: clarificationQuestionSchema,
+});
+
 export const understandingProposalV1Schema = z
   .object({
     schemaVersion: z.literal(1),
@@ -115,19 +129,21 @@ export const understandingProposalV1Schema = z
         relatedSourceIds: z.array(z.string().min(1)),
       }),
     ),
-    nextQuestion: z.object({
-      grounding: questionGroundingSchema.optional(),
-      groundingV4: persistedQuestionGroundingV4Schema.optional(),
-      question: z.string().min(1),
-      whyItMatters: z.string().min(1),
-      relatedThemeIndexes: z.array(z.number().int().nonnegative()).min(1),
-    }),
+    nextQuestion: clarificationQuestionSchema,
+    topicTasks: z.array(topicTaskSchema).max(5).optional(),
   })
   .superRefine((proposal, context) => {
     for (const [themeIndex, theme] of proposal.themes.entries()) for (const [claimIndex, claim] of theme.claims.entries()) {
       if (!claim.supersededBy) continue;
       const replacement = theme.claims.find(c => c.id === claim.supersededBy!.replacementClaimId);
       if (!replacement || replacement.id === claim.id || replacement.evidenceState !== "user_asserted" || !replacement.userInputIds.includes(claim.supersededBy.inputId)) context.addIssue({ code: "custom", path: ["themes", themeIndex, "claims", claimIndex, "supersededBy"], message: "Correction must reference its replacement user assertion in the same theme." });
+    }
+    const taskIds = new Set<string>();
+    for (const [index, task] of (proposal.topicTasks ?? []).entries()) {
+      if (taskIds.has(task.id) || task.themeIndex >= proposal.themes.length || task.question.relatedThemeIndexes.length !== 1 || task.question.relatedThemeIndexes[0] !== task.themeIndex || (task.relatedGapIndexes ?? []).some(i => i >= proposal.gaps.length)) {
+        context.addIssue({ code: "custom", path: ["topicTasks", index], message: "Task identity and question must belong to one existing topic and existing gaps." });
+      }
+      taskIds.add(task.id);
     }
     const indexes = proposal.nextQuestion.relatedThemeIndexes;
     if (new Set(indexes).size !== indexes.length) {
@@ -207,4 +223,12 @@ export function recordClaimCorrection(proposal: UnderstandingProposalV1, themeIn
     claim.supersededBy = { inputId, taskId: `manual:${inputId}`, replacementClaimId: replacement.id };
     theme.claims.push(replacement);
   } else theme.claims[claimIndex] = replacement;
+}
+
+export function topicTasksFor(proposal: UnderstandingProposalV1, kind: "theme" | "gap", index: number): z.infer<typeof topicTaskSchema>[] {
+  if (proposal.topicTasks !== undefined) return proposal.topicTasks.filter(task =>
+    proposal.themes[task.themeIndex] && task.question.relatedThemeIndexes.length === 1 && task.question.relatedThemeIndexes[0] === task.themeIndex &&
+    (kind === "theme" ? task.themeIndex === index : Boolean(proposal.gaps[index]) && Boolean(task.relatedGapIndexes?.includes(index))));
+  if (kind !== "theme" || !proposal.themes[index] || !proposal.nextQuestion.relatedThemeIndexes.includes(index)) return [];
+  return [{ id: "legacy-next-question", themeIndex: index, question: proposal.nextQuestion }];
 }

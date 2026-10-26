@@ -270,7 +270,7 @@ export async function editPersistentDeckPage(deckId: string, expectedDeckVersion
   return readPersistentState();
 }
 
-export async function submitPersistentClarification(input: { text: string; expectedRevision: number; commandId: string; rebaseTaskId?: string }) {
+export async function submitPersistentClarification(input: { text: string; expectedRevision: number; commandId: string; rebaseTaskId?: string; selection?: import("@pitchroom/domain").TopicTaskSelection }) {
   const current = await project();
   await new ClarificationRepository(repository().db).submit({ ...input, projectId: current.id, actorId: "synthetic-local-user", runMode: process.env.PITCHROOM_RUNTIME === "live" ? "live" : "synthetic" });
   return readPersistentState(process.env.PITCHROOM_RUNTIME === "live" ? "live" : "postgres-fake");
