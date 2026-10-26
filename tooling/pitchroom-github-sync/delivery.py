@@ -25,6 +25,19 @@ def safe_destination(local_sha, remote_ref):
 
 
 def allowed_path(path, reviewed=()):
+    # Explicit infrastructure files only; all other hidden/runtime paths stay refused.
+    infrastructure = {
+        '.github/workflows/pr-ci.yml',
+        'docs/development/PIPELINE.md',
+        'docs/development/migration-plan.json',
+        'tooling/pipeline/policy.json',
+        'tooling/pipeline/status.py',
+        'tooling/pipeline/ci.py',
+        'tooling/pipeline/check-source.py',
+        'tooling/pipeline/test_pipeline.py',
+    }
+    if path in infrastructure:
+        return True
     parts = [part.lower() for part in Path(path).parts]
     if any(part in RUNTIME_PARTS or part.startswith(".next") for part in parts) or any(part.startswith(".") for part in parts[:-1]):
         return False
