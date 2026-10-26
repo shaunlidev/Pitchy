@@ -1,0 +1,22 @@
+{
+  "name": "@pitchroom/agent",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@ai-sdk/openai": "4.0.93",
+    "@pitchroom/domain": "workspace:*",
+    "ai": "7.0.138",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@pitchroom/testkit": "workspace:*",
+    "@types/node": "26.6.5",
+    "typescript": "7.0.2",
+    "vitest": "5.0.4"
+  }
+}

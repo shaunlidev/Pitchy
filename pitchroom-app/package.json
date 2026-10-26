@@ -1,0 +1,30 @@
+{
+  "name": "pitchroom-app",
+  "private": true,
+  "packageManager": "pnpm@9.6.0",
+  "devDependencies": {
+    "tsx": "4.20.6"
+  },
+  "scripts": {
+    "dev": "pnpm --filter @pitchroom/web dev",
+    "build": "pnpm --filter @pitchroom/web build",
+    "check": "pnpm typecheck && pnpm test && pnpm test:server:guard && pnpm build",
+    "typecheck": "pnpm -r --if-present typecheck && pnpm --filter @pitchroom/web exec tsc -p ../../scripts/tsconfig.json",
+    "test": "pnpm -r --if-present test",
+    "test:server": "pnpm --filter @pitchroom/persistence test:integration",
+    "eval:offline": "pnpm --filter @pitchroom/evals eval:offline",
+    "eval:live:smoke": "pnpm --filter @pitchroom/evals eval:live -- --smoke",
+    "eval:live:all": "pnpm --filter @pitchroom/evals eval:live -- --all",
+    "harness:case": "node --import tsx packages/evals/src/case-cli.ts",
+    "harness:replay": "node --import tsx packages/testkit/src/replay-cli.ts",
+    "env:check": "node scripts/check-env.mjs",
+    "qa:persistent-http": "node scripts/qa-persistent-http.mjs",
+    "qa:persistent-readback": "node scripts/qa-persistent-readback.mjs",
+    "qa:e2e": "pnpm --filter @pitchroom/web test:e2e",
+    "db:generate": "pnpm --filter @pitchroom/persistence db:generate",
+    "db:migrate": "pnpm --filter @pitchroom/persistence db:migrate",
+    "worker:clarify": "node --import tsx scripts/clarification-worker.ts",
+    "qa:clarify:persistent": "node --import tsx scripts/qa-clarification-worker.ts",
+    "test:server:guard": "node --test scripts/test-persistence.test.mjs"
+  }
+}

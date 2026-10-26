@@ -1,0 +1,21 @@
+{
+  "id": "notion-team-collaboration-v1",
+  "evaluationProfile": "generic_core_message",
+  "originalFraming": "An AI workspace for teams.",
+  "sources": [
+    {
+      "id": "notion-product",
+      "authority": "official_product_page",
+      "url": "https://www.notion.com/product",
+      "material": "Where teams and agents Think together. Capture context, find answers, and automate tasks with AI built for your team. Bring everything into one system of record. Get answers, instantly—with citations. Keep work moving 24/7 with agents.",
+      "boundary": "Vendor-authored positioning. It supports intended capabilities, not independent proof that every team consolidates its work or makes better decisions."
+    },
+    {
+      "id": "notion-collaboration-help",
+      "authority": "official_help_documentation",
+      "url": "https://www.notion.com/help/sharing-and-permissions",
+      "material": "Notion is built for collaboration, so there are many ways to share your work with other people. Sometimes you'll want to share a page with only select members of your workspace — like a meeting doc for 1:1s with your manager, or notes for a small project team.",
+      "boundary": "Documentation establishes sharing and permission controls. It does not establish that teams will adopt one shared workflow or keep content current."
+    }
+  ]
+}

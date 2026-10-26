@@ -1,0 +1,11 @@
+{
+  "baseUrl": "https://api.openai.com/v1",
+  "model": "gpt-5.4-2026-03-05",
+  "maxOutputTokens": 2000,
+  "maxInputTokens": 10000,
+  "maxCostMicroUsd": 60000,
+  "inputMicroUsdPerMillionTokens": 2500000,
+  "outputMicroUsdPerMillionTokens": 15000000,
+  "pricingSource": "https://developers.openai.com/api/docs/models/gpt-5.4",
+  "pricingCheckedAt": "2026-10-25"
+}

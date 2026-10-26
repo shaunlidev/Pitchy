@@ -1,0 +1,21 @@
+{
+  "id": "descript-creator-tool-v1",
+  "evaluationProfile": "generic_core_message",
+  "originalFraming": "An AI video and audio editor.",
+  "sources": [
+    {
+      "id": "descript-product",
+      "authority": "official_product_page",
+      "url": "https://www.descript.com/",
+      "material": "Direct your AI co-editor to do your video editing for you, or do it yourself with intuitive editing tools. With Descript, video editing is as easy as typing. Edit your words to edit your video. Copy-paste, drag-and-drop. Cut filler words and retakes in a click. The timeline's there if you need it. One video, every destination. Translate to dozens of languages. Reformat for all the platforms: YouTube, TikTok, LinkedIn, wherever.",
+      "boundary": "Vendor-authored product description. It supports the text-editing and repurposing mechanisms, not a guarantee of production speed, quality, reach, or virality."
+    },
+    {
+      "id": "descript-customer-voices",
+      "authority": "vendor_hosted_customer_quotes",
+      "url": "https://www.descript.com/",
+      "material": "Being able to edit audio or video just by deleting words in a transcript makes the whole process feel like working in a Google Doc rather than wrestling with a complex timeline. It's a total game-changer for speed and sanity. As a team of one, this tool has unlocked exponential content creation and repurposing power for me.",
+      "boundary": "Selected vendor-hosted quotes are recognition signals, not representative evidence or proof that every creator saves time or produces more content."
+    }
+  ]
+}

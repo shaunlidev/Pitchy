@@ -1,0 +1,11 @@
+import { briefText, type BriefWorkspace } from "@pitchroom/domain";
+export function BriefEditor({ brief, value, busy, initial = false, reviewNotice, onChange, onSave }: { brief: BriefWorkspace; value: string; busy: boolean; initial?: boolean; reviewNotice?: string; onChange: (text: string) => void; onSave: () => boolean | Promise<boolean> }) {
+  const dirty = value !== briefText(brief);
+  return <details className="materialBrief" open={initial || Boolean(brief.head)}><summary>{initial ? "Or paste what you know" : "Written brief"} <span>{brief.head ? `Version ${brief.head.number}` : "Optional"}</span></summary>
+    <label className="editLabel" htmlFor="written-brief">Your brief or notes</label><textarea id="written-brief" aria-label={initial ? "Paste source text" : "Written brief"} value={value} onChange={event => onChange(event.target.value)}/>
+    {reviewNotice && <p role="status">{reviewNotice}</p>}
+    <p role="status">{dirty ? "Unsaved brief changes" : !brief.head ? "No saved brief yet" : brief.head.entry.kind === "cleared" ? "Brief removed from current context. History is retained." : `Saved brief · version ${brief.head.number}`}</p>
+    <div className="briefActions"><span className="small muted">One current brief. Saving changes retains history; clearing and saving removes only its current context.</span><button className="plain" disabled={busy || !value} onClick={() => onChange("")}>Clear brief</button><button className="btn primary" disabled={busy || !dirty || (!value.trim() && !brief.head)} onClick={() => void onSave()}>{value.trim() ? "Save brief" : "Save cleared brief"}</button></div>
+    {brief.versions.length > 0 && <details className="briefHistory"><summary>Brief history ({brief.versions.length})</summary>{[...brief.versions].reverse().map(version => <section key={version.id}><h3>Brief version {version.number}{version.id === brief.head?.id ? " · current" : " · history"}</h3>{version.entry.kind === "saved" ? <><pre>{version.entry.text}</pre><small>Saved source · {version.entry.sourceId}</small></> : <p>Removed from context; prior text retained in history.</p>}<button className="btn" disabled={busy} onClick={() => onChange(version.entry.kind === "saved" ? version.entry.text : "")}>Use brief version {version.number} as draft</button></section>)}</details>}
+  </details>;
+}

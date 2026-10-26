@@ -1,0 +1,14 @@
+{
+  "provider": "deepseek",
+  "model": "deepseek-flash",
+  "observedVersion": "DeepSeek-V4.1-Flash-1017",
+  "baseURL": "https://api.deepseek.com",
+  "reasoningEffort": "low",
+  "inputAccounting": "context-window-reservation",
+  "contextWindowTokens": 1048576,
+  "inputUsdPerMillion": 0.30,
+  "outputUsdPerMillion": 1.20,
+  "countRequestMicroUsd": 0,
+  "pricingSource": "https://api-docs.deepseek.com/quick_start/pricing/",
+  "pricingCheckedAt": "2026-10-25T00:55:00Z"
+}
