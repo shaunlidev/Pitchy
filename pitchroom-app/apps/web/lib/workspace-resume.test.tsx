@@ -87,6 +87,24 @@ it("recovers from corrupt browser position without losing server work", async ()
   expect(readFixtureState()).toEqual(before);
 });
 
+it("returns from a single-task gap to that same task in its multi-task theme", async () => {
+  const state = readFixtureState();
+  const current = state.versions.find(version => version.id === state.currentVersionId)!;
+  const gap = current.proposal.gaps[0]!;
+  current.proposal.gaps = [{ ...gap, description: "Baseline unknown" }, { ...gap, description: "Timing unknown" }];
+  current.proposal.topicTasks = ["baseline", "timing"].map((id, index) => ({ id, themeIndex: 0, relatedGapIndexes: [index], question: { question: `Which ${id}?`, whyItMatters: `The ${id} remains unknown.`, relatedThemeIndexes: [0] } }));
+  localStorage.setItem(workspacePositionKey(state.project.id), JSON.stringify({ schemaVersion: 1, destination: "clarify", understandingId: current.id, overviewSelection: "gap:1" }));
+  const onAction = vi.fn(() => true);
+  render(<WorkspaceView rememberPosition state={state} busy={false} text="" answer="" correction="" onTextChange={() => {}} onAnswerChange={() => {}} onCorrectionChange={() => {}} onChooseFile={() => true} onCancelRun={() => {}} onAction={onAction} />);
+  await screen.findByRole("heading", { name: "Which timing?" });
+  const user = userEvent.setup();
+  await user.type(screen.getByRole("textbox", { name: "Answer the agent’s question" }), "Timing gap draft");
+  await user.click(screen.getByRole("button", { name: "Back to the current useful question" }));
+  expect(screen.getByRole("heading", { name: "Which timing?" })).toBeTruthy();
+  expect(screen.getByRole("textbox", { name: "Answer the agent’s question" })).toHaveProperty("value", "Timing gap draft");
+  expect(onAction).not.toHaveBeenCalled();
+});
+
 it("does not invite an answer to another topic's question", async () => {
   const state = readFixtureState();
   const version = state.versions.find(candidate => candidate.id === state.currentVersionId)!;

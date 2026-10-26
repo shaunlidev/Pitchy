@@ -236,7 +236,7 @@ function ClarifyView({ topicTaskId, onTopicTaskId, onChooseFiles, fileImports, o
   const question = selectedTask?.question;
   const questionTheme = selectedTask?.themeIndex ?? current.proposal.nextQuestion.relatedThemeIndexes.find(index => current.proposal.themes[index]);
   const hasSelectedQuestion = Boolean(selectedTask && question);
-  const returnToQuestion = () => setOverviewSelection(`theme:${questionTheme ?? 0}`);
+  const returnToQuestion = () => { if (selectedTask) onTopicTaskId?.(selectedTask.id); setOverviewSelection(`theme:${questionTheme ?? 0}`); };
 
   return <section className="clarifyPage">
     <header className="workspaceHeading"><h1>Find the story in the material.</h1><span className="small muted">Keep unknowns open.</span></header>
