@@ -155,12 +155,13 @@ def sync(policy, call, github, apply=False, now=None):
             if not apply:
                 continue
             updates = {'github_sync_observed_at': now}
-            if meta.get('github_sync_digest') != digest or meta.get('github_sync_state') != 'fresh':
+            publishing = meta.get('github_sync_digest') != digest or meta.get('github_sync_state') != 'fresh'
+            if publishing:
                 updates = {'github_sync_state': 'updating', 'github_prs': payload, 'github_sync_digest': digest, **updates}
             updates = {name:value for name,value in updates.items() if meta.get(name) != value}
             for name, value in updates.items():
                 call(['issue', 'metadata', 'set', issue['id'], '--key', name, '--value', value]); result['writes'] += 1
-            if updates.get('github_sync_state'):
+            if publishing:
                 call(['issue', 'metadata', 'set', issue['id'], '--key', 'github_sync_state', '--value', 'fresh']); result['writes'] += 1
         return result
     except (SyncError, KeyError, TypeError, ValueError, OSError, subprocess.SubprocessError):

@@ -63,6 +63,11 @@ class Polling(unittest.TestCase):
         with self.assertRaises(gs.SyncError):gs.sync(POLICY,call,gh,True)
         self.assertEqual(call.rows[0]['metadata']['github_sync_state'],'unavailable')
 
+    def test_partial_metadata_write_converges_to_fresh(self):
+        call=Memory([issue()]);gh=GH([pr()]);gs.sync(POLICY,call,gh,True,'t1')
+        call.rows[0]['metadata']['github_sync_state']='updating'
+        gs.sync(POLICY,call,gh,True,'t2');self.assertEqual(call.rows[0]['metadata']['github_sync_state'],'fresh')
+
     def test_read_only_sync_has_no_writes(self):
         call=Memory([issue()]);gs.sync(POLICY,call,GH([pr()]));self.assertEqual(call.writes,[])
 
