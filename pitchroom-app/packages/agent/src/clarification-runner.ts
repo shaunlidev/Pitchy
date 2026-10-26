@@ -17,12 +17,19 @@ export class DeterministicClarificationRunner implements ClarificationRunner {
       { id: "interpretation", origin: "agent" as const, nature: "interpretation" as const, statement: "Deterministic mechanism demonstration; semantic judgment remains unverified.", scope: "Synthetic runner only", requirement: null },
     ];
     if (/^(not sure|unknown|i don.t know|不知道|不确定)[.!。\s]*$/i.test(task.answer.trim())) return { schemaVersion: 4, bases: [bases[0]!], reasonBasisRefs: ["answer"], reason: "Your answer leaves the decision open; the current understanding should remain unchanged.", operations: [] };
+    const themeIndex = task.selection?.themeIndex ?? task.question.relatedThemeIndexes[0];
+    const theme = themeIndex === undefined ? undefined : task.base.themes[themeIndex];
+    if (!theme?.id) throw new Error("The saved question requires a valid target theme.");
+    const themeId = theme.id;
     const procurement = /procurement|purchas|采购/i.test(task.answer);
     const question = procurement ? "What would make procurement consider the pilot successful?" : "What evidence would let the audience make that decision?";
+    const summary = task.selection
+      ? `${theme.summary}\nUser context (unverified): ${task.answer.slice(0, 2000)}`
+      : procurement ? "The discussion should help procurement decision-makers assess a bounded pilot, its risks and success criteria. Budget and approval criteria remain open unless supported by material." : `Organize the discussion around the decision stated by the user: ${task.answer}`;
     return { schemaVersion: 4, bases, reasonBasisRefs: ["answer", "interpretation"], reason: "Your answer changes the intended audience or decision. This is an interpretation of user input, not a verified source fact.", operations: [
-      { type: "update_summary", themeId: task.base.themes[0]!.id!, basisRefs: ["answer"], applicability: task.base.themes[0]!.claims.filter(c => c.evidence.length).map(c => ({ claimId: c.id!, status: "unconfirmed" as const, currentInterpretation: "The saved answer supplies current context; applicability of this historical material record remains unconfirmed.", explanation: "Retaining a record does not confirm its applicability to the current discussion.", basisRefs: ["interpretation"] })), text: procurement ? "The discussion should help procurement decision-makers assess a bounded pilot, its risks and success criteria. Budget and approval criteria remain open unless supported by material." : `Organize the discussion around the decision stated by the user: ${task.answer}` },
-      { type: "add_answer", themeId: task.base.themes[0]!.id! },
-      { type: "next_question", relatedThemeIds: [task.base.themes[0]!.id!], question, whyItMatters: "The next question follows the decision clarified in your answer.", groundingV4: { objective: "Clarify the decision in the saved answer", primaryThemeId: task.base.themes[0]!.id!, associations: [{ themeId: task.base.themes[0]!.id!, unresolvedIssue: "Decision criteria remain open", questionSpan: question, expectedAnswer: "Information requested by the scripted question; semantic usefulness unverified", rationale: "The scripted question follows this decision; semantic usefulness remains unverified." }], basisRefs: ["interpretation"] } },
+      ...(summary.length <= 4000 ? [{ type: "update_summary" as const, themeId: themeId, basisRefs: ["answer"], applicability: theme.claims.filter(c => c.evidence.length).map(c => ({ claimId: c.id!, status: "unconfirmed" as const, currentInterpretation: "The saved answer supplies current context; applicability of this historical material record remains unconfirmed.", explanation: "Retaining a record does not confirm its applicability to the current discussion.", basisRefs: ["interpretation"] })), text: summary }] : []),
+      { type: "add_answer", themeId: themeId },
+      ...(!task.selection ? [{ type: "next_question" as const, relatedThemeIds: [themeId], question, whyItMatters: "The next question follows the decision clarified in your answer.", groundingV4: { objective: "Clarify the decision in the saved answer", primaryThemeId: themeId, associations: [{ themeId: themeId, unresolvedIssue: "Decision criteria remain open", questionSpan: question, expectedAnswer: "Information requested by the scripted question; semantic usefulness unverified", rationale: "The scripted question follows this decision; semantic usefulness remains unverified." }], basisRefs: ["interpretation"] } }] : []),
     ] };
   }
 }
@@ -126,7 +133,9 @@ export function createModelClarificationRunner(config: { apiKey: string; model: 
 }
 
 export function clarificationModelContext(task: ClarificationTask) {
-  return { outputLanguage, base: activeUnderstanding(task.base), question: task.question, answer: task.answer, inputId: task.inputId,
+  return { outputLanguage,
+    selectedTask: task.selection ? { ...task.selection, themeId: task.base.themes[task.selection.themeIndex]?.id } : undefined,
+    base: activeUnderstanding(task.base), question: task.question, answer: task.answer, inputId: task.inputId,
     groundingPolicy: "Preserved source claims are historical source records; current applicability lives in summaryInterpretation.groundingV4 (or legacy grounding). Respect scope and attribution; user-edited grounding is unreviewed.",
     supersededHistory: task.base.themes.flatMap(theme => theme.claims.filter(c => c.supersededBy).map(claim => ({ themeId: theme.id, claim }))),
     reassessment: task.reassessment,

@@ -1,3 +1,5 @@
+import { useState } from "react";
+import { topicTasksFor, type UnderstandingProposalV1 } from "@pitchroom/domain";
 import { clarificationBasisV4Label, type ClarificationBasisV4 } from "@pitchroom/domain";
 import type { ClarificationTask, ClarificationResult, ClarificationBasis, ProjectPhase } from "@pitchroom/domain";
 
@@ -18,7 +20,17 @@ function BasisV4({ bases, refs, task }: { bases: ClarificationBasisV4[]; refs: s
   </li> : <li key={id}>Basis unavailable: {id}</li>;})}</ul>;
 }
 
-export function ClarificationPanel({ task, understanding, busy, onAction, revision, draft, onDraft }: { task: ClarificationTask; understanding: { versionId: string | undefined; phase: ProjectPhase }; busy: boolean; revision: number; draft?: ClarificationResult; onDraft?: (result: ClarificationResult) => void; onAction: (body: Record<string,unknown>) => boolean | Promise<boolean> }) {
+export function ClarificationPanel({ task, understanding, busy, onAction, revision, draft, onDraft }: { task: ClarificationTask; understanding: { versionId: string | undefined; phase: ProjectPhase; proposal?: UnderstandingProposalV1 }; busy: boolean; revision: number; draft?: ClarificationResult; onDraft?: (result: ClarificationResult) => void; onAction: (body: Record<string,unknown>) => boolean | Promise<boolean> }) {
+  const reassessmentContext = JSON.stringify([task.id, understanding.versionId, revision]);
+  const [reassessmentChoice, setReassessmentChoice] = useState<{ context: string; key: string }>();
+  const currentProposal = understanding.proposal;
+  const currentQuestions = currentProposal ? currentProposal.themes.flatMap((theme, themeIndex) => topicTasksFor(currentProposal, "theme", themeIndex).map(current => ({ key: `${themeIndex}:${current.id}`, title: theme.title, current }))) : [];
+  const selectedQuestion = reassessmentChoice?.context === reassessmentContext ? currentQuestions.find(item => item.key === reassessmentChoice.key) : undefined;
+  const reassess = () => {
+    if (!selectedQuestion || !understanding.versionId) return;
+    return onAction({ action: "submit_clarification", text: task.answer, expectedRevision: revision, rebaseTaskId: task.id,
+      selection: { understandingId: understanding.versionId, taskId: selectedQuestion.current.id, themeIndex: selectedQuestion.current.themeIndex } });
+  };
   const result = draft ?? (task.status === "applied" ? task.appliedResult ?? task.result : task.result);
   const appliedHeading = task.resultVersionId && task.resultVersionId === understanding.versionId
     ? understanding.phase === "accepted" ? "Changes applied · understanding accepted"
@@ -60,7 +72,17 @@ export function ClarificationPanel({ task, understanding, busy, onAction, revisi
       <button className="btn primary" disabled={busy || result.operations.some(op=>op.type === "update_summary" && !op.text.trim())} onClick={()=>onAction({action:"apply_clarification",taskId:task.id,result})}>Apply changes to understanding</button>
     </>}
     {task.status === "failed" && <><p>{task.attempts.at(-1)?.error}</p>{task.attempts.at(-1)?.failure && <p>Analysis stopped at {task.attempts.at(-1)!.failure!.stage}: {task.attempts.at(-1)!.failure!.code}. Your answer is saved.</p>}<button className="btn primary" disabled={busy} onClick={()=>submit("retry_clarification")}>Retry saved answer</button></>}
-    {task.status === "stale" && <button className="btn primary" disabled={busy} onClick={()=>onAction({action:"submit_clarification",text:task.answer,expectedRevision:revision,rebaseTaskId:task.id})}>Reassess against current understanding</button>}
+    {task.status === "stale" && <section aria-label="Reassess saved answer">
+      <p>Original question: {task.question.question}</p>
+      <p>Choose which current question this saved answer addresses. It will be proposed for that topic only; your original answer stays in history.</p>
+      <label htmlFor={`reassess-target-${task.id}`}>Current question for this saved answer</label>
+      <select id={`reassess-target-${task.id}`} disabled={busy || currentQuestions.length === 0} value={selectedQuestion?.key ?? ""} onChange={event => setReassessmentChoice({ context: reassessmentContext, key: event.target.value })}>
+        <option value="">Choose a current question</option>
+        {currentQuestions.map(item => <option key={item.key} value={item.key}>{item.title}: {item.current.question.question}</option>)}
+      </select>
+      {currentQuestions.length === 0 && <p>No current question is available. Keep the saved answer, add supporting material, or leave this topic unknown.</p>}
+      <button className="btn primary" disabled={busy || !selectedQuestion || !understanding.versionId} onClick={reassess}>Reassess against current understanding</button>
+    </section>}
     {["queued","running","proposal_ready","no_change","failed","stale"].includes(task.status) && <button className={task.status === "no_change" ? "btn primary" : "btn"} disabled={busy} onClick={()=>submit("dismiss_clarification")}>{task.status === "no_change" ? "Acknowledge and continue" : "Keep current understanding"}</button>}
     {(task.status === "queued" || task.status === "running") && <p>The saved task can be reopened after refresh. A worker must be running to process persistent projects.</p>}
   </section>;

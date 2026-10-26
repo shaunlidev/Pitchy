@@ -62,6 +62,11 @@ export const deepSeekOutputJsonSchema = closedObject({
         relatedSourceIds: { type: "array", items: { type: "string" } },
       }),
     },
+    topicTasks: { type: "array", maxItems: 5, items: closedObject({
+      id: { type: "string" }, themeIndex: { type: "integer", minimum: 0 },
+      relatedGapIndexes: { type: "array", items: { type: "integer", minimum: 0 } },
+      question: closedObject({ question: { type: "string" }, whyItMatters: { type: "string" }, relatedThemeIndexes: { type: "array", items: { type: "integer", minimum: 0 }, minItems: 1, maxItems: 1 } }),
+    }) },
     nextQuestion: closedObject({
       question: { type: "string" },
       whyItMatters: { type: "string" },
@@ -105,10 +110,17 @@ const instructions = [
   "Every supported claim must cite an exact quote from a chunk.",
   "Never guess missing facts. Mark them unknown.",
   "Never create user_asserted claims and never approve the result.",
-  "Ask exactly one useful next question.",
+  "Return topicTasks: a grounded collection targeting 3–5 useful strategic questions, without filling a quota. Each task has a unique id, exactly one themeIndex, its question with relatedThemeIndexes=[themeIndex], and relatedGapIndexes listing only directly addressed gaps. Every task must address an actual contradiction, gap or unresolved choice in the supplied material; explain why it matters without inventing facts or approval conditions. Use [] when no useful question is grounded. nextQuestion is the legacy first useful question (or an explicit statement that unknowns can remain open); never copy it into unrelated topics. The interface presents one selected task at a time.",
+  "For every relatedGapIndexes entry, check the question itself against that gap: answering the question must directly supply the missing information or resolve the choice described there. A shared theme, possible downstream benefit or upstream dependency is not direct coverage. Omit an association when coverage is uncertain; do not broaden it to make the collection appear complete.",
+  "Describe missing information as a limit of the supplied material, not as proof that an outcome, evaluation or action is impossible in the real world. Rationales must distinguish what the source does not state from what cannot be done. Use appropriately qualified consequences; do not invent universal prerequisites, decision gates or approval conditions.",
+  "Apply these source-scope and uncertainty rules to every output field, including theme summaries, gap descriptions and gap whyItMatters, task whyItMatters, nextQuestion and publicSummary. Do not use a general explanatory maxim as an unqualified universal prerequisite. If a consequence depends on assumptions absent from the material, state it conditionally or leave it unresolved instead of asserting that no assessment or progress is possible.",
+  "Supported paraphrases must preserve the source's certainty and perspective. A source's unawareness or omission cannot become a supported claim of real-world non-existence, non-completion or invalidity. Keep the epistemic limit attached to the paraphrase rather than upgrading an unknown into a negative fact.",
+  "When the source is sparse, keep the question set proportionate to its explicit uncertainties. Additional absent details may remain unknown; do not turn every unmentioned detail into a mandatory strategic task or imply that it must be settled before progress is possible.",
+  "Write each task rationale as a concise explanation of the current evidence gap and why that gap matters to the decision or interpretation named by its question. Use the supplied material's present state, not predictions about what a future answer will settle. Do not add promises of downstream knowledge, resolution or effects. Keep useful material-backed reasons rather than empty cautions or a repetition of the question.",
+  "Keep each rationale within its question's scope, including any alternative or open status the question permits. Unasked details and other unknowns remain separate. A task can be useful while its answer is partial or the decision stays open; it does not need a guaranteed outcome to justify asking it.",
   "Keep publicSummary concise and at most 1000 characters. Detailed claims, gaps and qualifications belong in the proposal. Keep exact quotes unchanged.",
   "Your final answer must be one JSON object with exactly two top-level properties: proposal and publicSummary.",
-  "proposal must contain schemaVersion, themes, gaps, and nextQuestion. Every claim must contain statement, evidenceState, evidence, and userInputIds.",
+  "proposal must contain schemaVersion, themes, gaps, topicTasks, and nextQuestion. Every claim must contain statement, evidenceState, evidence, and userInputIds.",
 ].join("\n");
 
 export function parseDeepSeekJson(text: string): unknown {

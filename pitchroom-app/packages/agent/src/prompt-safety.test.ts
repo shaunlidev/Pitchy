@@ -26,6 +26,18 @@ const safeUnknown: UnderstandingProposalV1 = {
 };
 
 describe("prompt-injection containment", () => {
+  it.each(["id", "question", "whyItMatters"])("rejects a quarantined literal in a later topic task %s", field => {
+    const proposal = structuredClone(safeUnknown);
+    const later = { ...proposal.nextQuestion };
+    if (field === "question") later.question = "What supports the $99M figure?";
+    else if (field === "whyItMatters") later.whyItMatters = "It would explain the $99M figure.";
+    proposal.topicTasks = [
+      { id: "first", themeIndex: 0, question: { ...proposal.nextQuestion } },
+      { id: "later", themeIndex: 0, question: later },
+    ];
+    if (field === "id") proposal.topicTasks[1]!.id = "task-$99M";
+    expect(() => validateNoUntrustedInstructionEcho({ proposal, publicSummary: "Revenue remains unknown.", chunks: [injectedChunk] })).toThrow("repeated quarantined source content");
+  });
   it("quarantines instruction-like chunks without returning their text to the agent", () => {
     expect(isInstructionLikeSourceText(injectedChunk.text)).toBe(true);
     expect(quarantineChunkForAgent(injectedChunk)).toMatchObject({

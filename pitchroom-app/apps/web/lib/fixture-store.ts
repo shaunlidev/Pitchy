@@ -4,7 +4,7 @@ import { SyntheticStoryRunner } from "@pitchroom/agent";
 import { assertStoryHead, sameStoryOrigin, storyIsFresh, sourceFingerprint, compareStories, exactStoryEdit, storyToDeck, type StoryHead, type StoryRequest, type StorySnapshot, type StoryProposal } from "@pitchroom/domain";
 import { classifyClarificationFailure } from "@pitchroom/agent";
 import { recordClaimCorrection } from "@pitchroom/domain";
-import { buildReassessmentContext, newClarification, clarificationPending, assertClarificationFresh, buildClarificationCandidate, type ClarificationTask, type SourceRecord, type ClarificationResult } from "@pitchroom/domain";
+import { sameTopicTaskSelection, buildReassessmentContext, newClarification, clarificationPending, assertClarificationFresh, buildClarificationCandidate, type ClarificationTask, type SourceRecord, type ClarificationResult } from "@pitchroom/domain";
 import { DeterministicClarificationRunner, evaluateClarification } from "@pitchroom/agent";
 import { PitchroomError, defaultProjectCharacterLimit, ingestMaterial, type DeckProposal, type StoryWorkspace, type PositioningProposalV1, type ProjectPhase, type UnderstandingProposalV1 } from "@pitchroom/domain";
 import { buildDeterministicDeck, buildDeterministicPositioning, buildDeterministicUnderstanding, isInstructionLikeSourceText } from "@pitchroom/agent";
@@ -251,11 +251,11 @@ export function editFixtureDeckPage(deckId: string, expectedDeckVersion: number,
 function clarificationSources(): SourceRecord[] { return state.sources.map(source => ({ ...source, id: source.sourceId, projectId: state.project.id })); }
 function clarificationCurrent() { return { phase: state.project.phase, revision: state.project.revision, understandingId: state.currentVersionId, sources: clarificationSources() }; }
 function assertNoPendingClarification() { readFixtureState(); if (state.clarifications?.some(clarificationPending)) throw new PitchroomError("CONFLICT", "Resolve the current clarification before changing or accepting this version."); }
-export function submitFixtureClarification(input: { text: string; expectedRevision: number; commandId: string; rebaseTaskId?: string }) {
+export function submitFixtureClarification(input: { text: string; expectedRevision: number; commandId: string; rebaseTaskId?: string; selection?: import("@pitchroom/domain").TopicTaskSelection }) {
   readFixtureState(); state.clarifications ??= [];
   const existing = state.clarifications.find(t => t.commandId === input.commandId);
   if (existing) {
-    if (existing.answer !== input.text || existing.baseRevision !== input.expectedRevision || existing.reassessment?.rebasedFromTaskId !== input.rebaseTaskId) throw new PitchroomError("CONFLICT", "Command ID was used for different input.");
+    if (!sameTopicTaskSelection(existing.selection, input.selection) || existing.answer !== input.text || existing.baseRevision !== input.expectedRevision || existing.reassessment?.rebasedFromTaskId !== input.rebaseTaskId) throw new PitchroomError("CONFLICT", "Command ID was used for different input.");
     return readFixtureState();
   }
   if ((state.project.phase !== "review_required" && state.project.phase !== "accepted") || state.project.revision !== input.expectedRevision || !state.currentVersionId) throw new PitchroomError("CONFLICT", "Clarification requires the current review version.");
@@ -264,7 +264,7 @@ export function submitFixtureClarification(input: { text: string; expectedRevisi
   if (input.rebaseTaskId && (!prior || prior.status !== "stale" || prior.answer !== input.text)) throw new PitchroomError("CONFLICT", "Only a stale answer can be rebased.");
   const current = state.versions.find(v => v.id === state.currentVersionId)!;
   const id = crypto.randomUUID();
-  const task = newClarification({ id, inputId: prior?.inputId ?? crypto.randomUUID(), projectId: state.project.id, commandId: input.commandId, actorId: "synthetic-local-user", versionId: current.id, revision: state.project.revision, basePhase: state.project.phase, base: current.proposal, sources: clarificationSources(), reassessment: prior ? buildReassessmentContext(prior, clarificationSources()) : undefined, answer: input.text });
+  const task = newClarification({ id, inputId: prior?.inputId ?? crypto.randomUUID(), projectId: state.project.id, commandId: input.commandId, actorId: "synthetic-local-user", versionId: current.id, revision: state.project.revision, basePhase: state.project.phase, base: current.proposal, sources: clarificationSources(), reassessment: prior ? buildReassessmentContext(prior, clarificationSources()) : undefined, selection: input.selection, answer: input.text });
   state.clarifications.push(task); addEvent("Answer saved", "Clarification queued; current understanding unchanged");
   scheduleFixtureClarification(task); return readFixtureState();
 }
