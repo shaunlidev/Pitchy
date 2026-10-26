@@ -88,11 +88,18 @@ export function WorkspaceView(props: WorkspaceViewProps) {
   const savedBrief = state.brief ?? { head: null, versions: [] };
   const savedBriefText = briefText(savedBrief);
   const brief = useLocalDraft({ ...draftBase, kind: "brief", context: savedBrief.head?.id ?? "none", schema: textDraftSchema, initial: savedBriefText, hasContent: value => value !== savedBriefText });
-  const selectedPosition = position.overviewSelection.split(":");
-  const topicTaskId = position.topicTaskId;
-  const setTopicTaskId = (topicTaskId: string) => updatePosition({ topicTaskId });
+  const selectedPosition = (position.topicReturn ? `${position.topicReturn.kind}:${position.topicReturn.index}` : position.overviewSelection).split(":");
+  const taskTopic: TopicRef | undefined = current ? { understandingId: current.id, kind: selectedPosition[0] === "gap" ? "gap" : "theme", index: Number(selectedPosition[1]) } : undefined;
+  const topicTaskId = taskTopic ? position.taskSelections?.find(selection => sameTopic(selection, taskTopic))?.taskId : undefined;
   const availableTasks = current ? topicTasksFor(current.proposal, selectedPosition[0] === "gap" ? "gap" : "theme", Number(selectedPosition[1])) : [];
   const selectedTopicTask = availableTasks.find(task => task.id === topicTaskId) ?? availableTasks[0];
+  const setTopicTaskId = (taskId: string) => {
+    const task = availableTasks.find(task => task.id === taskId);
+    if (!taskTopic || !task) return;
+    const ownerTopic: TopicRef = { understandingId: taskTopic.understandingId, kind: "theme", index: task.themeIndex };
+    const contexts = sameTopic(taskTopic, ownerTopic) ? [taskTopic] : [taskTopic, ownerTopic];
+    updatePosition({ taskSelections: [...(position.taskSelections ?? []).filter(selection => !contexts.some(topic => sameTopic(selection, topic))), ...contexts.map(topic => ({ ...topic, taskId }))] });
+  };
   const answerContext = selectedTopicTask && current?.proposal.topicTasks !== undefined ? JSON.stringify([understandingContext, selectedTopicTask.id, selectedTopicTask.themeIndex]) : understandingContext;
   const [topicAnswers, setTopicAnswers] = useState<Record<string, string>>({});
   const answerDraft = useLocalDraft({ ...draftBase, kind: "answer", context: answerContext, schema: textDraftSchema, initial: "", hasContent: value => Boolean(value) });
@@ -140,7 +147,7 @@ export function WorkspaceView(props: WorkspaceViewProps) {
     }
     return result;
   };
-  const viewProps = { ...props, topicTaskId, onTopicTaskId: setTopicTaskId, onTopicReturn: (topic: TopicRef) => updatePosition({ destination: "clarify", topicReturn: topic, topicTaskId: undefined, overviewSelection: `${topic.kind}:${topic.index}` }), text: effectiveText, answer: effectiveAnswer, correction: effectiveCorrection, onTextChange: changeText, onAnswerChange: changeAnswer, onCorrectionChange: changeCorrection, workspacePosition: position, onWorkspacePosition: updatePosition, storyDraft: draftEnabled ? storyInput.value : storyDraft, onStoryDraft: changeStory, busy: ux.mutationLocked, primary: ux.primary, clarificationDrafts, onClarificationDraft: (id: string, result: import("@pitchroom/domain").ClarificationResult) => setClarificationDrafts(drafts=>({...drafts,[id]:result})), onClarificationAction: guardedAction, clarificationBusy: props.busy || Boolean(props.error) || Boolean(ux.running), runningAction: ux.running ? activity?.kind : undefined, onAction: guardedAction, onChooseFile: props.busy || ux.running ? () => false : props.onChooseFile, positioningDraft, onPositioningDraft: setPositioningDraft, deckEditor: draftEnabled ? deckInput.value : deckEditor, onDeckEditor: changeDeck, correctionTarget: effectiveTarget, onCorrectionTarget: changeTarget };
+  const viewProps = { ...props, topicTaskId, onTopicTaskId: setTopicTaskId, onTopicReturn: (topic: TopicRef) => updatePosition({ destination: "clarify", topicReturn: topic, overviewSelection: `${topic.kind}:${topic.index}` }), text: effectiveText, answer: effectiveAnswer, correction: effectiveCorrection, onTextChange: changeText, onAnswerChange: changeAnswer, onCorrectionChange: changeCorrection, workspacePosition: position, onWorkspacePosition: updatePosition, storyDraft: draftEnabled ? storyInput.value : storyDraft, onStoryDraft: changeStory, busy: ux.mutationLocked, primary: ux.primary, clarificationDrafts, onClarificationDraft: (id: string, result: import("@pitchroom/domain").ClarificationResult) => setClarificationDrafts(drafts=>({...drafts,[id]:result})), onClarificationAction: guardedAction, clarificationBusy: props.busy || Boolean(props.error) || Boolean(ux.running), runningAction: ux.running ? activity?.kind : undefined, onAction: guardedAction, onChooseFile: props.busy || ux.running ? () => false : props.onChooseFile, positioningDraft, onPositioningDraft: setPositioningDraft, deckEditor: draftEnabled ? deckInput.value : deckEditor, onDeckEditor: changeDeck, correctionTarget: effectiveTarget, onCorrectionTarget: changeTarget };
   const agentBusy = activity?.status === "queued" || activity?.status === "running";
   useEffect(() => { if (!initialVersion.current && state.currentVersionId) setDestination("clarify"); initialVersion.current = state.currentVersionId; }, [state.currentVersionId]);
 
@@ -233,7 +240,7 @@ function ClarifyView({ topicTaskId, onTopicTaskId, onChooseFiles, fileImports, o
 
   return <section className="clarifyPage">
     <header className="workspaceHeading"><h1>Find the story in the material.</h1><span className="small muted">Keep unknowns open.</span></header>
-    {current.id !== state.currentVersionId && <div role="status">Original topic from Understanding v{current.number} · read only. <button onClick={() => onWorkspacePosition?.({ topicReturn: undefined, topicTaskId: undefined })}>Return to current Understanding</button></div>}
+    {current.id !== state.currentVersionId && <div role="status">Original topic from Understanding v{current.number} · read only. <button onClick={() => onWorkspacePosition?.({ topicReturn: undefined })}>Return to current Understanding</button></div>}
     <div className="preparationGrid">
       <aside className="projectMap">
         <details><summary>Project overview</summary>

@@ -1,4 +1,4 @@
-import { topicRefSchema, topicTasksFor } from "@pitchroom/domain";
+import { sameTopic, topicRefSchema, topicTasksFor } from "@pitchroom/domain";
 import { z } from "zod";
 import type { FixtureState } from "./fixture-store";
 import { deriveWorkspaceUXState } from "./workspace-ux-state";
@@ -9,7 +9,7 @@ export const workspacePositionSchema = z.object({
   destination: z.enum(["materials", "clarify", "positioning", "deck"]),
   understandingId: z.string().optional(),
   overviewSelection: z.string(),
-  topicTaskId: z.string().optional(),
+  taskSelections: z.array(topicRefSchema.extend({ taskId: z.string() })).optional(),
   deckId: z.string().optional(),
   pageId: z.string().optional(),
 });
@@ -31,13 +31,13 @@ export function resolveWorkspacePosition(state: FixtureState, saved?: WorkspaceP
       if (entries?.[index]) overviewSelection = saved.overviewSelection;
     }
   }
-  const topicUnderstanding = saved?.topicReturn && hasOriginalTopic ? state.versions.find(version => version.id === saved.topicReturn?.understandingId) : understanding;
-  const taskTopic = saved?.topicReturn && hasOriginalTopic ? `${saved.topicReturn.kind}:${saved.topicReturn.index}` : overviewSelection;
-  const [kind, index] = taskTopic.split(":");
-  const topicTaskId = saved?.understandingId === understanding?.id && (hasOriginalTopic || saved?.overviewSelection === overviewSelection) && topicUnderstanding ? topicTasksFor(topicUnderstanding.proposal, kind === "gap" ? "gap" : "theme", Number(index)).find(task => task.id === saved?.topicTaskId)?.id : undefined;
+  const taskSelections = saved?.taskSelections?.filter((selection, index, selections) => {
+    const version = state.versions.find(version => version.id === selection.understandingId);
+    return version && topicTasksFor(version.proposal, selection.kind, selection.index).some(task => task.id === selection.taskId) && selections.findIndex(candidate => sameTopic(candidate, selection)) === index;
+  });
   const deck = state.deckVersions.find(version => version.id === saved?.deckId) ?? state.deck;
   const page = deck?.proposal.pages.find(candidate => candidate.id === saved?.pageId) ?? deck?.proposal.pages[0];
-  return { schemaVersion: 1, topicReturn: saved?.topicReturn && hasOriginalTopic ? saved.topicReturn : undefined, destination, understandingId: understanding?.id, overviewSelection, topicTaskId, deckId: deck?.id, pageId: page?.id };
+  return { schemaVersion: 1, topicReturn: saved?.topicReturn && hasOriginalTopic ? saved.topicReturn : undefined, destination, understandingId: understanding?.id, overviewSelection, taskSelections, deckId: deck?.id, pageId: page?.id };
 }
 
 export function readWorkspacePosition(storage: Pick<Storage, "getItem">, projectId: string): WorkspacePosition | undefined {

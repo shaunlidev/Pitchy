@@ -47,16 +47,27 @@ it("keeps the inspected Clarify topic on return and after reload", async () => {
 it("resumes a second question within one topic with its own draft and no business action", async () => {
   const state = readFixtureState();
   const current = state.versions.find(version => version.id === state.currentVersionId)!;
-  current.proposal.topicTasks = ["baseline", "timing"].map(id => ({ id, themeIndex: 0, question: { question: `Which ${id}?`, whyItMatters: `The ${id} remains unknown.`, relatedThemeIndexes: [0] } }));
+  current.proposal.topicTasks = ["baseline", "timing"].map(id => ({ id, themeIndex: 0, relatedGapIndexes: [0], question: { question: `Which ${id}?`, whyItMatters: `The ${id} remains unknown.`, relatedThemeIndexes: [0] } }));
+  const otherThemeIndex = current.proposal.themes.length;
+  current.proposal.themes.push({ title: "Another audience topic", summary: "The audience remains unknown.", claims: structuredClone(current.proposal.themes[0]!.claims) });
+  current.proposal.topicTasks.push({ id: "audience", themeIndex: otherThemeIndex, question: { question: "Which audience?", whyItMatters: "The audience remains unknown.", relatedThemeIndexes: [otherThemeIndex] } });
   const before = structuredClone(state);
   const onAction = vi.fn(() => true);
   const mount = () => render(<WorkspaceView rememberPosition state={state} busy={false} text="" answer="" correction="" onTextChange={() => {}} onAnswerChange={() => {}} onCorrectionChange={() => {}} onChooseFile={() => true} onCancelRun={() => {}} onAction={onAction} />);
   const user = userEvent.setup(); const first = mount();
   await user.click(screen.getByRole("button", { name: "Clarify" }));
   await user.type(screen.getByRole("textbox", { name: "Answer the agent’s question" }), "Baseline draft");
+  await user.click(screen.getByText("Project overview"));
+  await user.click(within(screen.getByLabelText("Project topics")).getAllByRole("button").find(button => button.textContent?.includes("Open question 1"))!);
   await user.click(screen.getByText("Other questions for this topic"));
   await user.click(screen.getByRole("button", { name: "Which timing?" }));
   await user.type(screen.getByRole("textbox", { name: "Answer the agent’s question" }), "Timing draft");
+  await user.click(screen.getByText("Project overview"));
+  await user.click(screen.getByRole("button", { name: /Another audience topic/ }));
+  await user.click(screen.getByText("Project overview"));
+  const originalTopic = within(screen.getByLabelText("Project topics")).getAllByRole("button").find(button => button.textContent?.startsWith(current.proposal.themes[0]!.title))!;
+  await user.click(originalTopic);
+  expect(screen.getByRole("heading", { name: "Which timing?" })).toBeTruthy();
   first.unmount(); mount();
   await screen.findByRole("heading", { name: "Which timing?" });
   expect(screen.getByRole("textbox", { name: "Answer the agent’s question" })).toHaveProperty("value", "Timing draft");
@@ -96,7 +107,7 @@ it.each([
   ["page", { pageId: "removed-page" }, "The saved page is unavailable; selected the first page."],
   ["topic", { understandingId: "superseded" }, "The saved topic is unavailable in the current understanding; selected the current default topic."],
   ["topic index", { overviewSelection: "gap:999" }, "The saved topic is unavailable in the current understanding; selected the current default topic."],
-  ["question", { topicTaskId: "removed-task" }, "The saved question is unavailable in this topic; opened the current topic."],
+  ["question", { taskSelections: [{ understandingId: "removed", kind: "theme", index: 0, taskId: "removed-task" }] }, "An unavailable saved question was not restored. Your saved project work is unchanged."],
 ])("explains unavailable saved %s without business actions or forced navigation", async (_label, patch, message) => {
   const state = readFixtureState();
   const before = structuredClone(state);
