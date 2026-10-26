@@ -1,0 +1,83 @@
+name: Pitchroom PR CI
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: pitchroom-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  source:
+    name: Source boundary
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Tooling behavior and committed source boundary
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: python3 tooling/pipeline/check-source.py
+  application:
+    name: Application checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    services:
+      postgres:
+        image: postgres:16.4
+        env:
+          POSTGRES_USER: clarify_qa
+          POSTGRES_PASSWORD: clarify_qa
+          POSTGRES_DB: clarify_qa
+        ports: ['55437:5432']
+        options: >-
+          --health-cmd "pg_isready -U clarify_qa -d clarify_qa"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa
+        with:
+          version: 9.6.0
+          run_install: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24.10.0
+      - name: Verify preinstalled browser
+        run: google-chrome --version
+      - name: Install locked dependencies
+        run: python3 tooling/pipeline/ci.py install
+      - name: Typecheck
+        run: python3 tooling/pipeline/ci.py typecheck
+      - name: Unit tests
+        run: python3 tooling/pipeline/ci.py unit
+      - name: Offline evaluations
+        run: python3 tooling/pipeline/ci.py offline-eval
+      - name: Database target guard
+        run: python3 tooling/pipeline/ci.py database-guard
+      - name: Production build
+        run: python3 tooling/pipeline/ci.py build
+      - name: All isolated database suites serially
+        run: python3 tooling/pipeline/ci.py database
+      - name: Synthetic browser checks without recording
+        run: python3 tooling/pipeline/ci.py browser
+  gate:
+    name: PR gate
+    if: always()
+    needs: [source, application]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require every job to succeed
+        env:
+          SOURCE_RESULT: ${{ needs.source.result }}
+          APPLICATION_RESULT: ${{ needs.application.result }}
+        run: test "$SOURCE_RESULT" = success && test "$APPLICATION_RESULT" = success

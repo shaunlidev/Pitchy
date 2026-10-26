@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "repository": "shaunlidev/pitchroom",
+  "project_id": "e9b58af4-e44d-40a3-b0d6-65efd204356f",
+  "mode": "serial_pr_foundation",
+  "dispatch_enabled": false,
+  "task_lanes": 1,
+  "machine_cap": 5,
+  "default_base": "main",
+  "migration_base": "codex/pit-30-git-baseline",
+  "migration_prs": [1, 2, 3],
+  "merge_policy": "human_approved_merge_commit",
+  "engineering_done_requires": ["merged", "post_merge_checks_passed"],
+  "automatic_handoff": false,
+  "automatic_done": false,
+  "automatic_deployment": false,
+  "required_ci_check": "PR gate"
+}
