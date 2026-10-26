@@ -27,6 +27,7 @@ describe("persistent workspace development cache", () => {
   it("rebinds a database whose hot-reload query map is missing a required table", () => {
     const queryEntry = { findFirst() {} };
     const currentDatabase = { db: { query: {
+      briefVersions: queryEntry,
       clarificationTasks: queryEntry,
       projects: queryEntry,
       sources: queryEntry,

@@ -78,6 +78,13 @@
       "when": 1792886400000,
       "tag": "0010_story_judgment_loop",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1792978435502,
+      "tag": "0011_maintained_brief",
+      "breakpoints": true
     }
   ]
 }

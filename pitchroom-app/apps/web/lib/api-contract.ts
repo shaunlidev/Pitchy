@@ -1,3 +1,4 @@
+import { briefWorkspaceSchema, saveBriefSchema } from "@pitchroom/domain";
 import { z } from "zod";
 import { clarificationTaskSchema, clarificationResultSchema, acceptedMediaTypes, storyHeadSchema, storyRequestSchema, storyWorkspaceSchema, deckProposalSchema, positioningProposalV1Schema, sourceChunkSchema, understandingProposalV1Schema } from "@pitchroom/domain";
 
@@ -5,6 +6,7 @@ const commandId = z.string().trim().min(1).max(200).optional();
 const expectedRevision = z.number().int().nonnegative();
 
 export const workspaceCommandSchema = z.discriminatedUnion("action", [
+  saveBriefSchema.extend({ action: z.literal("save_brief") }),
   z.object({ action:z.literal("propose_story"), commandId:z.string().min(1), expected:storyHeadSchema, request:storyRequestSchema, retryOf:z.string().optional() }),
   z.object({ action:z.literal("decide_story"), commandId:z.string().min(1), expected:storyHeadSchema, proposalId:z.string(), decision:z.enum(["apply","keep_current"]) }),
   z.object({ action:z.literal("undo_story"), commandId:z.string().min(1), expected:storyHeadSchema }),
@@ -36,6 +38,7 @@ export const workspaceCommandSchema = z.discriminatedUnion("action", [
 ]);
 
 const materialSchema = z.object({
+  kind: z.enum(["file", "brief"]).default("file"),
   sourceId: z.string().min(1),
   name: z.string().min(1),
   mediaType: z.enum(acceptedMediaTypes),
@@ -77,6 +80,7 @@ export const workspaceStateSchema = z.object({
     revision: z.number().int().nonnegative(),
   }),
   sources: z.array(materialSchema),
+  brief: briefWorkspaceSchema.default({ head: null, versions: [] }),
   versions: z.array(versionSchema),
   currentVersionId: z.string().min(1).optional(),
   positioning: positioningVersionSchema.optional(),

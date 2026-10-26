@@ -1,9 +1,10 @@
+import { PitchroomError } from "@pitchroom/domain";
 // @vitest-environment jsdom
 
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { submitFixtureClarification, decideFixtureClarification, runFixtureClarification, acceptFixture, applyFixturePositioning, generateFixturePositioning, generateFixtureDeck, addFixtureMaterial, answerFixtureQuestion, correctFixtureClaim, readFixtureState, removeFixtureMaterial, resetFixtureState, runFixtureAgent } from "../lib/fixture-store";
+import { saveFixtureBrief, submitFixtureClarification, decideFixtureClarification, runFixtureClarification, acceptFixture, applyFixturePositioning, generateFixturePositioning, generateFixtureDeck, addFixtureMaterial, answerFixtureQuestion, correctFixtureClaim, readFixtureState, removeFixtureMaterial, resetFixtureState, runFixtureAgent } from "../lib/fixture-store";
 import HomePage from "./page";
 import { WorkspaceView } from "../lib/workspace-view";
 import { workspaceCommandSchema } from "../lib/api-contract";
@@ -27,7 +28,11 @@ describe("HomePage review interactions", () => {
     vi.stubGlobal("EventSource", FakeEventSource);
     vi.stubGlobal("fetch", vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       if (!init?.method || init.method === "GET") return jsonResponse(readFixtureState());
-      const body = JSON.parse(String(init.body)) as { action: string; text?: string; expectedRevision?: number; sourceId?: string; name?: string; mediaType?: "text/plain" | "text/markdown"; themeIndex?: number; claimIndex?: number; commandId?: string; taskId?: string; result?: import("@pitchroom/domain").ClarificationResult };
+      const body = workspaceCommandSchema.parse(JSON.parse(String(init.body)));
+      if (body.action === "save_brief") {
+        try { return jsonResponse(saveFixtureBrief(body)); }
+        catch (error) { if (error instanceof PitchroomError) return jsonResponse({code:error.code,error:error.message,requestId:"qa-brief"},409); throw error; }
+      }
       if (body.action === "add_material") return jsonResponse(addFixtureMaterial({ name: body.name ?? "pasted-material.md", mediaType: body.mediaType ?? "text/markdown", text: body.text ?? "" }));
       if (body.action === "submit_clarification") { const saved=submitFixtureClarification({text:body.text!,expectedRevision:body.expectedRevision!,commandId:body.commandId!}); await runFixtureClarification(saved.clarifications!.at(-1)!.id); return jsonResponse(readFixtureState(),202); }
       if (body.action === "apply_clarification") return jsonResponse(decideFixtureClarification({taskId:body.taskId!,commandId:body.commandId!,action:"apply",result:body.result}));
@@ -71,6 +76,30 @@ describe("HomePage review interactions", () => {
     await waitFor(()=>expect(screen.getByLabelText("Answer the agent’s question")).toHaveProperty("value",""));
     expect(screen.getByText(/Saved answer drafts/)).toBeTruthy();
     expect(props.onAction).not.toHaveBeenCalled();
+  });
+
+  it("maintains one brief and restores an intentional unsaved clear before versioned removal", async () => {
+    const user=userEvent.setup(); const first=render(<HomePage/>);
+    await user.click(await screen.findByText(/Written brief/,{selector:"summary"}));
+    const editor=screen.getByLabelText("Written brief");await user.type(editor,"Single brief 原话.");await user.click(screen.getByRole("button",{name:"Save brief"}));
+    await waitFor(()=>expect(readFixtureState().brief?.versions).toHaveLength(1));expect(editor).toHaveProperty("value","Single brief 原话.");
+    expect(screen.getByRole("button",{name:"Save brief"})).toHaveProperty("disabled",true);
+    await user.click(screen.getByRole("button",{name:"Clear brief"}));expect(readFixtureState().sources).toHaveLength(2);
+    first.unmount();render(<HomePage/>);const restored=await screen.findByLabelText("Written brief");await waitFor(()=>expect(restored).toHaveProperty("value",""));
+    expect(screen.getByRole("button",{name:"Save cleared brief"})).toHaveProperty("disabled",false);
+    await user.click(screen.getByRole("button",{name:"Save cleared brief"}));await waitFor(()=>expect(readFixtureState().brief?.head?.entry).toEqual({kind:"cleared"}));
+    expect(readFixtureState().sources.map(source=>source.name)).toEqual(["brief.md"]);expect(readFixtureState().versions).toHaveLength(1);expect(readFixtureState().brief?.versions).toHaveLength(2);
+  });
+
+  it("preserves stale-tab brief input and requires explicit recovery before a new save", async () => {
+    saveFixtureBrief({expectedVersionId:null,text:"Original brief",commandId:crypto.randomUUID()});
+    const user=userEvent.setup();render(<HomePage/>);const editor=await screen.findByLabelText("Written brief");await user.clear(editor);await user.type(editor,"My unsent revision");
+    saveFixtureBrief({expectedVersionId:readFixtureState().brief!.head!.id,text:"Other tab revision",commandId:crypto.randomUUID()});
+    await user.click(screen.getByRole("button",{name:"Save brief"}));await screen.findByText(/This workspace changed since the action began/);expect(editor).toHaveProperty("value","My unsent revision");expect(readFixtureState().brief?.versions).toHaveLength(2);
+    await user.click(screen.getByRole("button",{name:"Refresh workspace"}));await waitFor(()=>expect(editor).toHaveProperty("value","Other tab revision"));
+    const count=vi.mocked(fetch).mock.calls.filter(([,init])=>init?.method==="POST").length;
+    await user.click(screen.getByText(/Saved brief drafts/));await user.click(screen.getByRole("button",{name:/Use saved brief draft/}));expect(editor).toHaveProperty("value","My unsent revision");expect(vi.mocked(fetch).mock.calls.filter(([,init])=>init?.method==="POST")).toHaveLength(count);
+    await user.click(screen.getByRole("button",{name:"Save brief"}));await waitFor(()=>expect(readFixtureState().brief?.versions).toHaveLength(3));
   });
 
   it("clears a committed answer and disables repeat submission", async () => {
@@ -157,7 +186,7 @@ describe("HomePage review interactions", () => {
     const user = userEvent.setup({ applyAccept: false });
     render(<HomePage />);
     await screen.findByRole("heading", { name: "Your project materials." });
-    await user.click(screen.getByText(/Add another source/));
+    await user.click(screen.getByText(/Written brief/, {selector:"summary"}));
     await user.type(screen.getByLabelText("Written brief"), "Keep this unsent written brief.");
     await user.click(await screen.findByRole("button", { name: /Add files/ }));
     await user.upload(screen.getByLabelText("Choose a UTF-8 text or Markdown file"), [

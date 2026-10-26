@@ -1,3 +1,4 @@
+import { ingestBrief, briefText, saveBriefSchema, stableHash, normalizeMaterialText, type BriefWorkspace } from "@pitchroom/domain";
 import { SyntheticStoryRunner } from "@pitchroom/agent";
 import { assertStoryHead, sameStoryOrigin, storyIsFresh, sourceFingerprint, compareStories, exactStoryEdit, storyToDeck, type StoryHead, type StoryRequest, type StorySnapshot, type StoryProposal } from "@pitchroom/domain";
 import { classifyClarificationFailure } from "@pitchroom/agent";
@@ -12,11 +13,12 @@ type PositioningVersion = { id: string; number: number; proposal: PositioningPro
 type DeckVersion = { id: string; number: number; proposal: DeckProposal; createdBy: "agent" | "user"; createdAt: string };
 type WorkflowRun = { id: string; kind: "positioning" | "deck" | "story"; status: "running" | "completed" | "failed"; failureMessage?: string; events: Array<{ type: string; detail: string; at: string }> };
 export type AgentReview = { status: "quarantined"; affectedChunks: number; message: string };
-type WorkspaceMaterial = ReturnType<typeof ingestMaterial> & { agentReview?: AgentReview };
+type WorkspaceMaterial = ReturnType<typeof ingestMaterial> & { kind?: "file" | "brief"; agentReview?: AgentReview };
 export type FixtureState = {
   mode: "synthetic-fixture" | "postgres-fake" | "live";
   project: { id: string; name: string; phase: ProjectPhase; revision: number };
   sources: WorkspaceMaterial[];
+  brief?: BriefWorkspace;
   versions: Version[];
   currentVersionId?: string;
   positioning?: PositioningVersion;
@@ -29,7 +31,7 @@ export type FixtureState = {
   events: Array<{ sequence: number; label: string; detail: string; at: string }>;
 };
 
-const makeState = (): FixtureState => ({ mode: "synthetic-fixture", project: { id: "00000000-0000-4000-8000-000000000001", name: "Atelier pitch", phase: "empty", revision: 0 }, sources: [], versions: [], positioningVersions: [], deckVersions: [], workflowRuns: [], clarifications: [], events: [] });
+const makeState = (): FixtureState => ({ mode: "synthetic-fixture", project: { id: "00000000-0000-4000-8000-000000000001", name: "Atelier pitch", phase: "empty", revision: 0 }, brief: { head: null, versions: [] }, sources: [], versions: [], positioningVersions: [], deckVersions: [], workflowRuns: [], clarifications: [], events: [] });
 const globalStore = globalThis as typeof globalThis & { __pitchroomFixture?: FixtureState };
 const state = globalStore.__pitchroomFixture ?? makeState();
 globalStore.__pitchroomFixture = state;
@@ -54,7 +56,37 @@ export const readFixtureState = (): FixtureState => {
   }
   return structuredClone(state);
 };
-export function resetFixtureState() { delete state.story; storyReceipts.clear(); Object.assign(state, makeState()); return readFixtureState(); }
+export function resetFixtureState() { delete state.story; storyReceipts.clear(); briefReceipts.clear(); Object.assign(state, makeState()); return readFixtureState(); }
+
+const briefReceipts = new Map<string, string>();
+function fixtureStoredCharacters() {
+  const briefSources = new Map((state.brief?.versions ?? []).flatMap(version => version.entry.kind === "saved" ? [[version.entry.sourceId, version.entry.text] satisfies [string, string]] : []));
+  return state.sources.filter(source => source.kind !== "brief").reduce((sum, source) => sum + source.content.length, 0) + [...briefSources.values()].reduce((sum, text) => sum + text.length, 0);
+}
+export function saveFixtureBrief(raw: unknown) {
+  const input = saveBriefSchema.parse(raw);
+  const hash = stableHash(JSON.stringify([input.expectedVersionId, normalizeMaterialText(input.text)]));
+  const prior = briefReceipts.get(input.commandId);
+  if (prior) { if (prior !== hash) throw new PitchroomError("CONFLICT", "Command already used for another brief change."); return readFixtureState(); }
+  if (["reading", "structuring"].includes(state.project.phase)) throw new PitchroomError("INVALID_TRANSITION", "Wait for the current material run before changing the brief.");
+  const work = state.brief ?? { head: null, versions: [] };
+  if ((work.head?.id ?? null) !== input.expectedVersionId) throw new PitchroomError("CONFLICT", "The brief changed in another tab. Review the latest version; your draft was preserved.");
+  const material = ingestBrief(state.project.id, input.text);
+  if (work.head && ((material && briefText(work) === material.content) || (!material && work.head.entry.kind === "cleared"))) { briefReceipts.set(input.commandId, hash); return readFixtureState(); }
+  const oldBriefs = new Map(work.versions.flatMap(v => v.entry.kind === "saved" ? [[v.entry.sourceId, v.entry.text] satisfies [string, string]] : []));
+  const used = fixtureStoredCharacters();
+  if (material && !oldBriefs.has(material.sourceId) && used + material.content.length > defaultProjectCharacterLimit) throw new PitchroomError("INVALID_INPUT", "Brief history would exceed the project text limit.");
+  state.sources = state.sources.filter(source => source.kind !== "brief");
+  if (material) state.sources.push({ ...material, kind: "brief", agentReview: agentReviewForChunks(material.chunks) });
+  const version: import("@pitchroom/domain").BriefVersion = { id: crypto.randomUUID(), number: work.versions.length + 1, createdAt: new Date().toISOString(), entry: material ? { kind: "saved", sourceId: material.sourceId, contentHash: material.contentHash, text: material.content } : { kind: "cleared" } };
+  state.brief = { head: version, versions: [...work.versions, version] };
+  state.currentVersionId = undefined; state.positioning = undefined;
+  state.project.phase = state.sources.length ? "materials_ready" : "empty";
+  if (state.deck) state.deck.stale = true;
+  briefReceipts.set(input.commandId, hash);
+  addEvent("Brief saved", version.entry.kind === "cleared" ? "Brief removed from current context; history retained" : `Written brief version ${version.number}`);
+  return readFixtureState();
+}
 
 export function addFixtureMaterial(input: { name: string; mediaType: "text/plain" | "text/markdown"; text: string }) {
   if (state.project.phase === "reading" || state.project.phase === "structuring") {
@@ -62,8 +94,8 @@ export function addFixtureMaterial(input: { name: string; mediaType: "text/plain
   }
   const ingested = ingestMaterial(state.project.id, input);
   const material: WorkspaceMaterial = { ...ingested, agentReview: agentReviewForChunks(ingested.chunks) };
-  if (!state.sources.some((source) => source.contentHash === material.contentHash) && state.sources.reduce((total, source) => total + source.content.length, 0) + material.content.length > defaultProjectCharacterLimit) throw new PitchroomError("INVALID_INPUT", "Material would exceed the project text limit.", { limit: defaultProjectCharacterLimit });
-  if (!state.sources.some((source) => source.contentHash === material.contentHash)) state.sources.push(material);
+  if (!state.sources.some((source) => source.contentHash === material.contentHash && source.kind !== "brief") && fixtureStoredCharacters() + material.content.length > defaultProjectCharacterLimit) throw new PitchroomError("INVALID_INPUT", "Material would exceed the project text limit.", { limit: defaultProjectCharacterLimit });
+  if (!state.sources.some((source) => source.contentHash === material.contentHash && source.kind !== "brief")) state.sources.push(material);
   state.project.phase = "materials_ready";
   state.currentVersionId = undefined;
   state.positioning = undefined;
@@ -75,7 +107,7 @@ export function addFixtureMaterial(input: { name: string; mediaType: "text/plain
 
 export function removeFixtureMaterial(sourceId: string) {
   if (state.project.phase === "reading" || state.project.phase === "structuring") throw new PitchroomError("CONFLICT", "Material cannot be removed while the agent is running.");
-  const index = state.sources.findIndex((source) => source.sourceId === sourceId);
+  const index = state.sources.findIndex((source) => source.sourceId === sourceId && source.kind !== "brief");
   if (index < 0) throw new PitchroomError("NOT_FOUND", "Material was not found in this project.");
   const [removed] = state.sources.splice(index, 1);
   state.currentVersionId = undefined;

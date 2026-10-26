@@ -86,7 +86,7 @@ export class PitchroomRepository implements ToolRepository {
         throw new PitchroomError("INVALID_TRANSITION", `Material cannot be added while the project is ${project.phase}.`);
       }
       const duplicateContent = await tx.query.sources.findFirst({
-        where: and(eq(schema.sources.projectId, projectId), eq(schema.sources.contentHash, material.contentHash)),
+        where: and(eq(schema.sources.projectId, projectId), eq(schema.sources.contentHash, material.contentHash), eq(schema.sources.kind, "file")),
       });
       if (duplicateContent) {
         if (duplicateContent.deletedAt) {
@@ -130,6 +130,7 @@ export class PitchroomRepository implements ToolRepository {
       id: source.id,
       projectId: source.projectId,
       name: source.name,
+      kind: source.kind,
       mediaType: source.mediaType,
       contentHash: source.contentHash,
       chunks: await this.db.select().from(schema.sourceChunks).where(eq(schema.sourceChunks.sourceId, source.id)).orderBy(asc(schema.sourceChunks.ordinal)),
@@ -152,7 +153,7 @@ export class PitchroomRepository implements ToolRepository {
       const [project] = await tx.execute<{ phase: string }>(sql`select phase from projects where id = ${projectId} for update`);
       if (!project) throw new PitchroomError("NOT_FOUND", "Project was not found.");
       if (project.phase === "reading" || project.phase === "structuring") throw new PitchroomError("CONFLICT", "Material cannot be removed while the agent is running.");
-      const [removed] = await tx.update(schema.sources).set({ deletedAt: new Date() }).where(and(eq(schema.sources.id, sourceId), eq(schema.sources.projectId, projectId), isNull(schema.sources.deletedAt))).returning({ id: schema.sources.id });
+      const [removed] = await tx.update(schema.sources).set({ deletedAt: new Date() }).where(and(eq(schema.sources.id, sourceId), eq(schema.sources.projectId, projectId), eq(schema.sources.kind, "file"), isNull(schema.sources.deletedAt))).returning({ id: schema.sources.id });
       if (!removed) throw new PitchroomError("NOT_FOUND", "Material was not found in this project.");
       const [remaining] = await tx.select({ count: sql<number>`count(*)` }).from(schema.sources).where(and(eq(schema.sources.projectId, projectId), isNull(schema.sources.deletedAt)));
       await tx.update(schema.projects).set({ currentUnderstandingId: null, currentPositioningId: null, phase: Number(remaining?.count ?? 0) ? "materials_ready" : "empty", updatedAt: new Date() }).where(eq(schema.projects.id, projectId));

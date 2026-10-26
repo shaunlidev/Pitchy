@@ -4,6 +4,7 @@ export type SourceRecord = {
   id: string;
   projectId: string;
   name: string;
+  kind?: "file" | "brief";
   mediaType: string;
   contentHash: string;
   chunks: SourceChunk[];

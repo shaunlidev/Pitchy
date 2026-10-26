@@ -1,3 +1,4 @@
+import { BriefRepository } from "@pitchroom/persistence";
 import { workflowEventLabel } from "./workspace-ux-state";
 import { proposeStory } from "./story-service";
 import { recordClaimCorrection } from "@pitchroom/domain";
@@ -8,7 +9,7 @@ import { agentReviewForChunks, type FixtureState } from "./fixture-store";
 
 const globals = globalThis as typeof globalThis & { __pitchroomDatabase?: ReturnType<typeof createDatabase>; __pitchroomRepository?: PitchroomRepository };
 
-const requiredQueryTables = [
+const requiredQueryTables = ["briefVersions",
   "clarificationTasks",
   "projects",
   "sources",
@@ -103,10 +104,10 @@ export async function readPersistentState(mode: "postgres-fake" | "live" = "post
     workflowRuns.map((run) => ({ id: run.id, kind: run.kind as "positioning" | "deck" | "story", status: run.status as "running" | "completed" | "failed", failureMessage: run.failureMessage ?? undefined, events: run.events })),
   );
   return {
-    mode, story,
+    mode, story, brief: await new BriefRepository(repository().db).read(currentProject.id),
     clarifications: await new ClarificationRepository(repository().db).refresh(currentProject.id),
     project: { id: currentProject.id, name: currentProject.name, phase: currentProject.phase, revision: currentProject.version },
-    sources: sources.map((source) => ({ sourceId: source.id, name: source.name, mediaType: source.mediaType as "text/plain" | "text/markdown", content: reconstructSourceContent(source.chunks), contentHash: source.contentHash, chunks: source.chunks.map((chunk, ordinal) => ({ ...chunk, ordinal })), agentReview: agentReviewForChunks(source.chunks) })),
+    sources: sources.map((source) => ({ sourceId: source.id, name: source.name, kind: source.kind ?? "file", mediaType: source.mediaType as "text/plain" | "text/markdown", content: reconstructSourceContent(source.chunks), contentHash: source.contentHash, chunks: source.chunks.map((chunk, ordinal) => ({ ...chunk, ordinal })), agentReview: agentReviewForChunks(source.chunks) })),
     versions: versions.map((version) => ({ id: version.id, number: version.version, parentUnderstandingId: version.parentUnderstandingId ?? undefined, clarificationTaskId: version.clarificationTaskId ?? undefined, proposal: version.proposal, createdBy: version.createdBy === "user" ? "user" : "agent", createdAt: version.createdAt.toISOString() })),
     currentVersionId: currentProject.currentUnderstandingId ?? undefined,
     positioning: positioning ? { id: positioning.id, number: positioning.version, proposal: positioning.proposal, appliedDirectionId: positioning.appliedDirectionId ?? undefined, previousAppliedDirectionId: positioning.previousAppliedDirectionId ?? undefined, createdAt: positioning.createdAt.toISOString() } : undefined,
@@ -116,6 +117,12 @@ export async function readPersistentState(mode: "postgres-fake" | "live" = "post
     workflowRuns: workflowRuns.map((run) => ({ id: run.id, kind: run.kind as "positioning" | "deck" | "story", status: run.status as "running" | "completed" | "failed", failureMessage: run.failureMessage ?? undefined, events: run.events })),
     events: streamedEvents,
   };
+}
+
+export async function savePersistentBrief(input: unknown) {
+  const currentProject = await project();
+  await new BriefRepository(repository().db).save(currentProject.id, input);
+  return readPersistentState();
 }
 
 export async function addPersistentMaterial(input: { name: string; mediaType: "text/plain" | "text/markdown"; text: string; idempotencyKey: string }) {

@@ -345,3 +345,4 @@
 .localDraftRecovery { margin: 8px 0; }
 .localDraftRecovery section { padding: 12px 0; border-bottom: 1px solid #ddd; }
 .localDraftRecovery pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 200px; overflow: auto; font: inherit; }
+.briefHistory pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 240px; overflow: auto; font: inherit; }

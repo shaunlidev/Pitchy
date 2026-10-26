@@ -82,7 +82,7 @@ export default function HomePage() {
       }
       setState(workspaceStateSchema.parse(result));
       setFailedAgentCommand(undefined);
-      if (body.action === "add_material" && !attempt.retainWrittenBrief) setText("");
+      if ((body.action === "add_material" && !attempt.retainWrittenBrief) || body.action === "save_brief") setText("");
       if (body.action === "answer" || (body.action === "submit_clarification" && !body.rebaseTaskId)) setAnswer("");
       if (body.action === "correct") setCorrection("");
       if (body.action === "reset") {

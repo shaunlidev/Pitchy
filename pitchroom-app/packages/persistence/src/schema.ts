@@ -51,6 +51,8 @@ export const commandReceipts = pgTable(
   (table) => [uniqueIndex("command_receipts_project_key_unique").on(table.projectId, table.idempotencyKey)],
 );
 
+export const sourceKind = pgEnum("source_kind", ["file", "brief"]);
+
 export const sources = pgTable(
   "sources",
   {
@@ -59,6 +61,7 @@ export const sources = pgTable(
       .notNull()
       .references(() => projects.id, { onDelete: "cascade" }),
     name: text("name").notNull(),
+    kind: sourceKind("kind").notNull().default("file"),
     mediaType: text("media_type").notNull(),
     content: text("content").notNull(),
     contentHash: text("content_hash").notNull(),
@@ -67,13 +70,22 @@ export const sources = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => [
-    uniqueIndex("sources_project_hash_unique").on(
+    uniqueIndex("sources_project_kind_hash_unique").on(
       table.projectId,
+      table.kind,
       table.contentHash,
     ),
     uniqueIndex("sources_project_idempotency_unique").on(table.projectId, table.idempotencyKey),
   ],
 );
+
+export const briefVersions = pgTable("brief_versions", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  projectId: uuid("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+  version: integer("version").notNull(),
+  sourceId: text("source_id").references(() => sources.id),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, table => [uniqueIndex("brief_versions_project_version_unique").on(table.projectId, table.version)]);
 
 export const sourceChunks = pgTable(
   "source_chunks",
