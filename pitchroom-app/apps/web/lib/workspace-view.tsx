@@ -226,7 +226,7 @@ function ClarifyView({ topicTaskId, onTopicTaskId, onChooseFiles, fileImports, o
   const tasks = topicTasksFor(current.proposal, selectionKind === "gap" ? "gap" : "theme", selectionIndex);
   const selectedTask = tasks.find(task => task.id === topicTaskId) ?? tasks[0];
   const question = selectedTask?.question;
-  const questionTheme = current.proposal.topicTasks?.[0]?.themeIndex ?? current.proposal.nextQuestion.relatedThemeIndexes.find(index => current.proposal.themes[index]);
+  const questionTheme = selectedTask?.themeIndex ?? current.proposal.nextQuestion.relatedThemeIndexes.find(index => current.proposal.themes[index]);
   const hasSelectedQuestion = Boolean(selectedTask && question);
   const returnToQuestion = () => setOverviewSelection(`theme:${questionTheme ?? 0}`);
 

@@ -105,6 +105,12 @@ async function main() {
     const select = async (name: string) => { await overview.locator('summary').click(); await page.getByRole('button', { name, exact: false }).click(); };
     await select('Open question 1');
     await expect(page.locator('.focusedQuestion h2')).toHaveText('What is the current measurement baseline?');
+    await page.getByLabel('Answer the agent’s question').fill('Measurement draft before returning from gap.');
+    await page.getByRole('button', { name: 'Back to the current useful question' }).click();
+    await expect(page.locator('.focusedQuestion h2')).toHaveText('What is the current measurement baseline?');
+    await expect(page.getByLabel('Answer the agent’s question')).toHaveValue('Measurement draft before returning from gap.');
+    await page.getByLabel('Answer the agent’s question').fill('');
+    checks['return-preserves-selected-task'] = 'Returning from a non-first topic gap keeps the same task/question and its unsent draft.';
     await expect(page.locator('.evidenceDisclosure')).not.toHaveAttribute('open', '');
     await expect(page.locator('.understandingSummary')).not.toHaveAttribute('open', '');
     await page.getByText('Why this matters', { exact: true }).click();
