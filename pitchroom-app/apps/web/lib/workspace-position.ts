@@ -1,9 +1,11 @@
+import { topicRefSchema } from "@pitchroom/domain";
 import { z } from "zod";
 import type { FixtureState } from "./fixture-store";
 import { deriveWorkspaceUXState } from "./workspace-ux-state";
 
 export const workspacePositionSchema = z.object({
   schemaVersion: z.literal(1),
+  topicReturn: topicRefSchema.optional(),
   destination: z.enum(["materials", "clarify", "positioning", "deck"]),
   understandingId: z.string().optional(),
   overviewSelection: z.string(),
@@ -16,7 +18,8 @@ export const workspacePositionKey = (projectId: string) => `pitchroom:workspace-
 export function resolveWorkspacePosition(state: FixtureState, saved?: WorkspacePosition): WorkspacePosition {
   const access = deriveWorkspaceUXState(state).access;
   const requested = saved?.destination ?? "materials";
-  const destination = access[requested].allowed ? requested : access[requested].target;
+  const hasOriginalTopic = Boolean(saved?.topicReturn && state.versions.some(version => version.id === saved.topicReturn?.understandingId));
+  const destination = access[requested].allowed || (requested === "clarify" && hasOriginalTopic) ? requested : access[requested].target;
   const understanding = state.versions.find(version => version.id === state.currentVersionId);
   let overviewSelection = `theme:${understanding?.proposal.nextQuestion.relatedThemeIndexes[0] ?? 0}`;
   if (saved && saved.understandingId === understanding?.id) {
@@ -29,7 +32,7 @@ export function resolveWorkspacePosition(state: FixtureState, saved?: WorkspaceP
   }
   const deck = state.deckVersions.find(version => version.id === saved?.deckId) ?? state.deck;
   const page = deck?.proposal.pages.find(candidate => candidate.id === saved?.pageId) ?? deck?.proposal.pages[0];
-  return { schemaVersion: 1, destination, understandingId: understanding?.id, overviewSelection, deckId: deck?.id, pageId: page?.id };
+  return { schemaVersion: 1, topicReturn: saved?.topicReturn && state.versions.some(version => version.id === saved.topicReturn?.understandingId) ? saved.topicReturn : undefined, destination, understandingId: understanding?.id, overviewSelection, deckId: deck?.id, pageId: page?.id };
 }
 
 export function readWorkspacePosition(storage: Pick<Storage, "getItem">, projectId: string): WorkspacePosition | undefined {

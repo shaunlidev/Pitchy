@@ -1,3 +1,4 @@
+import { topicRefSchema, topicLabel, sameTopic, type TopicMaterial, type TopicRef } from "@pitchroom/domain";
 import { ingestBrief, briefText, saveBriefSchema, stableHash, normalizeMaterialText, type BriefWorkspace } from "@pitchroom/domain";
 import { SyntheticStoryRunner } from "@pitchroom/agent";
 import { assertStoryHead, sameStoryOrigin, storyIsFresh, sourceFingerprint, compareStories, exactStoryEdit, storyToDeck, type StoryHead, type StoryRequest, type StorySnapshot, type StoryProposal } from "@pitchroom/domain";
@@ -18,6 +19,8 @@ export type FixtureState = {
   mode: "synthetic-fixture" | "postgres-fake" | "live";
   project: { id: string; name: string; phase: ProjectPhase; revision: number };
   sources: WorkspaceMaterial[];
+  topicMaterials?: TopicMaterial[];
+  removedSources?: WorkspaceMaterial[];
   brief?: BriefWorkspace;
   versions: Version[];
   currentVersionId?: string;
@@ -31,7 +34,7 @@ export type FixtureState = {
   events: Array<{ sequence: number; label: string; detail: string; at: string }>;
 };
 
-const makeState = (): FixtureState => ({ mode: "synthetic-fixture", project: { id: "00000000-0000-4000-8000-000000000001", name: "Atelier pitch", phase: "empty", revision: 0 }, brief: { head: null, versions: [] }, sources: [], versions: [], positioningVersions: [], deckVersions: [], workflowRuns: [], clarifications: [], events: [] });
+const makeState = (): FixtureState => ({ mode: "synthetic-fixture", project: { id: "00000000-0000-4000-8000-000000000001", name: "Atelier pitch", phase: "empty", revision: 0 }, brief: { head: null, versions: [] }, topicMaterials: [], removedSources: [], sources: [], versions: [], positioningVersions: [], deckVersions: [], workflowRuns: [], clarifications: [], events: [] });
 const globalStore = globalThis as typeof globalThis & { __pitchroomFixture?: FixtureState };
 const state = globalStore.__pitchroomFixture ?? makeState();
 globalStore.__pitchroomFixture = state;
@@ -56,7 +59,7 @@ export const readFixtureState = (): FixtureState => {
   }
   return structuredClone(state);
 };
-export function resetFixtureState() { delete state.story; storyReceipts.clear(); briefReceipts.clear(); Object.assign(state, makeState()); return readFixtureState(); }
+export function resetFixtureState() { delete state.story; storyReceipts.clear(); briefReceipts.clear(); topicReceipts.clear(); Object.assign(state, makeState()); return readFixtureState(); }
 
 const briefReceipts = new Map<string, string>();
 function fixtureStoredCharacters() {
@@ -96,6 +99,7 @@ export function addFixtureMaterial(input: { name: string; mediaType: "text/plain
   const material: WorkspaceMaterial = { ...ingested, agentReview: agentReviewForChunks(ingested.chunks) };
   if (!state.sources.some((source) => source.contentHash === material.contentHash && source.kind !== "brief") && fixtureStoredCharacters() + material.content.length > defaultProjectCharacterLimit) throw new PitchroomError("INVALID_INPUT", "Material would exceed the project text limit.", { limit: defaultProjectCharacterLimit });
   if (!state.sources.some((source) => source.contentHash === material.contentHash && source.kind !== "brief")) state.sources.push(material);
+  state.removedSources = (state.removedSources ?? []).filter(source => source.sourceId !== material.sourceId);
   state.project.phase = "materials_ready";
   state.currentVersionId = undefined;
   state.positioning = undefined;
@@ -110,6 +114,8 @@ export function removeFixtureMaterial(sourceId: string) {
   const index = state.sources.findIndex((source) => source.sourceId === sourceId && source.kind !== "brief");
   if (index < 0) throw new PitchroomError("NOT_FOUND", "Material was not found in this project.");
   const [removed] = state.sources.splice(index, 1);
+  if (removed) (state.removedSources ??= []).push(removed);
+  state.topicMaterials = (state.topicMaterials ?? []).filter(link => link.sourceId !== sourceId);
   state.currentVersionId = undefined;
   state.positioning = undefined;
   if (state.deck) state.deck.stale = true;
@@ -344,4 +350,31 @@ export function undoFixtureStory(input:{expected:StoryHead;commandId:string}) {
 }
 export function createFixtureStoryDeck(input:{expected:StoryHead;commandId:string}) {
   const replay=replayStoryCommand(input);if(replay.replayed)return readFixtureState();const work=fixtureStory();assertStoryHead(input.expected,work.head);const version=work.versions.find(v=>v.id===work.head.storyId);if(!version||!storyIsFresh(version.story.origin,storyContext()))throw new PitchroomError("CONFLICT","Adopt a current story first.");const deck:DeckVersion={id:crypto.randomUUID(),number:state.deckVersions.length+1,proposal:storyToDeck({storyId:version.id,generation:work.head.generation,story:version.story}),createdBy:"agent",createdAt:new Date().toISOString()};state.deckVersions.push(deck);state.deck={...deck,stale:false};storyReceipts.set(input.commandId,replay.hash);return readFixtureState();
+}
+
+const topicReceipts = new Map<string, string>();
+export function changeFixtureTopicMaterial(input: { topic: TopicRef; commandId: string } & ({ action: "attach"; material: { name: string; mediaType: "text/plain" | "text/markdown"; text: string } } | { action: "link" | "unlink"; sourceId: string })) {
+  const topic = topicRefSchema.parse(input.topic);
+  const material = input.action === "attach" ? ingestMaterial(state.project.id, input.material) : undefined;
+  const hash = stableHash(JSON.stringify([input.action, topic, input.action === "attach" ? material?.contentHash : input.sourceId]));
+  const prior = topicReceipts.get(input.commandId);
+  if (prior) { if (prior !== hash) throw new PitchroomError("CONFLICT", "Command already used for another material change."); return readFixtureState(); }
+  if (["reading", "structuring"].includes(state.project.phase)) throw new PitchroomError("CONFLICT", "Wait for the current material run.");
+  const version = state.versions.find(version => version.id === topic.understandingId);
+  if (!version) throw new PitchroomError("NOT_FOUND", "The original Understanding was not found.");
+  const label = topicLabel(version.proposal, topic);
+  if (input.action !== "unlink" && state.currentVersionId !== topic.understandingId) throw new PitchroomError("CONFLICT", "This topic belongs to an older Understanding. Refresh before attaching material.");
+  const sourceId = material?.sourceId ?? (input.action !== "attach" ? input.sourceId : "");
+  if (material) {
+    if (!state.sources.some(source => source.sourceId === sourceId)) {
+      if (fixtureStoredCharacters() + material.content.length > defaultProjectCharacterLimit) throw new PitchroomError("INVALID_INPUT", "Material would exceed the project text limit.");
+      state.sources.push({ ...material, agentReview: agentReviewForChunks(material.chunks) });
+    }
+    state.removedSources = (state.removedSources ?? []).filter(source => source.sourceId !== sourceId);
+  } else if (!state.sources.some(source => source.sourceId === sourceId && source.kind !== "brief")) throw new PitchroomError("NOT_FOUND", "The source is not in the active project.");
+  const links = state.topicMaterials ??= [];
+  if (input.action === "unlink") state.topicMaterials = links.filter(link => !(link.sourceId === sourceId && sameTopic(link, topic)));
+  else if (!links.some(link => link.sourceId === sourceId && sameTopic(link, topic))) links.push({ ...topic, sourceId, label, status: "needs_review" });
+  topicReceipts.set(input.commandId, hash);
+  return readFixtureState();
 }

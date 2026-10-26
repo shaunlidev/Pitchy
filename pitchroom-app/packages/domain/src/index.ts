@@ -15,3 +15,5 @@ export * from "./clarification-grounding";
 export * from "./clarification-v4";
 export * from "./story";
 export * from "./brief";
+
+export * from "./topic-material";

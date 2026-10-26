@@ -22,3 +22,10 @@
 **/.DS_Store
 .pitchroom-github/
 .pitchroom-github.lock
+**/__pycache__/
+**/.local/
+.pitchroom-worktrees/
+.pipeline-local/
+.pipeline-artifact/
+.multica/
+.multica-round/
