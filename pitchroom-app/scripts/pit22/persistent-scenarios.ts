@@ -158,7 +158,6 @@ async function main() {
     assert.equal(readyTask.status, 'proposal_ready'); assert.equal(ready.currentVersionId, before.currentVersionId);
     assert.deepEqual(readyTask.candidate!.themes[0], readyTask.base.themes[0]);
     await page.reload();
-    await page.getByText('Saved answer · Before / Now', { exact: true }).click();
     await expect(page.getByRole('heading', { name: 'Review the proposed changes', exact: true })).toBeVisible();
     const appliedResponse = page.waitForResponse(response => response.url().endsWith('/api/workspace') && response.request().method() === 'POST');
     await page.getByRole('button', { name: 'Apply changes to understanding', exact: true }).click();
@@ -214,8 +213,8 @@ async function main() {
     await post({ ...rebase, text: 'Tampered saved answer', commandId: crypto.randomUUID(), selection: recoverySelection }, 409);
     assert.equal((await read()).clarifications!.length, recoveryCurrent.clarifications!.length);
     await reopened.reload();
-    await reopened.getByText('Saved answer · Before / Now', { exact: true }).click();
     const reassessButton = reopened.getByRole('button', { name: 'Reassess against current understanding', exact: true });
+    await expect(reassessButton).toBeVisible();
     await expect(reassessButton).toBeDisabled();
     await reopened.getByLabel('Current question for this saved answer').selectOption('1:recovery-audience');
     await expect(reassessButton).toBeEnabled();
@@ -238,7 +237,8 @@ async function main() {
     const recoveredReady = await read(); const recoveredTask = recoveredReady.clarifications!.at(-1)!;
     assert.equal(recoveredTask.status, 'proposal_ready'); assert.equal(recoveredReady.currentVersionId, recoveryCurrent.currentVersionId);
     assert.deepEqual(recoveredTask.candidate!.themes[0], recoveredTask.base.themes[0]);
-    await reopened.reload(); await reopened.getByText('Saved answer · Before / Now', { exact: true }).click();
+    await reopened.reload();
+    await expect(reopened.getByRole('heading', { name: 'Review the proposed changes', exact: true })).toBeVisible();
     const recoveredApply = reopened.waitForResponse(response => response.url().endsWith('/api/workspace') && response.request().method() === 'POST');
     await reopened.getByRole('button', { name: 'Apply changes to understanding', exact: true }).click();
     assert.equal((await recoveredApply).status(), 200);
