@@ -78,6 +78,45 @@ describe("HomePage review interactions", () => {
     expect(props.onAction).not.toHaveBeenCalled();
   });
 
+  it.each([["brief", "Original saved brief"], ["answer", "Original saved brief"], ["answer", ""]])("discards an unsaved %s against saved brief '%s' without blocking continuation", async (dirtyInput, savedText) => {
+    if (savedText) saveFixtureBrief({ expectedVersionId: null, text: savedText, commandId: crypto.randomUUID() });
+    const state = runFixtureAgent();
+    const before = structuredClone(readFixtureState());
+    const onAction = vi.fn();
+    const input = { state, busy: false, text: savedText, answer: "", correction: "", rememberPosition: true, initialDestination: "clarify", onTextChange: vi.fn(), onAnswerChange: vi.fn(), onCorrectionChange: vi.fn(), onChooseFile: vi.fn(), onCancelRun: vi.fn(), onAction } satisfies Parameters<typeof WorkspaceView>[0];
+    const user = userEvent.setup();
+    const view = render(<WorkspaceView {...input} />);
+    await user.click(screen.getByRole("button", { name: "Clarify" }));
+    if (dirtyInput === "brief") {
+      await user.click(screen.getByRole("button", { name: "Materials" }));
+      await user.click(screen.getByText(/Written brief/, { selector: "summary" }));
+      await user.clear(screen.getByLabelText("Written brief"));
+      await user.type(screen.getByLabelText("Written brief"), "Unsent revision");
+      await user.click(screen.getByRole("button", { name: "Clarify" }));
+    } else {
+      await user.type(screen.getByLabelText("Answer the agent’s question"), "Unsent answer");
+    }
+    await user.click(screen.getByRole("button", { name: /Accept version/ }));
+    expect(screen.getByRole("region", { name: "Unsaved input" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Discard unsaved input" }));
+    expect(onAction).not.toHaveBeenCalled();
+    expect(vi.mocked(fetch).mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(0);
+    expect(readFixtureState()).toEqual(before);
+    await user.click(screen.getByRole("button", { name: /Accept version/ }));
+    expect(screen.queryByRole("region", { name: "Unsaved input" })).toBeNull();
+    expect(onAction).toHaveBeenCalledTimes(1);
+    expect(onAction.mock.calls[0]?.[0]).toMatchObject({ action: "accept" });
+    await user.click(screen.getByRole("button", { name: "Materials" }));
+    await user.click(screen.getByText(/Written brief/, { selector: "summary" }));
+    expect(screen.getByLabelText("Written brief")).toHaveProperty("value", savedText);
+    expect(screen.getByRole("button", { name: savedText ? "Save brief" : "Save cleared brief" })).toHaveProperty("disabled", true);
+    view.unmount();
+    render(<WorkspaceView {...input} initialDestination="materials" />);
+    await user.click(screen.getByText(/Written brief/, { selector: "summary" }));
+    expect(screen.getByLabelText("Written brief")).toHaveProperty("value", savedText);
+    expect(readFixtureState().brief).toEqual(before.brief);
+  });
+
   it("maintains one brief and restores an intentional unsaved clear before versioned removal", async () => {
     const user=userEvent.setup(); const first=render(<HomePage/>);
     await user.click(await screen.findByText(/Written brief/,{selector:"summary"}));
