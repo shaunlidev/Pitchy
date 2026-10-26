@@ -1,5 +1,7 @@
 "use client";
 
+import type { TopicRef } from "@pitchroom/domain";
+
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { FileImportItem } from "../lib/file-import";
 import type { FixtureState } from "../lib/fixture-store";
@@ -108,7 +110,7 @@ export default function HomePage() {
     }
   }
 
-  async function chooseFile(file: File, commandId: string) {
+  async function chooseFile(file: File, commandId: string, topic?: TopicRef) {
     lastFailure.current = undefined;
     if (!file) return false;
     if (!/\.(md|txt)$/i.test(file.name)) {
@@ -124,7 +126,7 @@ export default function HomePage() {
         return false;
       }
       setActionError(undefined);
-      return await act({ action: "add_material", name: file.name, mediaType: file.name.toLowerCase().endsWith(".md") ? "text/markdown" : "text/plain", text: fileText }, { commandId, explicitRetry: true, retainWrittenBrief: true });
+      return await act({ action: topic ? "attach_topic_material" : "add_material", topic, name: file.name, mediaType: file.name.toLowerCase().endsWith(".md") ? "text/markdown" : "text/plain", text: fileText }, { commandId, explicitRetry: true, retainWrittenBrief: true });
     } catch {
       lastFailure.current = createWorkspaceActionError({ code: "INVALID_INPUT", technicalMessage: "The selected file could not be read as UTF-8 text." });
       setActionError(lastFailure.current);
@@ -132,17 +134,17 @@ export default function HomePage() {
     }
   }
 
-  async function importFiles(files: File[], retry?: Extract<FileImportItem, { status: "failed" }>) {
+  async function importFiles(files: File[], retry?: Extract<FileImportItem, { status: "failed" }>, topic?: TopicRef) {
     if (!files.length || importingRef.current || submitting.current || (state && deriveWorkspaceUXState(state, activeAgentRequest, { busy }).mutationLocked)) return false;
     importingRef.current = true;
     setImporting(true);
-    const entries = files.map(file => ({ id: retry?.id ?? crypto.randomUUID(), name: file.name, file, commandId: retry?.outcomeUnknown ? retry.commandId : crypto.randomUUID() }));
+    const entries = files.map(file => ({ id: retry?.id ?? crypto.randomUUID(), name: file.name, file, topic: retry?.topic ?? topic, commandId: retry?.outcomeUnknown ? retry.commandId : crypto.randomUUID() }));
     if (!retry) setFileImports(previous => [...previous, ...entries.map(({ id, name }) => ({ id, name, status: "queued" as const }))]);
     let allSaved = true;
     try {
       for (const entry of entries) {
         setFileImports(previous => previous.map(item => item.id === entry.id ? { id: entry.id, name: entry.name, status: "importing" } : item));
-        const saved = await chooseFile(entry.file, entry.commandId);
+        const saved = await chooseFile(entry.file, entry.commandId, entry.topic);
         const failure = lastFailure.current;
         const item: FileImportItem = saved ? { id: entry.id, name: entry.name, status: "saved" }
           : { ...entry, status: "failed", message: failure?.technicalMessage ?? "The file was not imported. Review the current project before retrying.", outcomeUnknown: failure?.outcomeUnknown ?? false };
@@ -162,5 +164,5 @@ export default function HomePage() {
     {loadError && <><p role="alert">{loadError}</p><button onClick={() => { setLoadError(""); void refresh().catch((cause) => setLoadError(cause instanceof Error ? cause.message : String(cause))); }}>Try again</button></>}
   </main>;
 
-  return <WorkspaceView key={state.project.id} rememberPosition state={state} busy={busy || importing} error={actionError} text={text} answer={answer} correction={correction} activeRequest={activeRequest.current} activeAgentRequest={activeAgentRequest} onTextChange={setText} onAnswerChange={setAnswer} onCorrectionChange={setCorrection} onChooseFile={file => file ? importFiles([file]) : false} onChooseFiles={files => importFiles(files)} fileImports={fileImports} fileImportBusy={busy || importing} onRetryFile={item => importFiles([item.file], item)} onCancelRun={() => activeRequest.current?.abort()} onRetryAction={failedAgentCommand ? () => act(failedAgentCommand.body, { commandId: actionError?.outcomeUnknown ? failedAgentCommand.commandId : undefined, explicitRetry: true }) : undefined} onRefreshWorkspace={async () => { try { await refresh(); setActionError(undefined); } catch (cause) { setActionError(createWorkspaceActionError({ code: "PERSISTENCE_ERROR", technicalMessage: cause instanceof Error ? cause.message : String(cause) })); } }} onDismissError={() => setActionError(undefined)} onAction={(body) => act(body.action === "add_material" && !body.name ? { ...body, name: "written-brief.md", mediaType: "text/markdown" } : body)} />;
+  return <WorkspaceView key={state.project.id} rememberPosition state={state} busy={busy || importing} error={actionError} text={text} answer={answer} correction={correction} activeRequest={activeRequest.current} activeAgentRequest={activeAgentRequest} onTextChange={setText} onAnswerChange={setAnswer} onCorrectionChange={setCorrection} onChooseFile={file => file ? importFiles([file]) : false} onChooseFiles={(files, topic) => importFiles(files, undefined, topic)} fileImports={fileImports} fileImportBusy={busy || importing} onRetryFile={item => importFiles([item.file], item)} onCancelRun={() => activeRequest.current?.abort()} onRetryAction={failedAgentCommand ? () => act(failedAgentCommand.body, { commandId: actionError?.outcomeUnknown ? failedAgentCommand.commandId : undefined, explicitRetry: true }) : undefined} onRefreshWorkspace={async () => { try { await refresh(); setActionError(undefined); } catch (cause) { setActionError(createWorkspaceActionError({ code: "PERSISTENCE_ERROR", technicalMessage: cause instanceof Error ? cause.message : String(cause) })); } }} onDismissError={() => setActionError(undefined)} onAction={(body) => act(body.action === "add_material" && !body.name ? { ...body, name: "written-brief.md", mediaType: "text/markdown" } : body)} />;
 }

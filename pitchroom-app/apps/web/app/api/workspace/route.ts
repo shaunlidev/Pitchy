@@ -1,3 +1,5 @@
+import { changeFixtureTopicMaterial } from "../../../lib/fixture-store";
+import { changePersistentTopicMaterial } from "../../../lib/persistent-workspace";
 import { saveFixtureBrief } from "../../../lib/fixture-store";
 import { savePersistentBrief } from "../../../lib/persistent-workspace";
 import { readRuntimeMode, invalidRuntimeResponse, type RuntimeMode } from "../../../lib/runtime-mode";
@@ -37,6 +39,15 @@ export async function POST(request: Request) {
     const persistent = runtime !== "fixture";
     const commandId = body.commandId ?? requestId;
     switch (body.action) {
+      case "attach_topic_material": {
+        const input = { action: "attach" as const, topic: body.topic, commandId, material: { name: body.name, mediaType: body.mediaType, text: body.text } };
+        state = persistent ? await changePersistentTopicMaterial(input) : changeFixtureTopicMaterial(input); break;
+      }
+      case "link_topic_material":
+      case "unlink_topic_material": {
+        const input = { action: body.action === "link_topic_material" ? "link" as const : "unlink" as const, topic: body.topic, sourceId: body.sourceId, commandId };
+        state = persistent ? await changePersistentTopicMaterial(input) : changeFixtureTopicMaterial(input); break;
+      }
       case "save_brief": state = persistent ? await savePersistentBrief(body) : saveFixtureBrief(body); break;
       case "propose_story": state = persistent ? await proposePersistentStory(body,persistentMode) : await proposeFixtureStory(body); break;
       case "decide_story": state = persistent ? await decidePersistentStory(body,persistentMode) : decideFixtureStory(body); break;
