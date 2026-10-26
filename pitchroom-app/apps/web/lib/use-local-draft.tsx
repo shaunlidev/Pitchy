@@ -2,9 +2,24 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { z } from "zod";
 import { draftKey, draftPrefix, readDrafts, removeUnchangedDraft, writeDraft, type SavedDraft } from "./local-drafts";
 
-export function useLocalDraft<T>(input: { projectId: string; kind: string; context: string; schema: z.ZodType<T>; initial: T; hasContent: (value: T) => boolean; enabled: boolean }) {
-  const identity = JSON.stringify([input.projectId, input.kind, input.context]);
-  const branch = useMemo(() => crypto.randomUUID(), [identity]);
+let documentWriter: string | undefined;
+function draftWriter() {
+  if (documentWriter) return documentWriter;
+  if (typeof window === "undefined") return "server";
+  const fresh = crypto.randomUUID();
+  try {
+    const navigation = window.performance.getEntriesByType("navigation")[0];
+    const previous = window.sessionStorage.getItem("pitchroom:draft-tab:v1");
+    documentWriter = previous && navigation && "type" in navigation && navigation.type === "reload" ? previous : fresh;
+    window.sessionStorage.setItem("pitchroom:draft-tab:v1", documentWriter);
+  } catch { documentWriter = fresh; }
+  return documentWriter;
+}
+
+export function useLocalDraft<T>(input: { projectId: string; kind: string; context: string; schema: z.ZodType<T>; initial: T; hasContent: (value: T) => boolean; enabled: boolean; writerId?: string }) {
+  const writer = input.writerId ?? draftWriter();
+  const identity = JSON.stringify([input.projectId, input.kind, input.context, writer]);
+  const branch = useMemo(() => `${writer}:${encodeURIComponent(input.context)}`, [identity, writer]);
   const key = draftKey(input.projectId, input.kind, branch);
   const [frame, setFrame] = useState({ identity, value: input.initial });
   const value = frame.identity === identity ? frame.value : input.initial;
@@ -15,7 +30,7 @@ export function useLocalDraft<T>(input: { projectId: string; kind: string; conte
   const [notice, setNotice] = useState("");
   const [ready, setReady] = useState("");
   const refresh = () => {
-    try { setOffers(readDrafts(window.localStorage, input.projectId, input.kind, input.schema).filter(draft => draft.key !== key && draft.key !== selected.current?.key)); }
+    try { setOffers(readDrafts(window.localStorage, input.projectId, input.kind, input.schema).filter(draft => draft.key !== key && JSON.stringify(draft.value) !== JSON.stringify(current.current))); }
     catch { setNotice("Draft recovery is unavailable in this browser. Your input remains in this tab; copy it before closing."); }
   };
   const set = (next: T) => {
@@ -27,7 +42,6 @@ export function useLocalDraft<T>(input: { projectId: string; kind: string; conte
       } else {
         window.localStorage.removeItem(key);
         if (activeIdentity.current === identity) {
-          if (selected.current) removeUnchangedDraft(window.localStorage, selected.current);
           selected.current = undefined;
         }
       }
@@ -37,19 +51,27 @@ export function useLocalDraft<T>(input: { projectId: string; kind: string; conte
   const restore = (draft: SavedDraft<T>, automatic = false) => {
     try {
       if (input.hasContent(current.current) && JSON.stringify(current.current) !== JSON.stringify(draft.value)) {
-        writeDraft(window.localStorage, { key: draftKey(input.projectId, input.kind, crypto.randomUUID()), projectId: input.projectId, kind: input.kind, context: input.context, value: current.current });
+        const own = readDrafts(window.localStorage, input.projectId, input.kind, input.schema).find(saved => saved.key === key);
+        if (own && JSON.stringify(own.value) === JSON.stringify(current.current)) {
+          writeDraft(window.localStorage, { key: draftKey(input.projectId, input.kind, crypto.randomUUID()), projectId: input.projectId, kind: input.kind, context: input.context, value: current.current }, own.updatedAt);
+          removeUnchangedDraft(window.localStorage, own);
+        }
       }
       writeDraft(window.localStorage, { key, projectId: input.projectId, kind: input.kind, context: input.context, value: draft.value }, automatic ? draft.updatedAt : Date.now());
-      if (draft.key !== key && draft.context === input.context) removeUnchangedDraft(window.localStorage, draft);
       selected.current = draft;
       current.current = draft.value; setFrame({ identity, value: draft.value });
       setNotice(draft.context === input.context ? "A local draft was restored. Review it before submitting." : "An earlier-version draft was copied into the editor. Review its context before submitting.");
       refresh();
-    } catch { setNotice("The saved draft could not be restored. It has not been removed."); }
+    } catch {
+      selected.current = draft; current.current = draft.value; setFrame({ identity, value: draft.value });
+      setNotice("The draft was recovered into this tab, but a separate local copy could not be saved. Copy it before closing; the original is retained.");
+    }
   };
   const captureSubmission = (next = input.initial) => {
     const expected = JSON.stringify(current.current);
     const origin = selected.current;
+    let acknowledged: SavedDraft<T>[] = [];
+    try { if (input.enabled) acknowledged = readDrafts(window.localStorage, input.projectId, input.kind, input.schema).filter(draft => draft.key !== key && draft.context === input.context && JSON.stringify(draft.value) === expected); } catch { /* Storage failure does not prevent explicit submission. */ }
     let raw: string | null = null;
     try { if (input.enabled) raw = window.localStorage.getItem(key); } catch { /* Input remains usable without storage. */ }
     return () => {
@@ -62,7 +84,8 @@ export function useLocalDraft<T>(input: { projectId: string; kind: string; conte
           if (input.hasContent(next)) writeDraft(window.localStorage, { key, projectId: input.projectId, kind: input.kind, context: input.context, value: next });
           else window.localStorage.removeItem(key);
         }
-        if (origin) removeUnchangedDraft(window.localStorage, origin);
+        for (const draft of acknowledged) removeUnchangedDraft(window.localStorage, draft);
+        if (origin && JSON.stringify(origin.value) === expected) removeUnchangedDraft(window.localStorage, origin);
         refresh();
       } catch { setNotice("The input was submitted, but its local draft could not be cleared. Review saved drafts before reuse."); }
     };
@@ -74,7 +97,7 @@ export function useLocalDraft<T>(input: { projectId: string; kind: string; conte
     if (!input.enabled) return;
     try {
       const drafts = readDrafts(window.localStorage, input.projectId, input.kind, input.schema);
-      const matching = drafts.filter(draft => draft.context === input.context);
+      const matching = [...new Map(drafts.filter(draft => draft.context === input.context).map(draft => [JSON.stringify(draft.value), draft])).values()];
       if (matching.length === 1) restore(matching[0]!, true);
       else { setOffers(drafts); if (matching.length > 1) setNotice("Multiple local drafts are available. Choose one; neither has been overwritten."); }
     } catch { setNotice("Draft recovery is unavailable in this browser. Your input remains in this tab; copy it before closing."); }

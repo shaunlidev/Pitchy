@@ -18,15 +18,15 @@ it("restores the exact local draft after remount without submitting anything", (
  expect(fetch).not.toHaveBeenCalled();
 });
 it("keeps independent tab branches and preserves both when choosing a conflicting draft", () => {
- const a = renderHook(() => useLocalDraft(options));
- const b = renderHook(() => useLocalDraft(options));
+ const a = renderHook(() => useLocalDraft({...options,writerId:"tab-a"}));
+ const b = renderHook(() => useLocalDraft({...options,writerId:"tab-b"}));
  act(() => { a.result.current.set("tab A"); b.result.current.set("tab B"); window.dispatchEvent(new StorageEvent("storage", { key: saved()[0]!.key })); });
  expect(a.result.current.value).toBe("tab A"); expect(b.result.current.value).toBe("tab B");
- expect(saved().map(draft => draft.value).sort()).toEqual(["tab A", "tab B"]);
+ expect(new Set(saved().map(draft => draft.value))).toEqual(new Set(["tab A", "tab B"]));
  const candidate = a.result.current.offers.find(draft => draft.value === "tab B")!;
  act(() => a.result.current.restore(candidate));
  expect(a.result.current.value).toBe("tab B");
- expect(saved().map(draft => draft.value).sort()).toEqual(["tab A", "tab B"]);
+ expect(new Set(saved().map(draft => draft.value))).toEqual(new Set(["tab A", "tab B"]));
 });
 it("offers earlier-version text without automatically applying it", () => {
  const hook = renderHook(({ context }) => useLocalDraft({ ...options, context }), { initialProps: { context: "understanding-1" } });
@@ -91,4 +91,20 @@ it("a delayed editor cleanup cannot erase newer unsent wording", () => {
  const hook=renderHook(()=>useLocalDraft(options)); act(()=>hook.result.current.set("submitted")); const old=hook.result.current;
  act(()=>hook.result.current.set("new unsent edit")); act(()=>old.setIfUnchanged(old.value,""));
  expect(hook.result.current.value).toBe("new unsent edit"); expect(saved().map(d=>d.value)).toEqual(["new unsent edit"]);
+});
+it("opening and editing a second tab retains the first tab's only saved copy", () => {
+ const first=renderHook(()=>useLocalDraft({...options,writerId:"first-tab"}));act(()=>first.result.current.set("first tab unsent"));
+ const second=renderHook(()=>useLocalDraft({...options,writerId:"second-tab"}));expect(second.result.current.value).toBe("first tab unsent");
+ act(()=>second.result.current.set("second tab revision"));
+ expect(saved().map(d=>d.value).sort()).toEqual(["first tab unsent","second tab revision"]);
+ act(second.result.current.captureSubmission());
+ expect(saved().map(d=>d.value)).toEqual(["first tab unsent"]);
+ expect(first.result.current.value).toBe("first tab unsent");
+});
+it("keeps an opened tab's snapshot if the originating tab later changes its draft", () => {
+ const first=renderHook(()=>useLocalDraft({...options,writerId:"origin-tab"}));act(()=>first.result.current.set("snapshot B"));
+ const opened=renderHook(()=>useLocalDraft({...options,writerId:"opened-tab"}));expect(opened.result.current.value).toBe("snapshot B");
+ act(()=>first.result.current.set("origin now C"));
+ expect(opened.result.current.value).toBe("snapshot B");
+ expect(new Set(saved().map(d=>d.value))).toEqual(new Set(["snapshot B","origin now C"]));
 });
