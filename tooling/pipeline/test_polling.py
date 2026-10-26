@@ -260,3 +260,22 @@ class FullSerialChain(SerialBehavior):
         pr=c.observation['issues']['PIT-1']['prs'][0];pr.update(state='MERGED',merge_sha=merged,integration_ci={'state':'success'})
         c.drain(True);self.assertEqual(f.fake.rows[0]['status'],'done');self.assertEqual(c.lanes()['PIT-1']['phase'],'done')
         updates=len(f.fake.writes);c.drain(True);self.assertEqual(len(f.fake.writes),updates)
+
+class ReworkPublication(SerialBehavior):
+    def test_rework_fast_forwards_original_branch_without_new_pr(self):
+        f=self.f;old=f.g('rev-parse','HEAD');remote=f.root/'remote.git'
+        subprocess.run(['git','clone','--bare',str(f.repo),str(remote)],check=True,capture_output=True)
+        branch='codex/pit-1-delivery-g1'
+        subprocess.run(['git','--git-dir',str(remote),'update-ref','refs/heads/'+branch,old],check=True)
+        f.g('remote','add','origin',str(remote));(f.repo/'source.txt').write_text('repair');f.g('commit','-qam','repair')
+        sha=f.g('rev-parse','HEAD')
+        lane={'issue':'PIT-1','id':'id-1','generation':2,'phase':'developer','artifact':{'commit':sha},'rework_branch':branch,'rework_pr_number':7,'rework_public_commit':old}
+        class Remote:
+            def api(self,path):return {'state':'open','base':{'ref':'main'},'head':{'sha':old,'ref':branch}}
+        self.c.github=Remote();original=serial.subprocess.run;calls=[]
+        def run(args,**kwargs):
+            if args[0]=='gh':calls.append(args);raise AssertionError('Unexpected replacement PR')
+            return original(args,**kwargs)
+        with patch.object(serial.subprocess,'run',side_effect=run):self.c.publish_pr(lane)
+        self.assertEqual(calls,[]);self.assertEqual(lane['pr_number'],7);self.assertEqual(lane['branch'],branch)
+        target=subprocess.check_output(['git','--git-dir',str(remote),'rev-parse','refs/heads/'+branch],text=True).strip();self.assertEqual(target,sha)

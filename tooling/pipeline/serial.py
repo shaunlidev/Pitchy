@@ -111,17 +111,25 @@ class Serial(Controller):
 
     def publish_pr(self, lane):
         artifact = lane['artifact']; key = lane['issue']
-        branch = 'codex/' + key.lower() + '-delivery-g' + str(lane['generation'])
+        branch = lane.get('rework_branch') or 'codex/' + key.lower() + '-delivery-g' + str(lane['generation'])
+        existing=lane.get('rework_pr_number')
+        if existing:
+            pr=self.github.api('pulls/'+str(existing))
+            if pr['state']!='open' or pr['base']['ref']!='main' or pr['head']['sha']!=lane['rework_public_commit'] or pr['head']['ref']!=branch:
+                raise Hold('Original PR changed/closed; no automatic replacement')
         token = 'publish:' + key + ':' + str(lane['generation'])
         self.reserve(token)
         root = Path(self.c['repository'])
         subprocess.run(['git', '-C', str(root), 'push', 'origin', artifact['commit'] + ':refs/heads/' + branch], check=True, capture_output=True, timeout=90)
-        body = Path.cwd() / '.pipeline-local' / 'pr-body.md'; body.parent.mkdir(exist_ok=True)
-        body.write_text(f'{key}: scoped engineering artifact {artifact["commit"]}.\n\nLocal contract checks completed. Independent review/QA pending. No merge or deployment. Full acceptance remains on the original issue.\n')
-        p = subprocess.run(['gh', 'pr', 'create', '--repo', self.policy['repository'], '--draft', '--base', 'main', '--head', branch, '--title', key + ': scoped delivery', '--body-file', str(body)], cwd=Path.cwd(), capture_output=True, text=True, timeout=90)
-        if p.returncode:
-            raise Hold('PR publication uncertain; inspect remote before any replay')
-        url = p.stdout.strip()
+        if existing:
+            url='https://github.com/'+self.policy['repository']+'/pull/'+str(existing)
+        else:
+            body = Path.cwd() / '.pipeline-local' / 'pr-body.md'; body.parent.mkdir(exist_ok=True)
+            body.write_text(f'{key}: scoped engineering artifact {artifact["commit"]}.\n\nLocal contract checks completed. Independent review/QA pending. No merge or deployment. Full acceptance remains on the original issue.\n')
+            p = subprocess.run(['gh', 'pr', 'create', '--repo', self.policy['repository'], '--draft', '--base', 'main', '--head', branch, '--title', key + ': scoped delivery', '--body-file', str(body)], cwd=Path.cwd(), capture_output=True, text=True, timeout=90)
+            if p.returncode:
+                raise Hold('PR publication uncertain; inspect remote before any replay')
+            url = p.stdout.strip()
         expected = 'https://github.com/' + self.policy['repository'] + '/pull/'
         if not url.startswith(expected) or not url[len(expected):].isdigit():
             raise Hold('Unexpected PR identity')
@@ -193,7 +201,8 @@ class Serial(Controller):
         elif target==self.c['qa_status']:next_lane['phase']='qa'
         elif target=='todo':
             next_lane.update(phase='developer',generation=lane['generation']+1,repairs=lane['repairs']+1,
-                             rework_base_commit=lane['native_head'],rework_public_commit=lane['artifact']['commit'],rework_paths=lane['contract']['allowed_paths'])
+                             rework_base_commit=lane['native_head'],rework_public_commit=lane['artifact']['commit'],rework_paths=lane['contract']['allowed_paths'],
+                             rework_pr_number=lane.get('pr_number'),rework_branch=lane.get('branch'))
             for name in ('artifact','receipts','checkouts','contract','developer_workspace','dependencies','published_checkout','pr_number','branch'):
                 next_lane.pop(name,None)
         else:next_lane['phase']='held'
