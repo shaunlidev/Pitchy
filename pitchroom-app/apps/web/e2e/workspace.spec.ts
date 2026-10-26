@@ -10,18 +10,19 @@ async function reset(page: import("@playwright/test").Page) {
   await expect(page.getByText("Project state: empty")).toBeVisible();
 }
 
-async function addPastedMaterial(page: import("@playwright/test").Page, text = "Atelier helps teams recover two days of client presentation preparation.") {
+async function saveWrittenBrief(page: import("@playwright/test").Page, text = "Atelier helps teams recover two days of client presentation preparation.") {
   await page.getByLabel("Paste source text").fill(text);
-  await page.getByRole("button", { name: "Add material" }).click();
+  await page.getByRole("button", { name: "Save brief" }).click();
   await expect(page.getByText("Project state: materials ready")).toBeVisible();
 }
 
 test.beforeEach(async ({ page }) => reset(page));
 
 test("material to reviewed understanding to explicit acceptance", async ({ page }) => {
-  await addPastedMaterial(page);
+  await saveWrittenBrief(page);
   await page.getByRole("button", { name: "Run understanding agent" }).click();
   await expect(page.getByText("Project state: review required")).toBeVisible();
+  await page.getByText("What the material actually says", { exact: true }).click();
   await expect(page.getByText("Exact source quote")).toBeVisible();
 
   await page.getByLabel("Answer the agent’s question").fill("Approve the twelve-team expansion pilot.");
@@ -46,6 +47,7 @@ test("uploaded Markdown conflict remains explicit and unresolved", async ({ page
   await expect(page.getByText("2 files")).toBeVisible();
   await page.getByRole("button", { name: "Run understanding agent" }).click();
 
+  await page.getByText("What the material actually says", { exact: true }).click();
   await expect(page.getByText("conflicting", { exact: true })).toBeVisible();
   await expect(page.locator("blockquote").filter({ hasText: "twelve teams" })).toBeVisible();
   await expect(page.locator("blockquote").filter({ hasText: "eighteen teams" })).toBeVisible();
@@ -68,7 +70,7 @@ test("unsupported file reports a recoverable error", async ({ page }) => {
 });
 
 test("stale second tab fails closed and can refresh", async ({ page, context }) => {
-  await addPastedMaterial(page);
+  await saveWrittenBrief(page);
   await page.getByRole("button", { name: "Run understanding agent" }).click();
   await expect(page.getByText("Project state: review required")).toBeVisible();
 
@@ -94,18 +96,19 @@ test("stale second tab fails closed and can refresh", async ({ page, context }) 
 
 test("workspace survives an event-stream disconnect and reload", async ({ page }) => {
   await page.route("**/api/workspace/events", (route) => route.abort());
-  await addPastedMaterial(page);
+  await saveWrittenBrief(page);
   await page.getByRole("button", { name: "Run understanding agent" }).click();
   await expect(page.getByText("Project state: review required")).toBeVisible();
   await page.unroute("**/api/workspace/events");
   await page.reload();
   await expect(page.getByText("Project state: review required")).toBeVisible();
   await page.getByRole("button", { name: "Clarify", exact: true }).click();
+  await page.getByText("What the material actually says", { exact: true }).click();
   await expect(page.getByText("Exact source quote")).toBeVisible();
 });
 
 test("complete local loop creates, edits, versions, and stales a discussion deck", async ({ page }) => {
-  await addPastedMaterial(page);
+  await saveWrittenBrief(page);
   await page.getByRole("button", { name: /Run understanding agent/ }).click();
   await page.getByRole("button", { name: /Accept version/ }).click();
   await page.getByRole("button", { name: /Continue to Positioning/ }).click();
@@ -133,7 +136,7 @@ test("complete local loop creates, edits, versions, and stales a discussion deck
 });
 
 test("existing project upload modal recovers from invalid type without reload",async({page})=>{
- await addPastedMaterial(page);
+ await saveWrittenBrief(page);
  await page.getByRole("button",{name:"Add files"}).click();
  await page.locator("#upload-material-file").setInputFiles(fixture("unsupported.json"));
  await expect(page.getByRole("dialog",{name:"Add source material"})).toHaveCount(0);
@@ -142,6 +145,8 @@ test("existing project upload modal recovers from invalid type without reload",a
  await page.getByRole("button",{name:"Add files"}).click();
  await page.locator("#upload-material-file").setInputFiles(fixture("source-b.md"));
  await expect(page.getByText("source-b.md",{exact:true})).toBeVisible();
- await expect(page.getByText("2 files",{exact:true})).toBeVisible();
+ await expect(page.getByText("1 file",{exact:true})).toBeVisible();
+ await expect(page.getByLabel("Written brief",{exact:true})).toHaveValue("Atelier helps teams recover two days of client presentation preparation.");
+ await expect(page.getByText("Saved brief · version 1",{exact:true})).toBeVisible();
  await expect(page.getByRole("dialog",{name:"Add source material"})).toHaveCount(0);
 });
