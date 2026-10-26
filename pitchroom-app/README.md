@@ -43,6 +43,10 @@ The HTTP workspace, health and SSE boundaries accept only `fixture`, `postgres-f
 
 ## Working-position recovery
 
+PIT-19 browser checkpoint (2026-10-26): mixed TXT/MD imports, unsupported/invalid UTF-8 items, transient read/server failures, saved-but-lost responses and per-file retry passed in existing Chrome against an isolated PostgreSQL QA database. The browser file input was populated directly; no native chooser, download, model call or recording. Existing material and the unsent written brief survived; a reload read the persisted inventory correctly.
+
+The run found and fixed a real remove/re-import defect: a new explicit command now restores a soft-deleted source and its original chunks. Replaying an old save command after removal instead returns a conflict; it cannot silently undo the removal. All four PostgreSQL suites passed (25 cases), alongside 446 Vitest cases, 4 Node guards, types and build. Earlier failed attempts remain local. See the [PIT-19 report](.artifacts/pit19-browser-20261026-01/acceptance-report.json). Retry file handles remain tab-local; cross-reload file retry and human acceptance are separate claims.
+
 The same browser restores each project's destination, inspected Clarify topic and saved Deck/page selection after reload. Removed versions and inaccessible destinations fall back safely. Navigation does not accept, apply or generate work.
 
 Under the approved seven-day recovery rule, unsubmitted brief text, answers/corrections, Story judgments/exact edits and Deck page edits are also stored locally in this browser. Drafts are scoped to their project and input context, including saved versions and source hashes. A matching single draft restores into the editor; earlier-version drafts are offered for explicit recovery. Conflicting tabs retain separate copies and offer a choice instead of overwriting active text. Successful submission clears only the submitted snapshot, preserving later typing and other drafts. Storage failures retain tab input and show a copy-before-close notice.

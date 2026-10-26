@@ -31,6 +31,33 @@ describe("PostgreSQL repository contract", () => {
     expect(await repository.getChunk(other.id, chunk.id)).toBeUndefined();
   });
 
+  it("restores removed material only through a new explicit import while retaining its source and chunks", async () => {
+    const project=await repository.createProject("Removed material re-import QA");
+    const input={name:"first.txt",mediaType:"text/plain",text:"Synthetic original source."} satisfies Parameters<PitchroomRepository["addMaterial"]>[1];
+    const original=await repository.addMaterial(project.id,input,"original-import");
+    const chunks=(await repository.listSources(project.id))[0]!.chunks;
+    await repository.removeMaterial(project.id,original.id);
+    expect(await repository.listSources(project.id)).toEqual([]);
+    const restored=await repository.addMaterial(project.id,input,"explicit-new-import");
+    expect(restored.id).toBe(original.id);
+    expect(await repository.listSources(project.id)).toEqual([expect.objectContaining({id:original.id,chunks})]);
+    expect(await repository.getProject(project.id)).toMatchObject({phase:"materials_ready",currentUnderstandingId:null,currentPositioningId:null});
+    expect(await repository.getCommandReceipt(project.id,"original-import")).toMatchObject({resourceId:original.id});
+    expect(await repository.getCommandReceipt(project.id,"explicit-new-import")).toMatchObject({resourceId:original.id});
+    await repository.addMaterial(project.id,input,"explicit-new-import");
+    expect(await repository.listSources(project.id)).toHaveLength(1);
+  });
+
+  it("refuses an old import replay after removal instead of reporting a removed source as saved", async () => {
+    const project=await repository.createProject("Removed import replay QA");
+    const input={name:"removed.md",mediaType:"text/markdown",text:"Synthetic removed source."} satisfies Parameters<PitchroomRepository["addMaterial"]>[1];
+    const original=await repository.addMaterial(project.id,input,"lost-response-import");
+    await repository.removeMaterial(project.id,original.id);
+    await expect(repository.addMaterial(project.id,input,"lost-response-import")).rejects.toMatchObject({code:"CONFLICT"});
+    expect(await repository.listSources(project.id)).toEqual([]);
+    expect(await repository.getCommandReceipt(project.id,"lost-response-import")).toMatchObject({resourceId:original.id});
+  });
+
   it("commits a version atomically and rejects stale writes", async () => {
     const project = await repository.createProject("Versioned project");
     await repository.addMaterial(project.id, { name: "brief.txt", mediaType: "text/plain", text: "Revenue grew 40 percent." }, "material-versioned");

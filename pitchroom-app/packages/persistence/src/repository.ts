@@ -69,6 +69,7 @@ export class PitchroomRepository implements ToolRepository {
         if (receipt.commandType !== "add_material" || receipt.requestHash !== material.contentHash) throw new PitchroomError("CONFLICT", "Idempotency key was already used for a different material command.");
         const existing = await tx.query.sources.findFirst({ where: and(eq(schema.sources.projectId, projectId), eq(schema.sources.id, receipt.resourceId)) });
         if (!existing) throw new PitchroomError("PERSISTENCE_ERROR", "Material receipt points to a missing source.");
+        if (existing.deletedAt) throw new PitchroomError("CONFLICT", "This material was removed after its original save. Re-add it explicitly with a new command.");
         return existing;
       }
       const [project] = await tx.execute<{ phase: string }>(sql`select phase from projects where id = ${projectId} for update`);
@@ -78,6 +79,7 @@ export class PitchroomRepository implements ToolRepository {
         if (concurrentReceipt.commandType !== "add_material" || concurrentReceipt.requestHash !== material.contentHash) throw new PitchroomError("CONFLICT", "Idempotency key was already used for a different material command.");
         const existing = await tx.query.sources.findFirst({ where: and(eq(schema.sources.projectId, projectId), eq(schema.sources.id, concurrentReceipt.resourceId)) });
         if (!existing) throw new PitchroomError("PERSISTENCE_ERROR", "Material receipt points to a missing source.");
+        if (existing.deletedAt) throw new PitchroomError("CONFLICT", "This material was removed after its original save. Re-add it explicitly with a new command.");
         return existing;
       }
       if (project.phase === "reading" || project.phase === "structuring") {
@@ -87,8 +89,12 @@ export class PitchroomRepository implements ToolRepository {
         where: and(eq(schema.sources.projectId, projectId), eq(schema.sources.contentHash, material.contentHash)),
       });
       if (duplicateContent) {
+        if (duplicateContent.deletedAt) {
+          await tx.update(schema.sources).set({ deletedAt: null }).where(and(eq(schema.sources.id, duplicateContent.id), eq(schema.sources.projectId, projectId)));
+          await tx.update(schema.projects).set({ phase: "materials_ready", currentUnderstandingId: null, currentPositioningId: null, updatedAt: new Date() }).where(eq(schema.projects.id, projectId));
+        }
         await tx.insert(schema.commandReceipts).values({ projectId, idempotencyKey, commandType: "add_material", requestHash: material.contentHash, resourceId: duplicateContent.id });
-        return duplicateContent;
+        return { ...duplicateContent, deletedAt: null };
       }
       const [usage] = await tx.select({ characters: sql<number>`coalesce(sum(length(${schema.sources.content})), 0)` }).from(schema.sources).where(eq(schema.sources.projectId, projectId));
       if (Number(usage?.characters ?? 0) + material.content.length > this.maxProjectCharacters) {
