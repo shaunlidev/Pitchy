@@ -6,6 +6,27 @@ import { readFileSync } from "node:fs";
 import { acceptFixture,addFixtureMaterial,decideFixtureClarification,readFixtureState,resetFixtureState,runFixtureAgent,submitFixtureClarification,runFixtureClarification } from "./fixture-store";
 import { WorkspaceView } from "./workspace-view";
 afterEach(()=>{cleanup();vi.useRealTimers();});
+it("exposes the current clarification review while keeping applied feedback collapsible", async () => {
+ resetFixtureState();
+ addFixtureMaterial({name:"brief.md",mediaType:"text/markdown",text:"The pilot audience remains unknown."});
+ const initial=runFixtureAgent();
+ const saved=submitFixtureClarification({text:"Procurement approves the pilot.",commandId:"visible-review",expectedRevision:initial.project.revision});
+ const taskId=saved.clarifications!.at(-1)!.id;
+ await runFixtureClarification(taskId);
+ const onAction=vi.fn(()=>true);
+ const props={busy:false,text:"",answer:"",correction:"",onTextChange:vi.fn(),onAnswerChange:vi.fn(),onCorrectionChange:vi.fn(),onChooseFile:()=>true,onCancelRun:vi.fn(),onAction};
+ const view=render(<WorkspaceView {...props} state={readFixtureState()} initialDestination="clarify"/>);
+ expect(screen.getByText("Saved answer · Before / Now").closest("details")).toHaveProperty("open",true);
+ expect(screen.getByRole("heading",{name:"Review the proposed changes"})).toBeTruthy();
+ expect(screen.getByRole("button",{name:"Apply changes to understanding"})).toBeTruthy();
+ expect(readFixtureState().currentVersionId).toBe(initial.currentVersionId);
+ const applied=decideFixtureClarification({taskId,action:"apply",commandId:"visible-review-apply"});
+ view.rerender(<WorkspaceView {...props} state={applied} initialDestination="clarify"/>);
+ expect(screen.getByText("Saved answer · Before / Now").closest("details")).toHaveProperty("open",false);
+ await userEvent.setup().click(screen.getByText("Saved answer · Before / Now"));
+ expect(screen.getByRole("heading",{name:/Changes applied/})).toBeTruthy();
+ expect(onAction).not.toHaveBeenCalled();
+});
 it("tracks acceptance of the current applied clarification without assigning it to historical results", async () => {
  resetFixtureState();
  addFixtureMaterial({name:"brief.md",mediaType:"text/markdown",text:"Reviewers check claims manually."});
