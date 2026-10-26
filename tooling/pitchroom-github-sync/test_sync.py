@@ -13,44 +13,11 @@ spec.loader.exec_module(sync)
 
 
 class ExportSafety(unittest.TestCase):
-    def test_preview_push_modify_and_delete_against_local_remote(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory) / "workspace"
-            root.mkdir()
-            remote = Path(directory) / "remote.git"
-            subprocess.run(["git", "init", "--bare", "-b", "main", str(remote)], check=True, capture_output=True)
-            seed = Path(directory) / "seed"
-            subprocess.run(["git", "clone", str(remote), str(seed)], check=True, capture_output=True)
-            def seed_git(*args):
-                return subprocess.check_output(["git", "-C", str(seed), *args], text=True)
-            seed_git("config", "user.name", "Synthetic")
-            seed_git("config", "user.email", "synthetic@example.invalid")
-            (seed / "README.md").write_text("Synthetic repository")
-            seed_git("add", ".")
-            seed_git("commit", "-m", "Initial synthetic tree")
-            seed_git("push", "origin", "main")
-            helper = root / sync.HELPER
-            helper.mkdir(parents=True)
-            (helper / "allowed-files.json").write_text("[]")
-            source = root / "pitchroom-app/apps/web/example.ts"
-            source.parent.mkdir(parents=True)
-            source.write_text("export const value = 1;")
-            original_run = sync.run
-            def command(*args, cwd=None):
-                if args[0] == "gh":
-                    return json.dumps({"nameWithOwner": sync.REPO, "visibility": "PRIVATE"})
-                return original_run(*args, cwd=cwd or root)
-            with patch.object(sync, "ROOT", root), patch.object(sync, "MIRROR", root / ".pitchroom-github"), patch.object(sync, "URL", str(remote)), patch.object(sync, "run", side_effect=command):
-                with patch.object(sys, "argv", ["sync"]):
-                    sync.main()
-                self.assertFalse((sync.MIRROR / source.relative_to(root)).exists())
-                with patch.object(sys, "argv", ["sync", "--push", "-m", "Synthetic source"]):
-                    sync.main()
-                self.assertEqual(sync.git("rev-parse", "HEAD"), sync.git("rev-parse", "origin/main"))
-                source.unlink()
-                with patch.object(sys, "argv", ["sync", "--push", "-m", "Synthetic deletion"]):
-                    sync.main()
-                self.assertNotIn("example.ts", sync.git("ls-tree", "-r", "--name-only", "HEAD"))
+    def test_legacy_push_is_retired_before_git_or_network(self):
+        result = subprocess.run([sys.executable, str(Path(__file__).with_name("sync.py")), "--push", "-m", "Synthetic"], capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("retired", result.stderr)
+        self.assertNotIn("Cloning", result.stderr)
 
     def test_secret_values_are_blocked_without_echo(self):
         for value in ("sk-" + "a" * 32, "github_pat_" + "b" * 30):

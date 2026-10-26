@@ -1,27 +1,21 @@
-# Sync application source to private GitHub
+# Serial task branches and Draft PR delivery
 
-From the workspace root, preview:
+Legacy snapshot `sync.py --push` is retired. Original local work is retained. New tasks use the GitHub repository's common history. Both migration/pilot PRs remain Draft and unmerged; only one task lane is authorized.
 
-```sh
-python3 tooling/pitchroom-github-sync/sync.py
-```
-
-Commit and push:
+From an approved task worktree:
 
 ```sh
-python3 tooling/pitchroom-github-sync/sync.py --push -m "Describe the change"
+python3 tooling/pitchroom-github-sync/delivery.py install-hook
+python3 -B -m unittest discover -s tooling/pitchroom-github-sync -p 'test_*.py'
+python3 tooling/pitchroom-github-sync/delivery.py audit HEAD
+# After a scoped local commit:
+git push -u origin HEAD
+# Explicit base; body file is local and ignored:
+gh pr create --draft --base codex/pit-30-git-baseline --title 'PIT-N: describe the change' --body-file .pipeline-local/pr.md
 ```
 
-The original workspace history and staging area remain separate. `.pitchroom-github/` is an ignored, dedicated checkout of `shaunlidev/pitchroom` on `main`. Do not edit that checkout directly. The helper uses existing `git`, `gh` authentication and Python 3; it installs nothing. It confirms that the destination is private, fetches upstream, accepts only fast-forward updates, commits source changes and verifies the remote commit. It never force-pushes. A clean retry can push a previously created but unpushed commit. Diverged history or a dirty sync checkout stops for inspection.
+The shared `pre-push` hook permits only origin at the exact private Pitchroom URL and non-deletion `codex/pit-N-description` branch updates. It blocks main, tags and non-fast-forward history. Every outgoing commit is scanned, including credentials removed in a later commit. Checks use committed blobs, reject unknown paths, symlinks, binaries, runtime/data/QA files and likely credentials; findings never print credential values.
 
-`allowed-files.json` preserves the reviewed initial upload scope. New JS/TS/CSS source files under application code directories, numbered SQL migrations and numbered migration schema snapshots are included automatically. Other new JSON/config files and documentation must be explicitly added to the allowlist after review; deleting an allowed source file also deletes it remotely. Real-material configurations, participant records, environment files other than `.env.example`, databases, logs, keys, dependencies, builds and QA artifacts are excluded. Next.js generated declarations use standard build paths instead of local QA paths. The sync helper itself is also included.
+The hook references its retained tool checkout by absolute path. Keep that checkout until reinstalling from a permanent one; missing tools fail closed. Existing unrelated hooksPath is preserved. Local hooks can be deliberately bypassed by an owner and do not provide GitHub-enforced branch protection. Review all new fixtures and configuration: scanning cannot prove that arbitrary prose is free of private information.
 
-Before transfer, every selected file must be UTF-8 text and pass filename and credential checks. Findings show only filename/line, never credential values. Synthetic test credentials and localhost example database URLs are permitted. A scanner cannot prove that arbitrary source text contains no private information: review the preview and code changes before pushing, especially new fixtures. The helper does not run application tests, real models, migrations or deployments. Run the relevant offline checks for your code change separately.
-
-If a push fails, keep the checkout and retry the same command after fixing connectivity. If the helper reports a dirty checkout or divergence, inspect it instead of deleting/resetting it. A credential finding requires removing the real credential from source and using environment variables, not weakening the guard.
-
-Offline verification of the export rules:
-
-```sh
-python3 -m unittest discover -s tooling/pitchroom-github-sync -p 'test_*.py'
-```
+Reviewer and QA run sequentially in separate detached worktrees at the exact PR head. New commits invalidate earlier review. Reports include outcome, evidence, gaps and choices, while raw evidence remains local. Do not merge or mark done during this pilot. Unattended dispatch and parallel rollout stay disabled. After the baseline is accepted, use an explicitly integrated base for later tasks.
