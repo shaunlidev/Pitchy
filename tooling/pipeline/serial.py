@@ -8,10 +8,11 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import time
 
 from controller import Controller, Hold, RUNNING, digest, git, lock, write_json
 from artifacts import _path, checkpoint, has_ancestor, materialize, prepare_dependencies, verify_clean_tree
-from github_sync import GitHub, SyncError, all_issues, cli, sync
+from github_sync import GitHub, SyncError, all_issues, cli, sync, invalidate
 
 SOURCE = Path(__file__).resolve().parents[2]
 
@@ -35,7 +36,12 @@ def configured(root):
 
 class Serial(Controller):
     def __init__(self, config, call, state, github, policy, execute=cli):
-        super().__init__(config, call, state)
+        self.raw_call=call
+        def checked_call(argv):
+            if argv[:2]==['issue','update'] and '--status' in argv:
+                self.require_fresh()
+            return call(argv)
+        super().__init__(config, checked_call, state)
         self.github, self.policy, self.execute = github, policy, execute
         self.observation = None
 
@@ -50,10 +56,22 @@ class Serial(Controller):
         if value.get('source_fingerprint') != fingerprint(self.c['repository']) or value.get('task_lanes') != 1 or value.get('verified') is not True:
             raise Hold('Activation stale or unverified; no scheduling')
 
+    def require_fresh(self):
+        if not self.observation or time.monotonic()>=self.observation.get('deadline_monotonic',0):
+            if self.observation:invalidate(self.raw_call,self.observation.get('issues',{}))
+            write_json(self.root/'sync-health.json',{'state':'unavailable','error':'Observation missing/expired before transition'})
+            raise Hold('Fresh observation expired; no transition')
+
     def refresh(self, apply):
-        self.observation = sync(self.policy, self.call, self.github, apply)
+        previous=json.loads((self.root/'github-latest.json').read_text()) if (self.root/'github-latest.json').exists() else {}
+        try:
+            self.observation=sync(self.policy,self.call,self.github,apply,previous=previous)
+        except SyncError:
+            write_json(self.root/'sync-health.json',{'state':'unavailable','error':'Source reads/publication incomplete'})
+            raise
         if apply:
-            write_json(self.root / 'github-latest.json', self.observation)
+            write_json(self.root/'github-latest.json',self.observation)
+            write_json(self.root/'sync-health.json',{'state':'fresh','observed_at':self.observation['observed_at']})
         return self.observation
 
     def publish_checkpoint(self, lane, workdir, key):
@@ -168,9 +186,22 @@ class Serial(Controller):
         role={self.c['review_status']:'reviewer',self.c['qa_status']:'qa','todo':'developer'}.get(target)
         args=['issue','update',lane['id'],'--status',target,'--assignee-id',self.c[role] if role else self.c['owner'],'--output','json']
         if not role:args+=['--no-start']
+        pending=lane['pending']
+        next_lane=json.loads(json.dumps(lane));next_lane.pop('pending')
+        if pending['engineering_verified']:next_lane['phase']='awaiting_merge'
+        elif target==self.c['review_status']:next_lane['phase']='reviewer'
+        elif target==self.c['qa_status']:next_lane['phase']='qa'
+        elif target=='todo':
+            next_lane.update(phase='developer',generation=lane['generation']+1,repairs=lane['repairs']+1,
+                             rework_base_commit=lane['native_head'],rework_public_commit=lane['artifact']['commit'],rework_paths=lane['contract']['allowed_paths'])
+            for name in ('artifact','receipts','checkouts','contract','developer_workspace','dependencies','published_checkout','pr_number','branch'):
+                next_lane.pop(name,None)
+        else:next_lane['phase']='held'
+        self.save(next_lane)  # A newly started runtime must see its own stage already published.
         self.call(args);self.finish(token)
 
     def pr_for(self, lane):
+        self.require_fresh()
         rows = self.observation['issues'].get(lane['issue'], {}).get('prs', [])
         matches = [x for x in rows if x['number']==lane.get('pr_number') and x['head']==lane.get('artifact',{}).get('commit')]
         if len(matches)!=1:
@@ -184,6 +215,7 @@ class Serial(Controller):
                 pr=self.pr_for(lane)
                 if pr['state']!='MERGED' or pr.get('integration_ci',{}).get('state')!='success':
                     results.append({'issue':lane['issue'],'waiting':'human merge and post-merge CI'});continue
+                self.require_fresh()
                 remote=self.github.api('commits/main')['sha']
                 # Post-merge result belongs to actual merge commit; no obsolete main acceptance.
                 if remote!=pr['merge_sha']:
@@ -211,29 +243,21 @@ class Serial(Controller):
                 raise Hold('Issue/owner/contract changed while role exited')
             if lane.get('pr_number') and pending['target'] not in ('in_review','todo'):
                 pr=self.pr_for(lane)
+                if pr['state'] not in ('OPEN','DRAFT') or pr.get('base')!='main':
+                    raise Hold('Forward handoff requires active PR on main')
                 if pr['ci']['state']!='success' and pending['target']!='in_review':
                     results.append({'issue':lane['issue'],'waiting':'exact-head CI not successful'});continue
             if not apply:results.append({'issue':lane['issue'],'would_transition':pending['target']});continue
             # Preserve old phase in durable transition identity; never replay uncertain writes.
             lane['phase']='exit-'+pending['role']+'-g'+str(lane['generation'])
             self._transition(lane,issue,pending['target'],pending['report'])
-            lane.pop('pending')
-            if pending['engineering_verified']:
-                lane['phase']='awaiting_merge'
-            elif pending['target']==self.c['review_status']:lane['phase']='reviewer'
-            elif pending['target']==self.c['qa_status']:lane['phase']='qa'
-            elif pending['target']=='todo':
-                lane.update(phase='developer',generation=lane['generation']+1,repairs=lane['repairs']+1,
-                            rework_base_commit=lane['native_head'],rework_public_commit=lane['artifact']['commit'],rework_paths=lane['contract']['allowed_paths'])
-                for name in ('artifact','receipts','checkouts','contract','developer_workspace','dependencies','published_checkout','pr_number','branch'):
-                    lane.pop(name,None)
-            else:lane['phase']='held'
-            self.save(lane);results.append({'issue':lane['issue'],'status':pending['target']})
+            results.append({'issue':lane['issue'],'status':pending['target']})
         return results
 
     def dispatch(self, apply=False):
         active=[x['issue'] for x in self.lanes().values() if x['phase'] not in ('done','held')]
         if active:return {'active':active,'started':[],'held':{'single_lane':'Existing artifact owns the lane through merge'}}
+        self.require_fresh()
         remote=self.github.api('commits/main')['sha']
         if git(self.c['repository'],'rev-parse','HEAD')!=remote or git(self.c['repository'],'status','--porcelain') or git(self.c['repository'],'branch','--show-current')!='main':
             raise Hold('Canonical main is stale or dirty; no new task')

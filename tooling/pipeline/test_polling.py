@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 import subprocess
 import unittest
+import time
 from unittest.mock import patch
 
 import github_sync as gs
@@ -68,6 +69,32 @@ class Polling(unittest.TestCase):
         call.rows[0]['metadata']['github_sync_state']='updating'
         gs.sync(POLICY,call,gh,True,'t2');self.assertEqual(call.rows[0]['metadata']['github_sync_state'],'fresh')
 
+    def test_new_publication_failure_invalidates_earlier_fresh_issue(self):
+        memory=Memory([issue(1),issue(2)]);gh=GH([pr(1,'PIT-1'),pr(2,'PIT-2')])
+        def call(args):
+            if args[:3]==['issue','metadata','set'] and args[3]=='id-2' and args[args.index('--key')+1]=='github_prs':raise gs.SyncError('second publication failed')
+            return memory(args)
+        with self.assertRaises(gs.SyncError):gs.sync(POLICY,call,gh,True)
+        self.assertEqual([i['metadata']['github_sync_state'] for i in memory.rows],['unavailable','unavailable'])
+
+    def test_issue_list_failure_invalidates_known_previous_snapshot(self):
+        memory=Memory([issue()]);gh=GH([pr()]);gs.sync(POLICY,memory,gh,True)
+        def call(args):
+            if args[:2]==['issue','list']:raise gs.SyncError('list unavailable')
+            return memory(args)
+        with self.assertRaises(gs.SyncError):gs.sync(POLICY,call,gh,True)
+        self.assertEqual(memory.rows[0]['metadata']['github_sync_state'],'unavailable')
+
+    def test_expiry_during_metadata_writes_never_returns_success(self):
+        clock=[0];memory=Memory([issue()]);gh=GH([pr()])
+        def call(args):
+            value=memory(args)
+            if args[:3]==['issue','metadata','set']:clock[0]+=20
+            return value
+        with patch.object(gs.time,'monotonic',side_effect=lambda:clock[0]):
+            with self.assertRaises(gs.SyncError):gs.sync({**POLICY,'max_observation_seconds':45},call,gh,True)
+        self.assertEqual(memory.rows[0]['metadata']['github_sync_state'],'unavailable')
+
     def test_read_only_sync_has_no_writes(self):
         call=Memory([issue()]);gs.sync(POLICY,call,GH([pr()]));self.assertEqual(call.writes,[])
 
@@ -120,7 +147,7 @@ class SerialBehavior(unittest.TestCase):
               'artifact':{'commit':SHA},'pr_number':1,
               'pending':{'target':target,'role':'developer','run':'dev-run','actor':'dev','issue_status':'in_progress','assignee':'dev','source_description':serial.digest(row['description']),'report':'unused','engineering_verified':False}}
         self.f.fake.runs['id-1']=[{'id':'dev-run','agent_id':'dev','status':terminal}]
-        self.c.observation={'issues':{'PIT-1':{'prs':[{'number':1,'head':SHA,'state':'DRAFT','ci':{'state':ci}}]}}}
+        self.c.observation={'deadline_monotonic':time.monotonic()+120,'issues':{'PIT-1':{'prs':[{'number':1,'head':SHA,'state':'DRAFT','base':'main','ci':{'state':ci}}]}}}
         self.c.save(lane);return lane
 
     def test_waiting_merge_and_ci_occupy_single_lane(self):
@@ -135,6 +162,15 @@ class SerialBehavior(unittest.TestCase):
         self.assertFalse(any(a[:3]==['issue','comment','add'] for a in self.f.fake.writes))
         count=len(self.f.fake.writes);self.c.drain(True);self.assertEqual(len(self.f.fake.writes),count)
 
+    def test_next_lane_published_before_remote_worker_can_start(self):
+        self.lane();original=self.c.call;observed=[]
+        def call(args):
+            if args[:2]==['issue','update']:
+                observed.append(self.c.lanes()['PIT-1']['phase'])
+            return original(args)
+        self.c.call=call;self.c.drain(True)
+        self.assertEqual(observed,['reviewer'])
+
     def test_qa_success_goes_to_waiting_merge_not_done(self):
         lane=self.lane(target='in_review');lane['pending']['engineering_verified']=True;self.c.save(lane)
         self.c.drain(True);self.assertEqual(self.c.lanes()['PIT-1']['phase'],'awaiting_merge')
@@ -146,6 +182,17 @@ class SerialBehavior(unittest.TestCase):
         with self.assertRaises(serial.Hold):self.c.drain(True)
         self.lane();self.c.observation['issues']['PIT-1']['prs'][0]['head']='b'*40
         with self.assertRaises(serial.Hold):self.c.drain(True)
+
+    def test_closed_prematurely_merged_or_retargeted_pr_cannot_handoff(self):
+        for state,base in [('CLOSED','main'),('MERGED','main'),('DRAFT','other')]:
+            self.lane();row=self.c.observation['issues']['PIT-1']['prs'][0];row.update(state=state,base=base)
+            with self.assertRaises(serial.Hold):self.c.drain(True)
+        self.assertFalse(self.f.fake.writes)
+
+    def test_expired_observation_cannot_start_role(self):
+        self.lane();self.c.observation['deadline_monotonic']=0
+        with self.assertRaises(serial.Hold):self.c.drain(True)
+        self.assertFalse(any(a[:2]==['issue','update'] for a in self.f.fake.writes))
 
     def test_activation_required_and_uncertain_write_blocks(self):
         with self.assertRaises(serial.Hold):self.c.require_enabled()
@@ -180,6 +227,7 @@ class FullSerialChain(SerialBehavior):
                 raise AssertionError(path)
             def ci(self,sha,event):return {'state':'success','sha':sha,'run_id':1}
         c.github=Remote()
+        c.observation={'deadline_monotonic':time.monotonic()+120,'issues':{}}
         self.assertEqual(c.dispatch(True)['started'],['PIT-1'])
         native=f.root/'dev-native';f.g('worktree','add','-qb','dev-source',str(native));(native/'source.txt').write_text('lane1')
         plan={'engineering':True,'decisions':[],'criteria':[{**core.requirements(core.DESCRIPTION)[0],'kind':'engineering','required':True,'check_ids':['normal']}],
@@ -191,7 +239,7 @@ class FullSerialChain(SerialBehavior):
             with f.runtime('developer',native):
                 c.workspace('PIT-1',native);c.plan('PIT-1',pp);c.stage('PIT-1','developer',rp,native)
         artifact=c.lanes()['PIT-1']['artifact']
-        c.observation={'issues':{'PIT-1':{'prs':[{'number':1,'head':artifact['commit'],'state':'DRAFT','ci':{'state':'success'}}]}}}
+        c.observation={'deadline_monotonic':time.monotonic()+120,'issues':{'PIT-1':{'prs':[{'number':1,'head':artifact['commit'],'state':'DRAFT','base':'main','ci':{'state':'success'}}]}}}
         self.assertEqual(c.drain(True)[0]['waiting'],'preceding runtime not successfully terminal')
         f.fake.runs['id-1'][0]['status']='completed';c.drain(True)
         self.assertEqual(f.fake.rows[0]['status'],'started_2')

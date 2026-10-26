@@ -131,47 +131,50 @@ def mapping(issues, prs, repository):
     return result
 
 
-def sync(policy, call, github, apply=False, now=None):
-    started = time.monotonic()
-    now = now or datetime.now(timezone.utc).isoformat()
-    issues = all_issues(call, policy['project_id'])
-    affected = [i for i in issues if i.get('metadata', {}).get('github_sync_digest')]
+def invalidate(call, identities):
+    for value in identities.values():
+        try:
+            call(['issue','metadata','set',value['id'],'--key','github_sync_state','--value','unavailable'])
+        except Exception:
+            pass
+
+
+def sync(policy, call, github, apply=False, now=None, previous=None):
+    started=time.monotonic(); deadline=started+policy.get('max_observation_seconds',120)
+    now=now or datetime.now(timezone.utc).isoformat()
+    previous=previous or getattr(github,'known_issues',{})
+    affected={k:{'id':v['id']} for k,v in previous.get('issues',{}).items() if v.get('id')}
+    def fresh():
+        if time.monotonic()>=deadline:raise SyncError('Observation expired')
     try:
-        prs = github.prs()
-        grouped = mapping(issues, prs, policy['repository'])
-        # Read all sources before publishing any passing snapshot.
-        snapshots = {key: [github.snapshot(p) for p in rows] for key, rows in grouped.items()}
-        if time.monotonic() - started > policy.get('max_observation_seconds', 120):
-            raise SyncError('Observation expired during source reads')
-        result = {'observed_at': now, 'repository': policy['repository'], 'issues': {}, 'writes': 0}
+        issues=all_issues(call,policy['project_id'])
         for issue in issues:
-            key, meta = issue['identifier'], issue.get('metadata', {})
-            if key not in snapshots:
-                continue
-            rows = snapshots[key]
-            payload = json.dumps(rows, sort_keys=True, separators=(',', ':'))
-            digest = hashlib.sha256(payload.encode()).hexdigest()
-            result['issues'][key] = {'prs': rows, 'digest': digest}
-            if not apply:
-                continue
-            updates = {'github_sync_observed_at': now}
-            publishing = meta.get('github_sync_digest') != digest or meta.get('github_sync_state') != 'fresh'
+            if issue.get('metadata',{}).get('github_sync_digest'):affected[issue['identifier']]={'id':issue['id']}
+        prs=github.prs();grouped=mapping(issues,prs,policy['repository'])
+        snapshots={key:[github.snapshot(p) for p in rows] for key,rows in grouped.items()}
+        fresh()
+        result={'observed_at':now,'deadline_monotonic':deadline,'repository':policy['repository'],'issues':{},'writes':0}
+        for issue in issues:
+            key,meta=issue['identifier'],issue.get('metadata',{})
+            if key not in snapshots:continue
+            rows=snapshots[key];payload=json.dumps(rows,sort_keys=True,separators=(',',':'));digest=hashlib.sha256(payload.encode()).hexdigest()
+            result['issues'][key]={'id':issue['id'],'prs':rows,'digest':digest}
+            if not apply:continue
+            affected[key]={'id':issue['id']}
+            publishing=meta.get('github_sync_digest')!=digest or meta.get('github_sync_state')!='fresh'
+            updates={'github_sync_observed_at':now}
+            if publishing:updates={'github_sync_state':'updating','github_prs':payload,'github_sync_digest':digest,**updates}
+            updates={k:v for k,v in updates.items() if meta.get(k)!=v}
+            for name,value in updates.items():
+                fresh();call(['issue','metadata','set',issue['id'],'--key',name,'--value',value]);result['writes']+=1
             if publishing:
-                updates = {'github_sync_state': 'updating', 'github_prs': payload, 'github_sync_digest': digest, **updates}
-            updates = {name:value for name,value in updates.items() if meta.get(name) != value}
-            for name, value in updates.items():
-                call(['issue', 'metadata', 'set', issue['id'], '--key', name, '--value', value]); result['writes'] += 1
-            if publishing:
-                call(['issue', 'metadata', 'set', issue['id'], '--key', 'github_sync_state', '--value', 'fresh']); result['writes'] += 1
+                fresh();call(['issue','metadata','set',issue['id'],'--key','github_sync_state','--value','fresh']);result['writes']+=1
+        fresh();github.known_issues=result
         return result
-    except (SyncError, KeyError, TypeError, ValueError, OSError, subprocess.SubprocessError):
-        if apply:
-            for issue in affected:
-                try:
-                    call(['issue', 'metadata', 'set', issue['id'], '--key', 'github_sync_state', '--value', 'unavailable'])
-                except Exception:
-                    pass
-        raise SyncError('GitHub/Multica synchronization incomplete; no scheduling allowed') from None
+    except (SyncError,KeyError,TypeError,ValueError,OSError,subprocess.SubprocessError):
+        if apply:invalidate(call,affected)
+        github.known_issues={'issues':affected}
+        raise SyncError('GitHub/Multica synchronization incomplete or expired; no scheduling allowed') from None
 
 
 if __name__ == '__main__':
@@ -184,8 +187,11 @@ if __name__ == '__main__':
     with (state / 'controller.lock').open('a') as guard:
         fcntl.flock(guard, fcntl.LOCK_EX | fcntl.LOCK_NB)
         try:
-            output = sync(policy, lambda a: cli(['multica', *a]), GitHub(policy['repository']), args.apply)
+            previous=json.loads((state/'github-latest.json').read_text()) if (state/'github-latest.json').exists() else {}
+            output = sync(policy, lambda a: cli(['multica', *a]), GitHub(policy['repository']), args.apply, previous=previous)
+            (state/'sync-health.json').write_text(json.dumps({'state':'fresh','observed_at':output['observed_at']}))
             (state / 'github-latest.json').write_text(json.dumps(output, indent=2))
             print(json.dumps(output, ensure_ascii=False, indent=2))
         except SyncError as error:
+            (state/'sync-health.json').write_text(json.dumps({'state':'unavailable','error':str(error)}))
             print(json.dumps({'held': str(error)})); raise SystemExit(2)
