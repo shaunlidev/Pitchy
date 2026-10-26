@@ -1,5 +1,7 @@
+import { sql } from "drizzle-orm";
 import type { DeckProposal, StoryProposal, StoryVersion, PositioningProposalV1, UnderstandingProposalV1 } from "@pitchroom/domain";
 import {
+  check,
   index,
   integer,
   jsonb,
@@ -273,3 +275,15 @@ export const storyVersions = pgTable("story_versions", {
   id: uuid("id").primaryKey(), projectId: uuid("project_id").notNull().references(() => projects.id),
   payload: jsonb("payload").$type<StoryVersion>().notNull(), createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
+
+export const topicMaterials = pgTable("topic_materials", {
+  projectId: uuid("project_id").notNull().references(() => projects.id),
+  sourceId: text("source_id").notNull().references(() => sources.id),
+  understandingId: uuid("understanding_id").notNull().references(() => understandingVersions.id),
+  topicKind: text("topic_kind").notNull(),
+  topicIndex: integer("topic_index").notNull(),
+  label: text("label").notNull(),
+}, table => [uniqueIndex("topic_materials_unique").on(table.projectId, table.sourceId, table.understandingId, table.topicKind, table.topicIndex),
+  check("topic_materials_topic_kind_check", sql`${table.topicKind} IN ('theme', 'gap')`),
+  check("topic_materials_topic_index_check", sql`${table.topicIndex} >= 0`),
+]);

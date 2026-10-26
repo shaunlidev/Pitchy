@@ -137,6 +137,11 @@ export class PitchroomRepository implements ToolRepository {
     })));
   }
 
+  async listRemovedSources(projectId: string) {
+    const rows = await this.db.select().from(schema.sources).where(and(eq(schema.sources.projectId, projectId), sql`${schema.sources.deletedAt} is not null`, eq(schema.sources.kind, "file")));
+    return Promise.all(rows.map(async source => ({ sourceId: source.id, name: source.name, kind: source.kind, mediaType: source.mediaType === "text/markdown" ? "text/markdown" as const : "text/plain" as const, content: source.content, contentHash: source.contentHash, chunks: await this.db.select().from(schema.sourceChunks).where(eq(schema.sourceChunks.sourceId, source.id)) })));
+  }
+
   async getSource(projectId: string, sourceId: string): Promise<SourceRecord | undefined> {
     return (await this.listSources(projectId)).find((source) => source.id === sourceId);
   }
@@ -155,6 +160,7 @@ export class PitchroomRepository implements ToolRepository {
       if (project.phase === "reading" || project.phase === "structuring") throw new PitchroomError("CONFLICT", "Material cannot be removed while the agent is running.");
       const [removed] = await tx.update(schema.sources).set({ deletedAt: new Date() }).where(and(eq(schema.sources.id, sourceId), eq(schema.sources.projectId, projectId), eq(schema.sources.kind, "file"), isNull(schema.sources.deletedAt))).returning({ id: schema.sources.id });
       if (!removed) throw new PitchroomError("NOT_FOUND", "Material was not found in this project.");
+      await tx.delete(schema.topicMaterials).where(and(eq(schema.topicMaterials.projectId, projectId), eq(schema.topicMaterials.sourceId, sourceId)));
       const [remaining] = await tx.select({ count: sql<number>`count(*)` }).from(schema.sources).where(and(eq(schema.sources.projectId, projectId), isNull(schema.sources.deletedAt)));
       await tx.update(schema.projects).set({ currentUnderstandingId: null, currentPositioningId: null, phase: Number(remaining?.count ?? 0) ? "materials_ready" : "empty", updatedAt: new Date() }).where(eq(schema.projects.id, projectId));
       return removed;

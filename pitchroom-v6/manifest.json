@@ -1,0 +1,691 @@
+{
+  "schemaVersion": 2,
+  "id": "pitchroom-v6",
+  "documentVersion": "0.4-v6",
+  "targetRelease": "0.1",
+  "updated": "2026-10-11",
+  "scope": "Standalone offline mockup and sole product/design starting point for a fresh implementation. Not a production implementation.",
+  "status": {
+    "humanPrototypeDirection": "provisionally_accepted_for_now",
+    "authority": "User provisionally accepted v6, then explicitly approved archiving the previous engineering project and starting over from v6 on 2026-10-11.",
+    "targetedInteraction": "recorded_pass_reused",
+    "documentationCapture": "new_scoped_pass",
+    "productionAcceptance": "not_assessed_by_this_package",
+    "realAI": "not_implemented"
+  },
+  "entrypoint": "README.md",
+  "sourceArtifact": {
+    "path": "prototype/index.html",
+    "bytes": 156361,
+    "sha256": "7c8ba23eb5f1b59f397a68d3438a3f8aa801387433ad99c73042a6a5d19d653c"
+  },
+  "documents": [
+    {
+      "id": "README",
+      "path": "README.md",
+      "purpose": "entry_and_tutorial"
+    },
+    {
+      "id": "PRD",
+      "path": "PRD.md",
+      "purpose": "requirements_reference"
+    },
+    {
+      "id": "DESIGN",
+      "path": "DESIGN.md",
+      "purpose": "design_reference_and_rationale"
+    },
+    {
+      "id": "EVIDENCE",
+      "path": "EVIDENCE.md",
+      "purpose": "evidence_gallery"
+    },
+    {
+      "id": "HARNESS",
+      "path": "HARNESS.md",
+      "purpose": "how_to_retrieve_and_verify"
+    }
+  ],
+  "sections": [
+    {
+      "id": "MAT",
+      "label": "Materials",
+      "stateKey": "source",
+      "prd": "PRD.md#materials",
+      "design": "DESIGN.md#materials",
+      "evidence": "EVIDENCE.md#materials",
+      "requirementIds": [
+        "MAT-01",
+        "MAT-02",
+        "MAT-03"
+      ],
+      "crossRequirementIds": [
+        "X-01",
+        "X-02",
+        "X-03",
+        "X-04"
+      ],
+      "screenshotIds": [
+        "MAT-ENTRY",
+        "MAT-LIBRARY",
+        "MAT-MOBILE"
+      ],
+      "primaryScreenshotId": "MAT-LIBRARY",
+      "checkIds": [
+        "V6-C1",
+        "V6-C7",
+        "V6-C8"
+      ],
+      "sourceSymbols": [
+        "renderSource",
+        "renderMaterialLibrary",
+        "openMaterials",
+        "fileRows",
+        "addFiles"
+      ]
+    },
+    {
+      "id": "CLR",
+      "label": "Clarify",
+      "stateKey": "context",
+      "prd": "PRD.md#clarify",
+      "design": "DESIGN.md#clarify",
+      "evidence": "EVIDENCE.md#clarify",
+      "requirementIds": [
+        "CLR-01",
+        "CLR-02",
+        "CLR-03",
+        "CLR-04"
+      ],
+      "crossRequirementIds": [
+        "X-01",
+        "X-02",
+        "X-03",
+        "X-04"
+      ],
+      "screenshotIds": [
+        "CLR-QUESTION",
+        "CLR-FEEDBACK",
+        "CLR-MOBILE"
+      ],
+      "primaryScreenshotId": "CLR-QUESTION",
+      "checkIds": [
+        "V6-C2",
+        "V6-C4",
+        "V6-C5",
+        "V6-C6",
+        "V6-C8"
+      ],
+      "sourceSymbols": [
+        "renderContext",
+        "renderClusters",
+        "renderFocusedQuestion",
+        "renderContextFeedback",
+        "requestPositioning",
+        "resumeClarify"
+      ]
+    },
+    {
+      "id": "POS",
+      "label": "Positioning",
+      "stateKey": "positioning",
+      "prd": "PRD.md#positioning",
+      "design": "DESIGN.md#positioning",
+      "evidence": "EVIDENCE.md#positioning",
+      "requirementIds": [
+        "POS-01",
+        "POS-02",
+        "POS-03"
+      ],
+      "crossRequirementIds": [
+        "X-01",
+        "X-02",
+        "X-03",
+        "X-04"
+      ],
+      "screenshotIds": [
+        "POS-WORKING",
+        "POS-COMPARE"
+      ],
+      "primaryScreenshotId": "POS-WORKING",
+      "checkIds": [
+        "V6-C3",
+        "V6-C6",
+        "DOC-POS",
+        "DOC-COMPARE"
+      ],
+      "sourceSymbols": [
+        "renderPositioning",
+        "renderTask",
+        "compare",
+        "visibleDirection"
+      ]
+    },
+    {
+      "id": "DCK",
+      "label": "Deck",
+      "stateKey": "deck",
+      "prd": "PRD.md#deck",
+      "design": "DESIGN.md#deck",
+      "evidence": "EVIDENCE.md#deck",
+      "requirementIds": [
+        "DCK-01",
+        "DCK-02"
+      ],
+      "crossRequirementIds": [
+        "X-01",
+        "X-02",
+        "X-03",
+        "X-04"
+      ],
+      "screenshotIds": [
+        "DCK-FIRST"
+      ],
+      "primaryScreenshotId": "DCK-FIRST",
+      "checkIds": [
+        "V6-C3",
+        "V6-C4",
+        "DOC-DECK"
+      ],
+      "sourceSymbols": [
+        "deckPages",
+        "renderDeck",
+        "review",
+        "changed"
+      ]
+    }
+  ],
+  "requirements": [
+    {
+      "id": "MAT-01",
+      "section": "MAT",
+      "anchor": "PRD.md#materials",
+      "status": "mixed_demonstrated_and_simulated_see_PRD"
+    },
+    {
+      "id": "MAT-02",
+      "section": "MAT",
+      "anchor": "PRD.md#materials",
+      "status": "demonstrated_mockup_only"
+    },
+    {
+      "id": "MAT-03",
+      "section": "MAT",
+      "anchor": "PRD.md#materials",
+      "status": "demonstrated_mockup_only"
+    },
+    {
+      "id": "CLR-01",
+      "section": "CLR",
+      "anchor": "PRD.md#clarify",
+      "status": "mixed_demonstrated_and_simulated_see_PRD"
+    },
+    {
+      "id": "CLR-02",
+      "section": "CLR",
+      "anchor": "PRD.md#clarify",
+      "status": "mixed_demonstrated_and_simulated_see_PRD"
+    },
+    {
+      "id": "CLR-03",
+      "section": "CLR",
+      "anchor": "PRD.md#clarify",
+      "status": "demonstrated_mockup_only"
+    },
+    {
+      "id": "CLR-04",
+      "section": "CLR",
+      "anchor": "PRD.md#clarify",
+      "status": "demonstrated_mockup_only"
+    },
+    {
+      "id": "POS-01",
+      "section": "POS",
+      "anchor": "PRD.md#positioning",
+      "status": "mixed_demonstrated_and_simulated_see_PRD"
+    },
+    {
+      "id": "POS-02",
+      "section": "POS",
+      "anchor": "PRD.md#positioning",
+      "status": "mixed_demonstrated_and_simulated_see_PRD"
+    },
+    {
+      "id": "POS-03",
+      "section": "POS",
+      "anchor": "PRD.md#positioning",
+      "status": "demonstrated_mockup_only"
+    },
+    {
+      "id": "DCK-01",
+      "section": "DCK",
+      "anchor": "PRD.md#deck",
+      "status": "mixed_demonstrated_and_simulated_see_PRD"
+    },
+    {
+      "id": "DCK-02",
+      "section": "DCK",
+      "anchor": "PRD.md#deck",
+      "status": "demonstrated_mockup_only"
+    },
+    {
+      "id": "X-01",
+      "section": "cross-section",
+      "anchor": "PRD.md#boundaries",
+      "status": "prototype_contract_not_production_certification"
+    },
+    {
+      "id": "X-02",
+      "section": "cross-section",
+      "anchor": "PRD.md#boundaries",
+      "status": "prototype_contract_not_production_certification"
+    },
+    {
+      "id": "X-03",
+      "section": "cross-section",
+      "anchor": "PRD.md#boundaries",
+      "status": "prototype_contract_not_production_certification"
+    },
+    {
+      "id": "X-04",
+      "section": "cross-section",
+      "anchor": "PRD.md#boundaries",
+      "status": "prototype_contract_not_production_certification"
+    }
+  ],
+  "checks": [
+    {
+      "id": "V6-C1",
+      "runId": "2026-10-11-mockup-v6-02",
+      "resultCheckIndex": 0,
+      "description": "Four peer destinations; Materials always reaches existing files, not Clarify or a fresh landing; Back to Clarify keeps the current unsaved answer",
+      "kind": "recorded_group_in_single_targeted_run"
+    },
+    {
+      "id": "V6-C2",
+      "runId": "2026-10-11-mockup-v6-02",
+      "resultCheckIndex": 1,
+      "description": "Quiet intake; collapsed file inventory; one question; laptop primary action visible; source details; explicit correction; draft retention; before/after feedback; scoped upload/error/removal; pending files never marked sufficient; optional skipping",
+      "kind": "recorded_group_in_single_targeted_run"
+    },
+    {
+      "id": "V6-C3",
+      "runId": "2026-10-11-mockup-v6-02",
+      "resultCheckIndex": 2,
+      "description": "Corrections/context/attachments carried literally into positioning and deck; preview/apply/undo; manual edit and read-only history preserved",
+      "kind": "recorded_group_in_single_targeted_run"
+    },
+    {
+      "id": "V6-C4",
+      "runId": "2026-10-11-mockup-v6-02",
+      "resultCheckIndex": 3,
+      "description": "Clarify returns to ongoing work; on-demand file manager; removal downgrades coverage; explicit restore preserves notes and attachments; old deck stale; unsaved-answer gate",
+      "kind": "recorded_group_in_single_targeted_run"
+    },
+    {
+      "id": "V6-C5",
+      "runId": "2026-10-11-mockup-v6-02",
+      "resultCheckIndex": 4,
+      "description": "375/760/1440px overflow checks; mobile overview collapse; mobile input retained through file-manager dismissal",
+      "kind": "recorded_group_in_single_targeted_run"
+    },
+    {
+      "id": "V6-C6",
+      "runId": "2026-10-11-mockup-v6-02",
+      "resultCheckIndex": 5,
+      "description": "Paste intake; no false analysis; literal brief retained through explicit sample opt-in; all-unknown path can reach positioning",
+      "kind": "recorded_group_in_single_targeted_run"
+    },
+    {
+      "id": "V6-C7",
+      "runId": "2026-10-11-mockup-v6-02",
+      "resultCheckIndex": 6,
+      "description": "Native intake file picker; both file and unsent written brief preserved when opening sample; skip feedback retains the true previous state",
+      "kind": "recorded_group_in_single_targeted_run"
+    },
+    {
+      "id": "V6-C8",
+      "runId": "2026-10-11-mockup-v6-02",
+      "resultCheckIndex": 7,
+      "description": "Clarify preserves saved feedback; gap attachment appears in Materials and links back to its topic; written-brief drafts survive navigation and require save before positioning; clearing a brief works; pending understanding correction survives navigation; all four mobile destinations fit",
+      "kind": "recorded_group_in_single_targeted_run"
+    },
+    {
+      "id": "DOC-POS",
+      "runId": "2026-10-11-mockup-v6-docs-02",
+      "screenshotId": "POS-WORKING",
+      "description": "Applied taste-first headline is rendered; screenshot and no horizontal overflow.",
+      "kind": "documentation_capture_assertion"
+    },
+    {
+      "id": "DOC-COMPARE",
+      "runId": "2026-10-11-mockup-v6-docs-02",
+      "screenshotId": "POS-COMPARE",
+      "description": "Three direction cards are rendered; screenshot and no horizontal overflow.",
+      "kind": "documentation_capture_assertion"
+    },
+    {
+      "id": "DOC-DECK",
+      "runId": "2026-10-11-mockup-v6-docs-02",
+      "screenshotId": "DCK-FIRST",
+      "description": "Five deck-page buttons are rendered; screenshot and no horizontal overflow.",
+      "kind": "documentation_capture_assertion"
+    }
+  ],
+  "runs": [
+    {
+      "id": "2026-10-11-mockup-v6-02",
+      "usage": "reused_not_rerun",
+      "result": {
+        "path": "evidence/runs/2026-10-11-mockup-v6-02/result.json",
+        "bytes": 2631,
+        "sha256": "4b4c22eabd21ae16ada2556b8683208de0d4fe22f55334ad0f6ae0aff62fd1ae",
+        "recordedPath": "artifacts/ui-harness/2026-10-11-mockup-v6-02/result.json"
+      },
+      "trace": {
+        "path": "evidence/runs/2026-10-11-mockup-v6-02/materials-workspace.trace.zip",
+        "bytes": 3843774,
+        "sha256": "9437f7263287ea7c48b7942845b27b617b35ce387a7f0e0ccd2c69aa360a42a2",
+        "actions": 244,
+        "snapshots": 578,
+        "recordedPath": "artifacts/ui-harness/2026-10-11-mockup-v6-02/materials-workspace.trace.zip"
+      },
+      "script": {
+        "path": "harness/recorded/check-mockup-v6.ts",
+        "bytes": 17347,
+        "sha256": "cb026ffdb92a3a60786675d316002d7fc5f62c2fbf0ae230e11ff0c04542e0e2",
+        "recordedPath": ".tmp/check-mockup-v6.ts"
+      },
+      "scriptHashField": "testHash",
+      "sourceHashField": "htmlHash",
+      "limits": "Standalone targeted interactions only. Historical environment/dependency fingerprint is incomplete; not production regression."
+    },
+    {
+      "id": "2026-10-11-mockup-v6-docs-02",
+      "usage": "new_documentation_capture_only",
+      "result": {
+        "path": "evidence/runs/2026-10-11-mockup-v6-docs-02/result.json",
+        "bytes": 1854,
+        "sha256": "d831438e2b85f5edeafad3cae953d0ecd55b60908b8df19c4f7d1aee2e992651",
+        "recordedPath": "artifacts/ui-harness/2026-10-11-mockup-v6-docs-02/result.json"
+      },
+      "trace": {
+        "path": "evidence/runs/2026-10-11-mockup-v6-docs-02/documentation-capture.trace.zip",
+        "bytes": 565961,
+        "sha256": "70008afebc82c646bc7be597bbdd2b6e6fb8e4c4fd04974bec792b93264b2cca",
+        "actions": 29,
+        "snapshots": 62,
+        "recordedPath": "artifacts/ui-harness/2026-10-11-mockup-v6-docs-02/documentation-capture.trace.zip"
+      },
+      "script": {
+        "path": "harness/recorded/capture.ts",
+        "bytes": 4806,
+        "sha256": "25e7fde262ec31ba97201345547e87a58bd5bbe742b3dda461682d7964739032",
+        "recordedPath": "scripts/capture-pitchroom-v6-docs.ts"
+      },
+      "scriptHashField": "scriptHash",
+      "sourceHashField": "htmlHash",
+      "limits": "Three added section views only, not a full regression."
+    }
+  ],
+  "screenshots": [
+    {
+      "id": "CLR-QUESTION",
+      "section": "CLR",
+      "path": "screenshots/clarify-desktop.png",
+      "bytes": 91278,
+      "sha256": "924e3a472a5c33d920ff0a7183a77ba4f510803c59af8081108587ba7a5dd032",
+      "pixels": {
+        "width": 1280,
+        "height": 800
+      },
+      "runId": "2026-10-11-mockup-v6-02",
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      },
+      "capture": "viewport",
+      "state": "Sample project, Buying moment question, three available topics, two gaps.",
+      "recordedPath": "artifacts/ui-harness/2026-10-11-mockup-v6-02/02-focused-workspace.png"
+    },
+    {
+      "id": "CLR-MOBILE",
+      "section": "CLR",
+      "path": "screenshots/clarify-mobile.png",
+      "bytes": 58061,
+      "sha256": "aa45152078803e71fcb4e0adcdcbf93811292611181d54077a65e3e51df8a705",
+      "pixels": {
+        "width": 375,
+        "height": 812
+      },
+      "runId": "2026-10-11-mockup-v6-02",
+      "viewport": {
+        "width": 375,
+        "height": 812
+      },
+      "capture": "viewport",
+      "state": "Mobile collapsed overview and draft question; viewport only, not the whole page.",
+      "recordedPath": "artifacts/ui-harness/2026-10-11-mockup-v6-02/04-mobile-question.png"
+    },
+    {
+      "id": "MAT-LIBRARY",
+      "section": "MAT",
+      "path": "screenshots/materials-desktop.png",
+      "bytes": 68591,
+      "sha256": "9a053e04ed4f95d7775df76e92bd5f04fbf5685537bdb2f65992fbfd22153041",
+      "pixels": {
+        "width": 1280,
+        "height": 800
+      },
+      "runId": "2026-10-11-mockup-v6-02",
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      },
+      "capture": "viewport",
+      "state": "Three independent source rows, optional brief and Back to Clarify.",
+      "recordedPath": "artifacts/ui-harness/2026-10-11-mockup-v6-02/05-material-library.png"
+    },
+    {
+      "id": "CLR-FEEDBACK",
+      "section": "CLR",
+      "path": "screenshots/clarify-feedback.png",
+      "bytes": 99257,
+      "sha256": "5f4f2904ef85492aa65774abf151748c263447da494afa0d96e2c8b75099ea3e",
+      "pixels": {
+        "width": 1280,
+        "height": 800
+      },
+      "runId": "2026-10-11-mockup-v6-02",
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      },
+      "capture": "viewport",
+      "state": "Saved Before/Now feedback; literal synthetic script text in corrected understanding.",
+      "recordedPath": "artifacts/ui-harness/2026-10-11-mockup-v6-02/03-visible-context-change.png"
+    },
+    {
+      "id": "MAT-MOBILE",
+      "section": "MAT",
+      "path": "screenshots/materials-mobile.png",
+      "bytes": 50808,
+      "sha256": "b8ae7180f594db8d453a77d6a292ef894dc8f76c6641a8e12382c84c7145ae61",
+      "pixels": {
+        "width": 375,
+        "height": 812
+      },
+      "runId": "2026-10-11-mockup-v6-02",
+      "viewport": {
+        "width": 375,
+        "height": 812
+      },
+      "capture": "viewport",
+      "state": "Mobile inventory including a topic attachment; viewport only.",
+      "recordedPath": "artifacts/ui-harness/2026-10-11-mockup-v6-02/06-mobile-material-library.png"
+    },
+    {
+      "id": "MAT-ENTRY",
+      "section": "MAT",
+      "path": "screenshots/materials-entry.png",
+      "bytes": 62063,
+      "sha256": "38fb1a5fd423a83c9da7f45ea2f9e404dbef8622d002d27ce46fa41c834f97e8",
+      "pixels": {
+        "width": 1280,
+        "height": 800
+      },
+      "runId": "2026-10-11-mockup-v6-02",
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      },
+      "capture": "viewport",
+      "state": "Quiet fresh intake, optional paste and explicit sample entry.",
+      "recordedPath": "artifacts/ui-harness/2026-10-11-mockup-v6-02/01-empty-entry.png"
+    },
+    {
+      "id": "POS-WORKING",
+      "section": "POS",
+      "path": "screenshots/positioning-desktop.png",
+      "bytes": 124916,
+      "sha256": "c4509df493eaca83cd1690a4217ead449cbe3e08bac15fab219d7556416a7017",
+      "pixels": {
+        "width": 1280,
+        "height": 1076
+      },
+      "runId": "2026-10-11-mockup-v6-docs-02",
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      },
+      "capture": "fullPage",
+      "state": "Applied taste-first working direction with concrete From/To and generation action.",
+      "recordedPath": "artifacts/ui-harness/2026-10-11-mockup-v6-docs-02/07-positioning.png"
+    },
+    {
+      "id": "POS-COMPARE",
+      "section": "POS",
+      "path": "screenshots/positioning-directions.png",
+      "bytes": 155812,
+      "sha256": "23d71aba4c1e08ff0fd8298b6955ab4d01247f77272370744284d41ef7dc38a7",
+      "pixels": {
+        "width": 1280,
+        "height": 1076
+      },
+      "runId": "2026-10-11-mockup-v6-docs-02",
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      },
+      "capture": "fullPage",
+      "state": "Three-direction comparison modal with trade-offs and original option.",
+      "recordedPath": "artifacts/ui-harness/2026-10-11-mockup-v6-docs-02/08-direction-comparison.png"
+    },
+    {
+      "id": "DCK-FIRST",
+      "section": "DCK",
+      "path": "screenshots/deck-desktop.png",
+      "bytes": 104659,
+      "sha256": "f1e255a994dfe9e1693d1ab791eaffe33baa21e8f9eb627cb411a691cbe819bf",
+      "pixels": {
+        "width": 1280,
+        "height": 961
+      },
+      "runId": "2026-10-11-mockup-v6-docs-02",
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      },
+      "capture": "fullPage",
+      "state": "First page of a five-page draft, navigation and editing/review/history controls.",
+      "recordedPath": "artifacts/ui-harness/2026-10-11-mockup-v6-docs-02/09-deck.png"
+    }
+  ],
+  "runtimeAtDocumentation": {
+    "bun": "1.3.4",
+    "playwright": "1.56.1",
+    "chromePath": "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    "dependencyFingerprints": [
+      {
+        "path": "package.json",
+        "bytes": 909,
+        "sha256": "0950991c1d628a8f0df997caef78608cd1c49cb50a8f46215e7e64c9f55fd405"
+      },
+      {
+        "path": "bun.lock",
+        "bytes": 3299,
+        "sha256": "4d864e8722e8f97bb200bbb5325b2d5a93395287bd8521be63658a64b0bb10df"
+      }
+    ],
+    "note": "Historical documentation context, not a retroactive fingerprint of the earlier targeted run. Original workspace-relative dependency paths now resolve through the archive migration inventory, preserving original hashes; these are not new-app dependencies."
+  },
+  "boundaries": {
+    "productionPRD": "../archive/pre-v6/PRD_EN.md",
+    "productionDesign": "../archive/pre-v6/DESIGN.md",
+    "legacyReferencePolicy": "Historical provenance only. Neither these documents nor the old app's architecture or tests govern the fresh implementation.",
+    "mockupDeckPages": 5,
+    "existingAppDeckPages": 8,
+    "simulation": "Prewritten sample understanding, questions and directions; files are names only; text is literal; state resets on reload.",
+    "deferred": [
+      "real_AI",
+      "file_parsing",
+      "durable_project_memory",
+      "generic_AI_chat",
+      "billing",
+      "multi_project_workspace",
+      "hosted_sharing",
+      "PPTX_export"
+    ]
+  },
+  "evidencePolicy": {
+    "localOnly": true,
+    "gitignored": true,
+    "approvedCapBytes": 320000000,
+    "approval": "Explicit user approval to increase from 300 MB to 320 MB for v5 verification, retained by v6. No deletion or upload authorized.",
+    "reuseRule": "Validate identity, attachments and recorded coverage; do not promote to production acceptance.",
+    "accountingPackageRoots": [
+      "evidence",
+      "screenshots",
+      "harness/recorded"
+    ],
+    "accountingWorkspaceRoots": [
+      { "path": "archive/pre-v6/artifacts", "required": true },
+      { "path": "archive/pre-v6/test-results", "required": true },
+      { "path": "archive/pre-v6/docs/designs/assets/redesign-review", "required": true },
+      { "path": "artifacts", "required": false },
+      { "path": "test-results", "required": false },
+      { "path": "playwright-report", "required": false },
+      { "path": "docs/designs/assets/redesign-review", "required": false }
+    ],
+    "accountingCorrection": "Old test-results and redesign-review screenshots were omitted by the former counter. After detecting the over-cap state, the user approved moving four archived 2026-09-26 R2 runs (103,464 KiB) intact to .trash/evidence-pruned-2026-10-11. Verified counted usage is 216,039,424 bytes, leaving 103,960,576 bytes under the cap. Capacity alone does not authorize new captures.",
+    "recordedUsedBytesBeforeRelocation": 318242816
+  },
+  "validation": {
+    "command": "bun harness/check.ts",
+    "output": "stdout_only",
+    "scope": "Package-relative links, mappings, fingerprints, PNG decode, trace readability and recorded result identity. --workspace also checks historical originals, dependency references and aggregate evidence capacity.",
+    "workspaceCommand": "bun harness/check.ts --workspace"
+  },
+  "omissions": [
+    "Production integration and G3",
+    "Real AI quality",
+    "Dynamic clustering/question generation",
+    "Full accessibility certification",
+    "Native zoom and PDF fidelity",
+    "Dedicated Positioning/Deck mobile screenshots",
+    "Observed customer use, reuse or payment"
+  ],
+  "pathBase": "package",
+  "workspaceArchive": {
+    "inventory": "../archive/migration-2026-10-11.json",
+    "authority": "User approved a fresh start from v6 and whole-project archival on 2026-10-11.",
+    "defaultRead": false
+  },
+  "relocation": {
+    "date": "2026-10-11",
+    "authority": "User requested all new v6 documentation, HTML, pictures and harness material in one folder.",
+    "inventory": "evidence/relocation.json",
+    "historicalRecords": "Original JSON result fields and archived test sources are immutable; recordedPath fields preserve their old locations.",
+    "noEvidenceCopies": true
+  }
+}

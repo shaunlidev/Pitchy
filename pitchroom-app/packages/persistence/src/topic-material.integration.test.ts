@@ -1,0 +1,63 @@
+import { afterAll, beforeAll, expect, it } from "vitest";
+import { migrate } from "drizzle-orm/postgres-js/migrator";
+import { createDatabase, PitchroomRepository } from "./repository";
+import { TopicMaterialRepository } from "./topic-material-repository";
+import type { TopicRef, UnderstandingProposalV1 } from "@pitchroom/domain";
+const url = process.env.DATABASE_URL;
+const target = url ? new URL(url) : undefined;
+if (!target || !["postgres:", "postgresql:"].includes(target.protocol) || !["127.0.0.1", "localhost"].includes(target.hostname) || target.search || target.hash || !((target.port === "55449" && target.username === "pit21_qa" && target.pathname === "/pit21_qa") || (target.port === "55437" && target.username === "clarify_qa" && target.pathname === "/clarify_qa"))) throw Error("Use only a dedicated local synthetic integration database.");
+if (!url) throw Error("DATABASE_URL required");
+const { db, client } = createDatabase(url);
+const repo = new PitchroomRepository(db), links = new TopicMaterialRepository(db);
+beforeAll(async () => migrate(db, { migrationsFolder: new URL("../migrations", import.meta.url).pathname }));
+afterAll(async () => client.end());
+const material = { name: "topic.md", mediaType: "text/markdown", text: "Synthetic second source." } as const;
+async function setup() {
+  const project = await repo.createProject("PIT-21 isolated synthetic");
+  await repo.addMaterial(project.id, { name: "initial.txt", mediaType: "text/plain", text: "Synthetic first source." }, crypto.randomUUID());
+  const run = await repo.createRun(project.id, crypto.randomUUID(), "synthetic", "fake");
+  const proposal: UnderstandingProposalV1 = { schemaVersion: 1, themes: [{ title: "Audience", summary: "Open", claims: [{ statement: "Unknown audience", evidenceState: "unknown", evidence: [], userInputIds: [] }] }], gaps: [{ description: "Launch", whyItMatters: "Defines scope", relatedSourceIds: [] }], nextQuestion: { question: "Who?", whyItMatters: "Scope", relatedThemeIndexes: [0] } };
+  const version = await repo.completeRun({ projectId: project.id, runId: run.id, expectedRevision: 0, proposal });
+  const topic: TopicRef = { understandingId: version.id, kind: "theme", index: 0 };
+  return { project, version, topic };
+}
+it("atomically uploads once, links multiple topics, replays and unlinks only one relation without adoption", async () => {
+  const { project, topic, version } = await setup();
+  const before = await repo.getProject(project.id);
+  const input = { action: "attach", topic, commandId: "attach", material } as const;
+  await links.change(project.id, input); await links.change(project.id, input);
+  const source = (await repo.listSources(project.id)).find(source => source.name === material.name)!;
+  const other = { ...topic, kind: "gap" as const };
+  await Promise.all([links.change(project.id, { action: "link", topic: other, sourceId: source.id, commandId: "link-1" }), links.change(project.id, { action: "link", topic: other, sourceId: source.id, commandId: "link-2" })]);
+  expect(await links.list(project.id)).toHaveLength(2);
+  expect((await links.list(project.id)).every(link => link.status === "needs_review")).toBe(true);
+  expect(await repo.listSources(project.id)).toHaveLength(2);
+  expect(await repo.getProject(project.id)).toEqual(before);
+  expect((await repo.listVersions(project.id))[0]!.proposal).toEqual(version.proposal);
+  await links.change(project.id, { action: "unlink", topic, sourceId: source.id, commandId: "unlink" });
+  expect(await links.list(project.id)).toEqual([expect.objectContaining({ ...other, sourceId: source.id, label: "Launch" })]);
+  expect(await repo.listSources(project.id)).toHaveLength(2);
+});
+it("retains historical text on removal and restores no links on reimport", async () => {
+  const { project, topic } = await setup(); await links.change(project.id, { action: "attach", topic, material, commandId: "add" });
+  const source = (await repo.listSources(project.id)).find(source => source.name === material.name)!;
+  const versions = await repo.listVersions(project.id);
+  await repo.removeMaterial(project.id, source.id);
+  expect(await links.list(project.id)).toEqual([]);
+  expect(await repo.listRemovedSources(project.id)).toEqual([expect.objectContaining({ sourceId: source.id, content: material.text })]);
+  expect(await repo.listVersions(project.id)).toEqual(versions);
+  await repo.addMaterial(project.id, material, "reimport"); expect(await links.list(project.id)).toEqual([]);
+  expect(await repo.listSources(project.id)).toHaveLength(2);
+});
+it("rolls back invalid/cross-project/stale topics, missing sources and conflicting receipts", async () => {
+  const { project, topic } = await setup(), other = await setup();
+  const before = await repo.listSources(project.id);
+  for (const bad of [{ ...topic, index: 99 }, other.topic]) await expect(links.change(project.id, { action: "attach", topic: bad, material, commandId: crypto.randomUUID() })).rejects.toThrow();
+  await expect(links.change(project.id, { action: "link", topic, sourceId: "missing", commandId: "missing" })).rejects.toThrow();
+  expect(await repo.listSources(project.id)).toEqual(before);
+  await links.change(project.id, { action: "attach", topic, material, commandId: "saved" });
+  await expect(links.change(project.id, { action: "attach", topic, material: { ...material, text: "Changed" }, commandId: "saved" })).rejects.toMatchObject({ code: "CONFLICT" });
+  await repo.addMaterial(project.id, { ...material, text: "New global context" }, "invalidate");
+  await expect(links.change(project.id, { action: "attach", topic, material, commandId: "old-topic" })).rejects.toMatchObject({ code: "CONFLICT" });
+  expect(await links.list(project.id)).toHaveLength(1);
+});

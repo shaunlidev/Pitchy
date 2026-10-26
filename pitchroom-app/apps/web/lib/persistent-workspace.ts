@@ -1,3 +1,4 @@
+import { TopicMaterialRepository } from "@pitchroom/persistence";
 import { BriefRepository } from "@pitchroom/persistence";
 import { workflowEventLabel } from "./workspace-ux-state";
 import { proposeStory } from "./story-service";
@@ -9,7 +10,7 @@ import { agentReviewForChunks, type FixtureState } from "./fixture-store";
 
 const globals = globalThis as typeof globalThis & { __pitchroomDatabase?: ReturnType<typeof createDatabase>; __pitchroomRepository?: PitchroomRepository };
 
-const requiredQueryTables = ["briefVersions",
+const requiredQueryTables = ["topicMaterials", "briefVersions",
   "clarificationTasks",
   "projects",
   "sources",
@@ -104,6 +105,8 @@ export async function readPersistentState(mode: "postgres-fake" | "live" = "post
     workflowRuns.map((run) => ({ id: run.id, kind: run.kind as "positioning" | "deck" | "story", status: run.status as "running" | "completed" | "failed", failureMessage: run.failureMessage ?? undefined, events: run.events })),
   );
   return {
+    topicMaterials: await new TopicMaterialRepository(repository().db).list(currentProject.id),
+    removedSources: await repository().listRemovedSources(currentProject.id),
     mode, story, brief: await new BriefRepository(repository().db).read(currentProject.id),
     clarifications: await new ClarificationRepository(repository().db).refresh(currentProject.id),
     project: { id: currentProject.id, name: currentProject.name, phase: currentProject.phase, revision: currentProject.version },
@@ -288,4 +291,10 @@ export async function undoPersistentStory(input: { expected: import("@pitchroom/
 }
 export async function createPersistentStoryDeck(input: { expected: import("@pitchroom/domain").StoryHead; commandId: string }, mode: "postgres-fake" | "live") {
   const current = await project(); await new StoryRepository(repository().db).createDeck({ ...input, projectId: current.id }); return readPersistentState(mode);
+}
+
+export async function changePersistentTopicMaterial(input: Parameters<TopicMaterialRepository["change"]>[1]) {
+  const current = await project();
+  await new TopicMaterialRepository(repository().db).change(current.id, input);
+  return readPersistentState();
 }
