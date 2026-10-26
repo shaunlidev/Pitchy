@@ -43,10 +43,12 @@ def check(path, data):
             value = match.group(0)
             if value.startswith(("postgres://", "postgresql://", "mongodb")):
                 from urllib.parse import urlsplit
-                host = urlsplit(value).hostname
-                if host in {"localhost", "127.0.0.1", "db", "x", "test", "synthetic", "local", "invalid"}:
+                parsed = urlsplit(value)
+                host = parsed.hostname
+                placeholder = parsed.password is None or parsed.password in {"pitchroom", "clarify_qa", "postgres", "test", "qa", "x"} or (is_test and parsed.password == "synthetic") or bool(re.fullmatch(r"\$\{[A-Za-z_][A-Za-z0-9_]*\}", parsed.password or ""))
+                if placeholder and host in {"localhost", "127.0.0.1", "db", "x", "test", "synthetic", "local", "invalid"}:
                     continue
-                if is_test and host and host.endswith((".example", ".invalid")):
+                if is_test and host and host.endswith((".example", ".invalid")) and (placeholder or parsed.password == "example"):
                     continue
             elif pattern is SECRETS[-1]:
                 dummy = match.group(1)

@@ -62,6 +62,8 @@ class ExportSafety(unittest.TestCase):
         for text in (json.dumps({"apiKey": "a" * 30}), "postgres://user:example@private.example/db"):
             with self.assertRaises(ValueError):
                 sync.check("pitchroom-app/packages/evals/config/example.json", text.encode())
+        with self.assertRaises(ValueError):
+            sync.check("pitchroom-app/config.ts", ("postgres" + "://user:" + "a" * 30 + "@localhost/db").encode())
 
     def test_local_placeholders_and_synthetic_tests_remain_valid(self):
         sync.check("pitchroom-app/.env.example", b"DATABASE_URL=postgres://pitchroom:pitchroom@127.0.0.1:54329/pitchroom\nOPENAI_API_KEY=\n")
