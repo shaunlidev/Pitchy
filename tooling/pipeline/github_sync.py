@@ -171,10 +171,11 @@ def sync(policy, call, github, apply=False, now=None, previous=None):
                 fresh();call(['issue','metadata','set',issue['id'],'--key','github_sync_state','--value','fresh']);result['writes']+=1
         fresh();github.known_issues=result
         return result
-    except (SyncError,KeyError,TypeError,ValueError,OSError,subprocess.SubprocessError):
+    except (SyncError,KeyError,TypeError,ValueError,OSError,subprocess.SubprocessError) as error:
         if apply:invalidate(call,affected)
         github.known_issues={'issues':affected}
-        raise SyncError('GitHub/Multica synchronization incomplete or expired; no scheduling allowed') from None
+        reason=str(error) if isinstance(error,SyncError) else type(error).__name__
+        raise SyncError('Synchronization incomplete/expired; no scheduling allowed: '+reason) from None
 
 
 if __name__ == '__main__':
