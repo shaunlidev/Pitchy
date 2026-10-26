@@ -115,6 +115,8 @@ def main():
     parser.add_argument("-m", "--message")
     parser.add_argument("--audit", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
+    if args.push:
+        raise ValueError("Direct snapshot pushes are retired. Use a task worktree, guarded git push, and a Draft PR.")
     if args.audit:
         audit_repo()
         return

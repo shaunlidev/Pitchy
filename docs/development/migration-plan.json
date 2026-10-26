@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "status": "prepared_not_merged",
+  "merge_method": "merge_commit",
+  "sequence": [
+    {"pr": 1, "issue": "PIT-30", "base": "main", "purpose": "source-only baseline"},
+    {"pr": 2, "issue": "PIT-47", "base": "codex/pit-30-git-baseline", "purpose": "push guard"},
+    {"issue": "PIT-33", "branch": "codex/pit-33-pipeline-foundation", "base": "codex/pit-47-pr-push-guard", "purpose": "policy, status, CI"},
+    {"pr": 3, "issue": "PIT-22", "base": "codex/pit-30-git-baseline", "purpose": "feature branch; owner must finish latest-head review"}
+  ],
+  "before_each_merge": [
+    "resolve live head and base; prior review of another head is stale",
+    "inspect diff and complete original acceptance criteria",
+    "verify no private runtime or raw evidence is in outgoing history",
+    "require matching review, QA and applicable CI; missing checks remain gaps",
+    "obtain human merge approval for the exact head"
+  ],
+  "after_each_merge": [
+    "record actual merge commit and retained delivery ancestry",
+    "run applicable checks on integrated main",
+    "retarget remaining PRs only after inspecting their resulting diff",
+    "resolve conflicts only in an owned task worktree; new head requires new checks",
+    "unlock dependents only after integrated checks pass"
+  ],
+  "legacy_work": "Original dirty work and old delivery commits remain local. Import only an explicitly reviewed task diff; never bulk-import legacy history.",
+  "unresolved": [
+    "baseline and existing PR merge approval",
+    "first actual GitHub CI execution and dependency restoration",
+    "native Multica PR event integration (later phase)"
+  ]
+}

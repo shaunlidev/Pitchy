@@ -3,6 +3,7 @@
 The private GitHub repository shaunlidev/pitchroom is the common engineering history. Original local work is preserved outside this history; migration imports selected files, not the old Git object database.
 
 - Product and design: pitchroom-v6/README.md, PRD.md, DESIGN.md; manifest.json locates original sections.
+- Delivery policy and status: docs/development/PIPELINE.md and tooling/pipeline/policy.json.
 - Current implementation: pitchroom-app/README.md and package scripts.
 - Verification boundaries: pitchroom-v6/HARNESS.md and AGENTS.md.
 - Migration provenance: docs/development/git-migration.json.
