@@ -28,11 +28,12 @@ class PushSafety(unittest.TestCase):
             root=Path(directory);original=subprocess.check_output
             def g(*args):return original(['git',*args],cwd=root,text=True).strip()
             g('init','-b','main');g('config','user.name','Synthetic');g('config','user.email','synthetic@example.invalid')
+            policy=root/'tooling/pitchroom-github-sync/allowed-files.json';policy.parent.mkdir(parents=True);policy.write_text('[]')
             p=root/'pitchroom-app/apps/web/example.ts';p.parent.mkdir(parents=True);p.write_text('export const value=1;')
             g('add','.');g('commit','-m','Synthetic safe');safe=g('rev-parse','HEAD')
             def output(argv,**kwargs):return original(argv,cwd=root,**kwargs)
             with patch.object(delivery.subprocess,'check_output',side_effect=output):
-                self.assertEqual(delivery.audit([safe]),1)
+                self.assertEqual(delivery.audit([safe]),2)
                 secret='sk-'+'a'*32;p.write_text(secret);g('add','.');g('commit','-m','Synthetic unsafe intermediate');unsafe=g('rev-parse','HEAD')
                 p.write_text('export const value=2;');g('add','.');g('commit','-m','Synthetic clean head')
                 with self.assertRaises(ValueError) as caught:delivery.audit([unsafe,g('rev-parse','HEAD')])
@@ -41,7 +42,7 @@ class PushSafety(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError,'mode'):delivery.audit([g('rev-parse','HEAD')])
 
     def test_private_data_and_unapproved_documents_excluded(self):
-        for path in ['.multica/context.json','pitchroom-app/docs/participant.md','pitchroom-v6/evidence/result.json','data.sqlite']:
+        for path in ['.multica/context.json','pitchroom-app/docs/participant.md','pitchroom-v6/evidence/result.json','data.sqlite','pitchroom-app/apps/web/private.json','pitchroom-app/packages/domain/customer.md']:
             self.assertFalse(delivery.allowed_path(path))
         from sync import check
         for path in ['pitchroom-app/.env.local','pitchroom-app/packages/data.sqlite','pitchroom-app/apps/web/data.db']:

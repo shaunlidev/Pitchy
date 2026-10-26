@@ -23,7 +23,7 @@ def safe_destination(local_sha, remote_ref):
         raise ValueError('Only non-deletion codex/pit-N-description branch updates are allowed; main is protected locally')
 
 
-def allowed_path(path):
+def allowed_path(path, reviewed=()):
     if path in {'.gitignore', 'README.md', 'AGENTS.md', 'SOURCE_OF_TRUTH.md', 'docs/development/git-migration.json'}:
         return True
     if path.startswith('pitchroom-v6/'):
@@ -36,20 +36,29 @@ def allowed_path(path):
     if relative.startswith('docs/'):
         return False
     if relative.startswith(('apps/', 'packages/', 'scripts/')):
-        return Path(path).suffix in {'.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.mts', '.css', '.json', '.sql', '.yaml', '.md'}
+        if path in reviewed:
+            return True
+        if re.fullmatch(r"pitchroom-app/packages/persistence/migrations/(?:[0-9]{4}_[a-zA-Z0-9_]+\.sql|meta/[0-9]{4}_snapshot\.json)", path):
+            return True
+        return Path(path).suffix in {'.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.mts', '.css'} and '/config/' not in path
     return relative in {'.env.example', '.gitignore', 'README.md', 'RUNBOOK.md', 'SECURITY.md', 'DEPLOYMENT_CHECKLIST.md', 'package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'compose.yaml', 'tsconfig.base.json'}
 
 
 def audit(commits):
     seen = set()
     for commit in commits:
+        policy = json.loads(git("show", commit + ":tooling/pitchroom-github-sync/allowed-files.json"))
+        migration = subprocess.run(["git", "show", commit + ":docs/development/git-migration.json"], capture_output=True, text=True)
+        reviewed = set(policy)
+        if migration.returncode == 0:
+            reviewed.update(json.loads(migration.stdout)["files"])
         for row in subprocess.check_output(['git', 'ls-tree', '-r', '-z', commit]).split(b'\0'):
             if not row:
                 continue
             metadata, name = row.split(b'\t', 1)
             mode, kind, oid = metadata.decode().split()
             path = name.decode()
-            if mode not in {'100644', '100755'} or kind != 'blob' or not allowed_path(path):
+            if mode not in {'100644', '100755'} or kind != 'blob' or not allowed_path(path, reviewed):
                 raise ValueError(f'Unsafe committed path or mode: {path}')
             identity = (path, oid)
             if identity in seen:
