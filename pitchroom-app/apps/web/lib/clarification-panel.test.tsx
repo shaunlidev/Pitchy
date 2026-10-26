@@ -221,3 +221,16 @@ it("leaves an accepted question open without creating a version, submitting, or 
  expect(screen.getByRole("button",{name:/Continue to Positioning/}).hasAttribute("disabled")).toBe(false);
  expect(onAction).not.toHaveBeenCalled();expect(readFixtureState().currentVersionId).toBe(initial.currentVersionId);expect(readFixtureState().project.phase).toBe("accepted");
 });
+
+it.each(["", "x".repeat(4001)])("retains temporary invalid interpretation text after reopening (%#)", async text => {
+ window.localStorage.clear();resetFixtureState();
+ addFixtureMaterial({name:"brief.md",mediaType:"text/markdown",text:"The pilot audience remains unknown."});
+ const initial=runFixtureAgent();const saved=submitFixtureClarification({text:"Procurement approves the pilot.",commandId:"loose-edit",expectedRevision:initial.project.revision});
+ await runFixtureClarification(saved.clarifications!.at(-1)!.id);
+ const onAction=vi.fn(()=>false);const props={state:readFixtureState(),busy:false,text:"",answer:"",correction:"",onTextChange:vi.fn(),onAnswerChange:vi.fn(),onCorrectionChange:vi.fn(),onChooseFile:()=>true,onCancelRun:vi.fn(),onAction,rememberPosition:true};
+ const user=userEvent.setup();const view=render(<WorkspaceView {...props}/>);await user.click(screen.getByRole("button",{name:/^Clarify$/}));
+ const {fireEvent}=await import("@testing-library/react");fireEvent.change(screen.getByLabelText("Proposed interpretation 1"),{target:{value:text}});
+ view.unmount();render(<WorkspaceView {...props}/>);
+ expect(screen.getByLabelText("Proposed interpretation 1")).toHaveProperty("value",text);
+ expect(onAction).not.toHaveBeenCalled();window.localStorage.clear();
+});

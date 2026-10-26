@@ -1,4 +1,5 @@
-import { clarificationResultSchema, topicTasksFor, sameTopic, type TopicRef } from "@pitchroom/domain";
+import { z } from "zod";
+import { topicTasksFor, sameTopic, type TopicRef } from "@pitchroom/domain";
 import { briefText } from "@pitchroom/domain";
 import { BriefEditor } from "./brief-editor";
 import { useLocalDraft, DraftRecovery } from "./use-local-draft";
@@ -400,7 +401,13 @@ function TopicMaterials({ state, topic, busy, onChooseFiles, onAction, onMateria
 
 function SavedClarificationPanel({ projectId, remember, ...props }: ComponentProps<typeof ClarificationPanel> & { projectId: string; remember: boolean }) {
   const initial = props.task.status === "proposal_ready" ? props.task.result : undefined;
-  const edits = useLocalDraft({ projectId, enabled: remember, kind: `clarification:${props.task.id}`, context: JSON.stringify([props.task.baseUnderstandingId, props.task.result]), schema: clarificationResultSchema.optional(), initial, hasContent: value => Boolean(value && JSON.stringify(value) !== JSON.stringify(initial)) });
+  const initialTexts = initial?.operations.map(operation => operation.type === "update_summary" ? operation.text : "") ?? [];
+  const edits = useLocalDraft({ projectId, enabled: remember, kind: `clarification:${props.task.id}`, context: JSON.stringify([props.task.baseUnderstandingId, props.task.result]), schema: z.array(z.string()), initial: initialTexts, hasContent: value => JSON.stringify(value) !== JSON.stringify(initialTexts) });
+  const restored = !initial ? undefined :
+    initial.schemaVersion === 4 ? { ...initial, operations: initial.operations.map((operation,index) => operation.type === "update_summary" ? { ...operation, text: edits.value[index] ?? operation.text } : operation) } :
+    initial.schemaVersion === 3 ? { ...initial, operations: initial.operations.map((operation,index) => operation.type === "update_summary" ? { ...operation, text: edits.value[index] ?? operation.text } : operation) } :
+    initial.schemaVersion === 2 ? { ...initial, operations: initial.operations.map((operation,index) => operation.type === "update_summary" ? { ...operation, text: edits.value[index] ?? operation.text } : operation) } :
+    { ...initial, operations: initial.operations.map((operation,index) => operation.type === "update_summary" ? { ...operation, text: edits.value[index] ?? operation.text } : operation) };
   const onAction: typeof props.onAction = async body => {
     const clear = edits.captureSubmission();
     const saved = await props.onAction(body);
@@ -408,7 +415,7 @@ function SavedClarificationPanel({ projectId, remember, ...props }: ComponentPro
     return saved;
   };
   return <>
-    {remember && <DraftRecovery label="interpretation" draft={edits} describe={value => value ? value.operations.filter(operation => operation.type === "update_summary").map(operation => operation.text).join("\n\n") : ""}/>}
-    <ClarificationPanel {...props} draft={remember ? edits.value : props.draft} onDraft={result => { if (remember) edits.set(result); else props.onDraft?.(result); }} onAction={onAction}/>
+    {remember && <DraftRecovery label="interpretation" draft={edits} describe={value => value.join("\n\n")}/>}
+    <ClarificationPanel {...props} draft={remember ? restored : props.draft} onDraft={result => { if (remember) edits.set(result.operations.map(operation => operation.type === "update_summary" ? operation.text : "")); else props.onDraft?.(result); }} onAction={onAction}/>
   </>;
 }
