@@ -293,6 +293,71 @@ describe("HomePage review interactions", () => {
     expect(reader).toHaveBeenCalledTimes(2);
   });
 
+  it("reports empty, oversized, duplicate and service-rejected items without losing the old deck", async () => {
+    const reviewed = readFixtureState();
+    acceptFixture(reviewed.project.revision);
+    const proposed = generateFixturePositioning();
+    applyFixturePositioning("original", proposed.project.revision);
+    generateFixtureDeck(readFixtureState().project.revision);
+    const before = readFixtureState();
+    const normalFetch = vi.mocked(fetch).getMockImplementation()!;
+    let rejectService = true;
+    const importedNames: string[] = [];
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      if (!init?.method) return normalFetch(input, init);
+      const body = workspaceCommandSchema.parse(JSON.parse(String(init.body)));
+      if (body.action !== "add_material") return normalFetch(input, init);
+      importedNames.push(body.name);
+      if (body.name === "service.md" && rejectService) return jsonResponse({ code: "PERSISTENCE_ERROR", error: "Storage temporarily unavailable.", requestId: "synthetic-import" }, 503);
+      try { return await normalFetch(input, init); }
+      catch (error) {
+        if (error instanceof PitchroomError) return jsonResponse({ code: error.code, error: error.message }, 400);
+        throw error;
+      }
+    });
+    const user = userEvent.setup(); render(<HomePage />);
+    await user.click(await screen.findByRole("button", { name: /Add files/ }));
+    await user.upload(screen.getByLabelText("Choose a UTF-8 text or Markdown file"), [
+      new File([""], "empty.txt", { type: "text/plain" }),
+      new File(["x".repeat(1_048_577)], "oversized.txt", { type: "text/plain" }),
+      new File([before.sources[0]!.content], "duplicate.md", { type: "text/markdown" }),
+      new File(["New service material."], "service.md", { type: "text/markdown" }),
+      new File(["Valid trailing material."], "trailing.txt", { type: "text/plain" }),
+    ]);
+    const results = screen.getByRole("region", { name: "File import results" });
+    await waitFor(() => expect(results.textContent).toContain("trailing.txt — Saved"));
+    expect(results.textContent).toContain("Material must contain readable text.");
+    expect(results.textContent).toContain("Material exceeds the source size limit.");
+    expect(results.textContent).toContain("duplicate.md — Saved");
+    expect(results.textContent).toContain("Storage temporarily unavailable.");
+    expect(readFixtureState().sources.map(source => source.name)).toEqual(["brief.md", "trailing.txt"]);
+    expect(readFixtureState().deckVersions).toEqual(before.deckVersions);
+    expect(readFixtureState().deck).toEqual({ ...before.deck, stale: true });
+    expect(readFixtureState().project.phase).toBe("materials_ready");
+    rejectService = false;
+    await user.click(screen.getByRole("button", { name: "Retry service.md" }));
+    await waitFor(() => expect(results.textContent).toContain("service.md — Saved"));
+    expect(importedNames).toEqual(["duplicate.md", "service.md", "trailing.txt", "service.md"]);
+  });
+
+  it("keeps saved items when cancelling and reselecting a corrected failed file", async () => {
+    const user = userEvent.setup(); render(<HomePage />);
+    await user.click(await screen.findByRole("button", { name: /Add files/ }));
+    await user.upload(screen.getByLabelText("Choose a UTF-8 text or Markdown file"), [
+      new File(["Saved batch source."], "saved.txt", { type: "text/plain" }),
+      new File([new Uint8Array([0xff])], "corrected.md", { type: "text/markdown" }),
+    ]);
+    await screen.findByRole("button", { name: "Retry corrected.md" });
+    await user.click(screen.getByRole("button", { name: "Review current step" }));
+    const beforeCancel = readFixtureState().sources;
+    await user.click(screen.getByRole("button", { name: /Add files/ }));
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(readFixtureState().sources).toEqual(beforeCancel);
+    await user.click(screen.getByRole("button", { name: /Add files/ }));
+    await user.upload(screen.getByLabelText("Choose a UTF-8 text or Markdown file"), new File(["Corrected UTF-8 material."], "corrected.md", { type: "text/markdown" }));
+    await waitFor(() => expect(readFixtureState().sources.map(source => source.name)).toEqual(["brief.md", "saved.txt", "corrected.md"]));
+  });
+
   it("uploads the first file from the designed dropzone and refreshes the inventory", async () => {
     resetFixtureState();
     const user = userEvent.setup();

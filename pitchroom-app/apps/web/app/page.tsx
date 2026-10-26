@@ -118,6 +118,11 @@ export default function HomePage() {
     }
     try {
       const fileText = new TextDecoder("utf-8", { fatal: true }).decode(await file.arrayBuffer());
+      if (!fileText.trim() || fileText.length > 1_048_576) {
+        lastFailure.current = createWorkspaceActionError({ code: "INVALID_INPUT", technicalMessage: !fileText.trim() ? "Material must contain readable text." : "Material exceeds the source size limit." });
+        setActionError(lastFailure.current);
+        return false;
+      }
       setActionError(undefined);
       return await act({ action: "add_material", name: file.name, mediaType: file.name.toLowerCase().endsWith(".md") ? "text/markdown" : "text/plain", text: fileText }, { commandId, explicitRetry: true, retainWrittenBrief: true });
     } catch {
