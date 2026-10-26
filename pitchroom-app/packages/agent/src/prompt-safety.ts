@@ -42,6 +42,7 @@ function generatedText(proposal: UnderstandingProposalV1, publicSummary: string)
       ]),
     ]),
     ...proposal.gaps.flatMap((gap) => [gap.description, gap.whyItMatters]),
+    ...(proposal.topicTasks ?? []).flatMap(task => [task.id, task.question.question, task.question.whyItMatters]),
     proposal.nextQuestion.question,
     proposal.nextQuestion.whyItMatters,
   ].join("\n").toLocaleLowerCase("en-US");
