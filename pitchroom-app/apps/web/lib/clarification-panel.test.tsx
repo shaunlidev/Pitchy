@@ -45,7 +45,7 @@ it("keeps the accepted Understanding revision form visible with the shipped styl
  const field = screen.getByRole("textbox", { name: "Answer the agent’s question" });
  expect(getComputedStyle(field).display).not.toBe("none");
  await userEvent.setup().click(screen.getByRole("button", { name: "Propose revision to accepted understanding" }));
- expect(onAction).toHaveBeenCalledWith({action:"submit_clarification",text:answer,expectedRevision:state.project.revision});
+ expect(onAction).toHaveBeenCalledWith({action:"submit_clarification",text:answer,expectedRevision:state.project.revision,selection:{understandingId:state.currentVersionId,taskId:"legacy-next-question",themeIndex:0}});
  expect(readFixtureState().currentVersionId).toBe(state.currentVersionId);
  expect(readFixtureState().project.phase).toBe("accepted");
 });
@@ -98,4 +98,35 @@ it("v4 renders source modality independently and resolves shared basis reference
  const edited=onAction.mock.calls[0]![0]!.result as typeof result;const candidate=buildClarificationCandidate(task,edited);expect(candidate.themes[0]!.summaryInterpretation!.groundingV4!.reviewStatus).toBe("user_edited_unreviewed");expect(edited.bases).toEqual(result.bases);
  view.rerender(<ClarificationPanel understanding={{versionId:"v1",phase:"review_required"}} task={{...task,status:"failed",result:undefined,attempts:[{...task.attempts[0]!,status:"failed",error:"INVALID_JSON",failure:{stage:"syntax",code:"INVALID_JSON"}}]}} revision={1} busy={false} onAction={onAction}/>);
  expect(screen.getByText(/Analysis stopped at syntax: INVALID_JSON/)).toBeTruthy();expect(onAction).toHaveBeenCalledTimes(1);
+});
+
+it("requires an explicit current question before reassessing a saved stale answer", async () => {
+ const { newClarification, understandingProposalV1Schema } = await import("@pitchroom/domain");
+ const { ClarificationPanel } = await import("./clarification-panel");
+ const proposal = understandingProposalV1Schema.parse({ schemaVersion:1,
+  themes:["Audience","Measurement"].map(title=>({title,summary:`${title} is unknown.`,claims:[{statement:`${title} is unknown.`,evidenceState:"unknown",evidence:[]}]})),
+  gaps:[],nextQuestion:{question:"Who is the audience?",whyItMatters:"The audience is unknown.",relatedThemeIndexes:[0]},
+  topicTasks:[{id:"measurement",themeIndex:1,question:{question:"What is the measurement baseline?",whyItMatters:"The baseline is unknown.",relatedThemeIndexes:[1]}}],
+ });
+ const task = newClarification({id:"saved-stale",inputId:"saved-input",projectId:"synthetic",commandId:"saved-command",actorId:"user",versionId:"v1",revision:1,base:proposal,sources:[],answer:"原话：The baseline is still unknown.",selection:{understandingId:"v1",taskId:"measurement",themeIndex:1}});
+ task.status="stale";
+ const current=structuredClone(proposal); current.topicTasks![0]!.id="measurement-current";
+ const onAction=vi.fn(()=>true);
+ const props={task,busy:false,onAction,revision:2,understanding:{versionId:"v2",phase:"review_required" as const,proposal:current}};
+ const view=render(<ClarificationPanel {...props}/>);
+ const submit=screen.getByRole("button",{name:"Reassess against current understanding"});
+ expect(submit.hasAttribute("disabled")).toBe(true);
+ const user=userEvent.setup(); await user.click(submit); expect(onAction).not.toHaveBeenCalled();
+ await user.selectOptions(screen.getByLabelText("Current question for this saved answer"),"1:measurement-current");
+ expect(submit.hasAttribute("disabled")).toBe(false);
+ await user.click(submit);
+ expect(onAction).toHaveBeenCalledWith({action:"submit_clarification",text:task.answer,expectedRevision:2,rebaseTaskId:task.id,selection:{understandingId:"v2",taskId:"measurement-current",themeIndex:1}});
+ expect(task.inputId).toBe("saved-input"); expect(task.answer).toBe("原话：The baseline is still unknown.");
+ // A refresh to a different current version invalidates the earlier explicit choice.
+ view.rerender(<ClarificationPanel {...props} revision={3} understanding={{...props.understanding,versionId:"v3"}}/>);
+ expect(screen.getByRole("button",{name:"Reassess against current understanding"}).hasAttribute("disabled")).toBe(true);
+ onAction.mockClear();
+ view.rerender(<ClarificationPanel {...props} understanding={{...props.understanding,proposal:{...current,topicTasks:[]}}}/>);
+ expect(screen.getByRole("button",{name:"Reassess against current understanding"}).hasAttribute("disabled")).toBe(true);
+ await user.click(screen.getByRole("button",{name:"Reassess against current understanding"})); expect(onAction).not.toHaveBeenCalled();
 });

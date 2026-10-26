@@ -2,8 +2,14 @@ import { z } from "zod";
 import { basisTableV4Schema, applicabilityV4Schema, questionGroundingV4Schema, clarificationFailureSchema, ClarificationValidationError, type ClarificationBasisV4, type ClarificationFailureDiagnostic } from "./clarification-v4";
 import { clarificationBasesSchema, applicabilitySchema, questionGroundingSchema, type ClarificationBasis } from "./clarification-grounding";
 import { PitchroomError } from "./errors";
-import { understandingProposalV1Schema, validateProposalEvidence, type UnderstandingProposalV1 } from "./understanding";
+import { topicTasksFor, understandingProposalV1Schema, validateProposalEvidence, type UnderstandingProposalV1 } from "./understanding";
 import type { SourceRecord } from "./source-repository";
+
+export const topicTaskSelectionSchema = z.object({ understandingId: z.string().min(1), taskId: z.string().min(1), themeIndex: z.number().int().nonnegative() }).strict();
+export type TopicTaskSelection = z.infer<typeof topicTaskSelectionSchema>;
+export function sameTopicTaskSelection(left: TopicTaskSelection | undefined, right: TopicTaskSelection | undefined): boolean {
+  return left?.understandingId === right?.understandingId && left?.taskId === right?.taskId && left?.themeIndex === right?.themeIndex;
+}
 
 const summaryOperation = z.object({ type: z.literal("update_summary"), themeId: z.string(), text: z.string().min(1).max(4000) }).strict();
 const answerOperation = z.object({ type: z.literal("add_answer"), themeId: z.string() }).strict();
@@ -48,6 +54,7 @@ export type ClarificationResult = z.infer<typeof clarificationResultSchema>;
 export type ClarificationTask = {
   id: string; createdAt: string; runMode: "synthetic" | "live"; projectId: string; inputId: string; commandId: string; actorId: string;
   baseUnderstandingId: string; baseRevision: number; basePhase?: "accepted" | "review_required"; sourceFingerprint: string;
+  selection?: TopicTaskSelection;
   reassessment?: ReassessmentContext;
   answer: string; question: UnderstandingProposalV1["nextQuestion"];
   base: UnderstandingProposalV1; sources: SourceRecord[];
@@ -65,6 +72,12 @@ export function withUnderstandingIds(base: UnderstandingProposalV1, versionId: s
 }
 export function buildClarificationCandidate(task: ClarificationTask, raw: unknown): UnderstandingProposalV1 {
   const result = clarificationResultSchema.parse(raw);
+  if (task.selection) {
+    const selected = topicTasksFor(task.base, "theme", task.selection.themeIndex).find(t => t.id === task.selection?.taskId);
+    if (!selected || task.selection.understandingId !== task.baseUnderstandingId || JSON.stringify(selected.question) !== JSON.stringify(task.question)) throw new PitchroomError("CONFLICT", "The saved topic task no longer matches its question.");
+    const owner = task.base.themes[task.selection.themeIndex]?.id;
+    if (result.operations.some(op => (op.type === "add_answer" || op.type === "update_summary" || op.type === "supersede_user_assertion") && op.themeId !== owner)) throw new PitchroomError("PROPOSAL_REJECTED", "An answer cannot be attributed to a different topic.");
+  }
   if ((result.schemaVersion ?? 1) < (task.result?.schemaVersion ?? 1)) throw new PitchroomError("PROPOSAL_REJECTED", "A proposal cannot be downgraded when applying edits.");
   if (task.result?.schemaVersion === 3 || task.result?.schemaVersion === 4) {
     // The editor permits summary wording only; evidence cannot be relabelled during Apply.
@@ -82,8 +95,16 @@ export function buildClarificationCandidate(task: ClarificationTask, raw: unknow
     touched.add(key);
     if (op.type === "next_question") {
       const ids = "relatedThemeIds" in op ? op.relatedThemeIds : undefined;
+      if (next.topicTasks !== undefined && (!ids || ids.length !== 1)) throw new PitchroomError("PROPOSAL_REJECTED", "A topic followup requires exactly one theme.");
       if (ids && (new Set(ids).size !== ids.length || ids.some(id => !next.themes.some(t => t.id === id)))) throw new PitchroomError("PROPOSAL_REJECTED", "Invalid next-question theme association.");
       next.nextQuestion = { ...("groundingV4" in op && result.schemaVersion === 4 ? { groundingV4: { ...structuredClone(op.groundingV4), bases: selectedBases(result.bases, op.groundingV4.basisRefs) } } : {}), ...("grounding" in op ? { grounding: structuredClone(op.grounding) } : {}), question: op.question, whyItMatters: op.whyItMatters, relatedThemeIndexes: ids ? ids.map(id => next.themes.findIndex(t => t.id === id)) : next.nextQuestion.relatedThemeIndexes };
+      if (next.topicTasks !== undefined) {
+        next.topicTasks = next.topicTasks.filter(t => t.id !== task.selection?.taskId);
+        for (const themeIndex of next.nextQuestion.relatedThemeIndexes) {
+          if (next.topicTasks.length >= 5) break;
+          next.topicTasks.push({ id: `${task.id}:followup:${themeIndex}`, themeIndex, question: { ...structuredClone(next.nextQuestion), relatedThemeIndexes: [themeIndex] } });
+        }
+      }
       continue;
     }
     const theme = next.themes.find(theme => theme.id === op.themeId);
@@ -105,6 +126,7 @@ export function buildClarificationCandidate(task: ClarificationTask, raw: unknow
     }
     else theme.claims.push({ id: `${task.id}:answer:${theme.id}`, statement: task.answer, evidenceState: "user_asserted", evidence: [], userInputIds: [task.inputId] });
   }
+  if (next.topicTasks !== undefined && !result.operations.some(op => op.type === "next_question")) next.topicTasks = next.topicTasks.filter(t => t.id !== task.selection?.taskId);
   const validated = understandingProposalV1Schema.parse(next);
   validateProposalEvidence(validated, task.sources.flatMap(s => s.chunks));
   return validated;
@@ -205,13 +227,18 @@ function validateClarificationGrounding(task: ClarificationTask, result: z.infer
 export function assertClarificationFresh(task: ClarificationTask, current: { phase: string; revision: number; understandingId?: string; sources: SourceRecord[] }) {
   if (current.phase !== (task.basePhase ?? "review_required") || current.revision !== task.baseRevision || current.understandingId !== task.baseUnderstandingId || sourceFingerprint(current.sources) !== task.sourceFingerprint) throw new PitchroomError("CONFLICT", "Clarification inputs changed. Rebase before applying.");
 }
-export function newClarification(input: { id: string; inputId: string; projectId: string; commandId: string; actorId: string; versionId: string; revision: number; basePhase?: "accepted" | "review_required"; base: UnderstandingProposalV1; sources: SourceRecord[]; answer: string; runMode?: "synthetic" | "live"; reassessment?: ReassessmentContext }): ClarificationTask {
-  return { id: input.id, createdAt: new Date().toISOString(), runMode: input.runMode ?? "synthetic", projectId: input.projectId, inputId: input.inputId, commandId: input.commandId, actorId: input.actorId, baseUnderstandingId: input.versionId, baseRevision: input.revision, basePhase: input.basePhase ?? "review_required", sourceFingerprint: sourceFingerprint(input.sources), answer: input.answer, question: structuredClone(input.base.nextQuestion), ...(input.reassessment ? { reassessment: structuredClone(input.reassessment) } : {}), base: withUnderstandingIds(input.base, input.versionId), sources: structuredClone(input.sources), status: "queued", attempts: [{ id: `${input.id}:attempt:1`, commandId: input.commandId, status: "queued", model: "pending", promptVersion: "clarify-feedback-v4" }] };
+export function newClarification(input: { id: string; inputId: string; projectId: string; commandId: string; actorId: string; versionId: string; revision: number; basePhase?: "accepted" | "review_required"; base: UnderstandingProposalV1; sources: SourceRecord[]; answer: string; selection?: TopicTaskSelection; runMode?: "synthetic" | "live"; reassessment?: ReassessmentContext }): ClarificationTask {
+  const selection = input.selection;
+  const selected = selection ? topicTasksFor(input.base, "theme", selection.themeIndex).find(t => t.id === selection.taskId) : undefined;
+  if (selection && (selection.understandingId !== input.versionId || !selected)) throw new PitchroomError("CONFLICT", "Choose a current question belonging to this topic.");
+  if (!selection && input.base.topicTasks !== undefined) throw new PitchroomError("CONFLICT", "Select a topic task before answering.");
+  return { id: input.id, createdAt: new Date().toISOString(), runMode: input.runMode ?? "synthetic", projectId: input.projectId, inputId: input.inputId, commandId: input.commandId, actorId: input.actorId, baseUnderstandingId: input.versionId, baseRevision: input.revision, basePhase: input.basePhase ?? "review_required", sourceFingerprint: sourceFingerprint(input.sources), answer: input.answer, question: structuredClone(selected?.question ?? input.base.nextQuestion), ...(selection ? { selection: structuredClone(selection) } : {}), ...(input.reassessment ? { reassessment: structuredClone(input.reassessment) } : {}), base: withUnderstandingIds(input.base, input.versionId), sources: structuredClone(input.sources), status: "queued", attempts: [{ id: `${input.id}:attempt:1`, commandId: input.commandId, status: "queued", model: "pending", promptVersion: "clarify-feedback-v4" }] };
 }
 
 export const clarificationTaskSchema = z.object({
   id: z.string(), createdAt: z.string(), runMode: z.enum(["synthetic","live"]), projectId: z.string(), inputId: z.string(), commandId: z.string(), actorId: z.string(),
   baseUnderstandingId: z.string(), baseRevision: z.number().int(), basePhase: z.enum(["accepted", "review_required"]).optional(), sourceFingerprint: z.string(),
+  selection: topicTaskSelectionSchema.optional(),
   reassessment: reassessmentSchema.optional(),
   answer: z.string(), question: understandingProposalV1Schema.shape.nextQuestion,
   base: understandingProposalV1Schema,

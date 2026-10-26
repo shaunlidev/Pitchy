@@ -1,18 +1,18 @@
 import { and, eq, sql } from "drizzle-orm";
-import { buildReassessmentContext, startClarificationAttempt, ownsClarificationAttempt, PitchroomError, assertClarificationFresh, buildClarificationCandidate, clarificationPending, newClarification, sourceFingerprint, type ClarificationTask, type ClarificationResult, type ClarificationFailureDiagnostic } from "@pitchroom/domain";
+import { sameTopicTaskSelection, buildReassessmentContext, startClarificationAttempt, ownsClarificationAttempt, PitchroomError, assertClarificationFresh, buildClarificationCandidate, clarificationPending, newClarification, sourceFingerprint, type ClarificationTask, type ClarificationResult, type ClarificationFailureDiagnostic } from "@pitchroom/domain";
 import { PitchroomRepository, type Database } from "./repository";
 import * as schema from "./schema";
 
 export class ClarificationRepository {
   constructor(readonly db: Database) {}
   async list(projectId: string) { return (await this.db.select().from(schema.clarificationTasks).where(eq(schema.clarificationTasks.projectId, projectId))).map(row => row.payload).sort((a,b)=>a.createdAt.localeCompare(b.createdAt)); }
-  async submit(input: { projectId: string; text: string; expectedRevision: number; commandId: string; actorId: string; runMode?: "synthetic" | "live"; rebaseTaskId?: string }) {
+  async submit(input: { projectId: string; text: string; expectedRevision: number; commandId: string; actorId: string; runMode?: "synthetic" | "live"; rebaseTaskId?: string; selection?: import("@pitchroom/domain").TopicTaskSelection }) {
     return this.db.transaction(async tx => {
       await tx.execute(sql`select id from projects where id = ${input.projectId} for update`);
       const repository = new PitchroomRepository(tx as unknown as Database);
       const existing = (await tx.select().from(schema.clarificationTasks).where(and(eq(schema.clarificationTasks.projectId,input.projectId),eq(schema.clarificationTasks.commandId,input.commandId))))[0]?.payload;
       if (existing) {
-        if (existing.answer !== input.text || existing.baseRevision !== input.expectedRevision || existing.actorId !== input.actorId || existing.reassessment?.rebasedFromTaskId !== input.rebaseTaskId) throw new PitchroomError("CONFLICT", "Command ID was used for a different clarification.");
+        if (!sameTopicTaskSelection(existing.selection, input.selection) || existing.answer !== input.text || existing.baseRevision !== input.expectedRevision || existing.actorId !== input.actorId || existing.reassessment?.rebasedFromTaskId !== input.rebaseTaskId) throw new PitchroomError("CONFLICT", "Command ID was used for a different clarification.");
         return existing;
       }
       const project = await repository.getProject(input.projectId);
@@ -25,7 +25,7 @@ export class ClarificationRepository {
       const id = crypto.randomUUID(); const inputId = sourceTask?.inputId ?? crypto.randomUUID();
       if (!sourceTask) await tx.insert(schema.userInputs).values({ id: inputId, projectId: input.projectId, kind: "clarification_answer", text: input.text, actorId: input.actorId, targetVersion: input.expectedRevision, idempotencyKey: input.commandId });
       const sources = await repository.listSources(input.projectId);
-      const task = newClarification({ id, inputId, projectId: input.projectId, commandId: input.commandId, actorId: input.actorId, versionId: version.id, revision: input.expectedRevision, basePhase: project.phase, base: version.proposal, sources, reassessment: sourceTask ? buildReassessmentContext(sourceTask, sources) : undefined, answer: input.text, runMode: input.runMode });
+      const task = newClarification({ id, inputId, projectId: input.projectId, commandId: input.commandId, actorId: input.actorId, versionId: version.id, revision: input.expectedRevision, basePhase: project.phase, base: version.proposal, sources, reassessment: sourceTask ? buildReassessmentContext(sourceTask, sources) : undefined, selection: input.selection, answer: input.text, runMode: input.runMode });
       await tx.insert(schema.clarificationTasks).values({ id, projectId: input.projectId, commandId: input.commandId, payload: task });
       return task;
     });

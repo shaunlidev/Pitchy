@@ -27,6 +27,7 @@ describe("persistent workspace development cache", () => {
   it("rebinds a database whose hot-reload query map is missing a required table", () => {
     const queryEntry = { findFirst() {} };
     const currentDatabase = { db: { query: {
+      topicMaterials: queryEntry,
       briefVersions: queryEntry,
       clarificationTasks: queryEntry,
       projects: queryEntry,
@@ -45,6 +46,7 @@ describe("persistent workspace development cache", () => {
 
     expect(databaseNeedsRefresh(currentDatabase)).toBe(false);
     expect(databaseNeedsRefresh({ db: { query: { ...currentDatabase.db.query, positioningVersions: undefined } } })).toBe(true);
+    expect(databaseNeedsRefresh({ db: { query: { ...currentDatabase.db.query, topicMaterials: undefined } } })).toBe(true);
     expect(databaseNeedsRefresh(undefined)).toBe(true);
   });
 });

@@ -62,6 +62,11 @@ export const deepSeekOutputJsonSchema = closedObject({
         relatedSourceIds: { type: "array", items: { type: "string" } },
       }),
     },
+    topicTasks: { type: "array", maxItems: 5, items: closedObject({
+      id: { type: "string" }, themeIndex: { type: "integer", minimum: 0 },
+      relatedGapIndexes: { type: "array", items: { type: "integer", minimum: 0 } },
+      question: closedObject({ question: { type: "string" }, whyItMatters: { type: "string" }, relatedThemeIndexes: { type: "array", items: { type: "integer", minimum: 0 }, minItems: 1, maxItems: 1 } }),
+    }) },
     nextQuestion: closedObject({
       question: { type: "string" },
       whyItMatters: { type: "string" },
@@ -105,10 +110,10 @@ const instructions = [
   "Every supported claim must cite an exact quote from a chunk.",
   "Never guess missing facts. Mark them unknown.",
   "Never create user_asserted claims and never approve the result.",
-  "Ask exactly one useful next question.",
+  "Return topicTasks: a grounded collection targeting 3–5 useful strategic questions, without filling a quota. Each task has a unique id, exactly one themeIndex, its question with relatedThemeIndexes=[themeIndex], and relatedGapIndexes listing only directly addressed gaps. Every task must address an actual contradiction, gap or unresolved choice in the supplied material; explain why it matters without inventing facts or approval conditions. Use [] when no useful question is grounded. nextQuestion is the legacy first useful question (or an explicit statement that unknowns can remain open); never copy it into unrelated topics. The interface presents one selected task at a time.",
   "Keep publicSummary concise and at most 1000 characters. Detailed claims, gaps and qualifications belong in the proposal. Keep exact quotes unchanged.",
   "Your final answer must be one JSON object with exactly two top-level properties: proposal and publicSummary.",
-  "proposal must contain schemaVersion, themes, gaps, and nextQuestion. Every claim must contain statement, evidenceState, evidence, and userInputIds.",
+  "proposal must contain schemaVersion, themes, gaps, topicTasks, and nextQuestion. Every claim must contain statement, evidenceState, evidence, and userInputIds.",
 ].join("\n");
 
 export function parseDeepSeekJson(text: string): unknown {
