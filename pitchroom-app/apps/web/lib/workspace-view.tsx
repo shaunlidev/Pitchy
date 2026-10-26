@@ -89,7 +89,8 @@ export function WorkspaceView(props: WorkspaceViewProps) {
   const savedBriefText = briefText(savedBrief);
   const brief = useLocalDraft({ ...draftBase, kind: "brief", context: savedBrief.head?.id ?? "none", schema: textDraftSchema, initial: savedBriefText, hasContent: value => value !== savedBriefText });
   const selectedPosition = position.overviewSelection.split(":");
-  const [topicTaskId, setTopicTaskId] = useState<string>();
+  const topicTaskId = position.topicTaskId;
+  const setTopicTaskId = (topicTaskId: string) => updatePosition({ topicTaskId });
   const availableTasks = current ? topicTasksFor(current.proposal, selectedPosition[0] === "gap" ? "gap" : "theme", Number(selectedPosition[1])) : [];
   const selectedTopicTask = availableTasks.find(task => task.id === topicTaskId) ?? availableTasks[0];
   const answerContext = selectedTopicTask && current?.proposal.topicTasks !== undefined ? JSON.stringify([understandingContext, selectedTopicTask.id, selectedTopicTask.themeIndex]) : understandingContext;
@@ -139,7 +140,7 @@ export function WorkspaceView(props: WorkspaceViewProps) {
     }
     return result;
   };
-  const viewProps = { ...props, topicTaskId, onTopicTaskId: setTopicTaskId, onTopicReturn: (topic: TopicRef) => updatePosition({ destination: "clarify", topicReturn: topic, overviewSelection: `${topic.kind}:${topic.index}` }), text: effectiveText, answer: effectiveAnswer, correction: effectiveCorrection, onTextChange: changeText, onAnswerChange: changeAnswer, onCorrectionChange: changeCorrection, workspacePosition: position, onWorkspacePosition: updatePosition, storyDraft: draftEnabled ? storyInput.value : storyDraft, onStoryDraft: changeStory, busy: ux.mutationLocked, primary: ux.primary, clarificationDrafts, onClarificationDraft: (id: string, result: import("@pitchroom/domain").ClarificationResult) => setClarificationDrafts(drafts=>({...drafts,[id]:result})), onClarificationAction: guardedAction, clarificationBusy: props.busy || Boolean(props.error) || Boolean(ux.running), runningAction: ux.running ? activity?.kind : undefined, onAction: guardedAction, onChooseFile: props.busy || ux.running ? () => false : props.onChooseFile, positioningDraft, onPositioningDraft: setPositioningDraft, deckEditor: draftEnabled ? deckInput.value : deckEditor, onDeckEditor: changeDeck, correctionTarget: effectiveTarget, onCorrectionTarget: changeTarget };
+  const viewProps = { ...props, topicTaskId, onTopicTaskId: setTopicTaskId, onTopicReturn: (topic: TopicRef) => updatePosition({ destination: "clarify", topicReturn: topic, topicTaskId: undefined, overviewSelection: `${topic.kind}:${topic.index}` }), text: effectiveText, answer: effectiveAnswer, correction: effectiveCorrection, onTextChange: changeText, onAnswerChange: changeAnswer, onCorrectionChange: changeCorrection, workspacePosition: position, onWorkspacePosition: updatePosition, storyDraft: draftEnabled ? storyInput.value : storyDraft, onStoryDraft: changeStory, busy: ux.mutationLocked, primary: ux.primary, clarificationDrafts, onClarificationDraft: (id: string, result: import("@pitchroom/domain").ClarificationResult) => setClarificationDrafts(drafts=>({...drafts,[id]:result})), onClarificationAction: guardedAction, clarificationBusy: props.busy || Boolean(props.error) || Boolean(ux.running), runningAction: ux.running ? activity?.kind : undefined, onAction: guardedAction, onChooseFile: props.busy || ux.running ? () => false : props.onChooseFile, positioningDraft, onPositioningDraft: setPositioningDraft, deckEditor: draftEnabled ? deckInput.value : deckEditor, onDeckEditor: changeDeck, correctionTarget: effectiveTarget, onCorrectionTarget: changeTarget };
   const agentBusy = activity?.status === "queued" || activity?.status === "running";
   useEffect(() => { if (!initialVersion.current && state.currentVersionId) setDestination("clarify"); initialVersion.current = state.currentVersionId; }, [state.currentVersionId]);
 
@@ -232,7 +233,7 @@ function ClarifyView({ topicTaskId, onTopicTaskId, onChooseFiles, fileImports, o
 
   return <section className="clarifyPage">
     <header className="workspaceHeading"><h1>Find the story in the material.</h1><span className="small muted">Keep unknowns open.</span></header>
-    {current.id !== state.currentVersionId && <div role="status">Original topic from Understanding v{current.number} · read only. <button onClick={() => onWorkspacePosition?.({ topicReturn: undefined })}>Return to current Understanding</button></div>}
+    {current.id !== state.currentVersionId && <div role="status">Original topic from Understanding v{current.number} · read only. <button onClick={() => onWorkspacePosition?.({ topicReturn: undefined, topicTaskId: undefined })}>Return to current Understanding</button></div>}
     <div className="preparationGrid">
       <aside className="projectMap">
         <details><summary>Project overview</summary>

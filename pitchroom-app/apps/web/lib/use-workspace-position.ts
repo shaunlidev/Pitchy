@@ -19,6 +19,7 @@ export function useWorkspacePosition(state: FixtureState, enabled = false, initi
         if (previous.deckId && previous.deckId !== restored.deckId) reasons.push(restored.deckId ? "The saved Deck is unavailable; selected the current Deck." : "The saved Deck is unavailable; no Deck is selected.");
         if (previous.pageId && previous.pageId !== restored.pageId) reasons.push(restored.pageId ? "The saved page is unavailable; selected the first page." : "The saved page is unavailable; no page is selected.");
         if (previous.understandingId !== restored.understandingId || previous.overviewSelection !== restored.overviewSelection) reasons.push("The saved topic is unavailable in the current understanding; selected the current default topic.");
+        if (previous.topicTaskId && previous.topicTaskId !== restored.topicTaskId) reasons.push("The saved question is unavailable in this topic; opened the current topic.");
       }
       setStorageNotice(reasons.length ? reasons.join(" ") : undefined);
       setSaved(restored);

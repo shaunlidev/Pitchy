@@ -44,6 +44,31 @@ it("keeps the inspected Clarify topic on return and after reload", async () => {
   await waitFor(() => expect(screen.getByText("Open question 1", { selector: ".overviewFocus .eyebrow" })).toBeTruthy());
 });
 
+it("resumes a second question within one topic with its own draft and no business action", async () => {
+  const state = readFixtureState();
+  const current = state.versions.find(version => version.id === state.currentVersionId)!;
+  current.proposal.topicTasks = ["baseline", "timing"].map(id => ({ id, themeIndex: 0, question: { question: `Which ${id}?`, whyItMatters: `The ${id} remains unknown.`, relatedThemeIndexes: [0] } }));
+  const before = structuredClone(state);
+  const onAction = vi.fn(() => true);
+  const mount = () => render(<WorkspaceView rememberPosition state={state} busy={false} text="" answer="" correction="" onTextChange={() => {}} onAnswerChange={() => {}} onCorrectionChange={() => {}} onChooseFile={() => true} onCancelRun={() => {}} onAction={onAction} />);
+  const user = userEvent.setup(); const first = mount();
+  await user.click(screen.getByRole("button", { name: "Clarify" }));
+  await user.type(screen.getByRole("textbox", { name: "Answer the agent’s question" }), "Baseline draft");
+  await user.click(screen.getByText("Other questions for this topic"));
+  await user.click(screen.getByRole("button", { name: "Which timing?" }));
+  await user.type(screen.getByRole("textbox", { name: "Answer the agent’s question" }), "Timing draft");
+  first.unmount(); mount();
+  await screen.findByRole("heading", { name: "Which timing?" });
+  expect(screen.getByRole("textbox", { name: "Answer the agent’s question" })).toHaveProperty("value", "Timing draft");
+  await user.click(screen.getByRole("button", { name: "Materials" }));
+  await user.click(screen.getByRole("button", { name: "Clarify" }));
+  expect(screen.getByRole("heading", { name: "Which timing?" })).toBeTruthy();
+  await user.click(screen.getByText("Other questions for this topic"));
+  await user.click(screen.getByRole("button", { name: "Which baseline?" }));
+  expect(screen.getByRole("textbox", { name: "Answer the agent’s question" })).toHaveProperty("value", "Baseline draft");
+  expect(onAction).not.toHaveBeenCalled(); expect(state).toEqual(before);
+});
+
 it("recovers from corrupt browser position without losing server work", async () => {
   localStorage.setItem(workspacePositionKey(readFixtureState().project.id), "{broken");
   const before = structuredClone(readFixtureState()); show();
@@ -71,6 +96,7 @@ it.each([
   ["page", { pageId: "removed-page" }, "The saved page is unavailable; selected the first page."],
   ["topic", { understandingId: "superseded" }, "The saved topic is unavailable in the current understanding; selected the current default topic."],
   ["topic index", { overviewSelection: "gap:999" }, "The saved topic is unavailable in the current understanding; selected the current default topic."],
+  ["question", { topicTaskId: "removed-task" }, "The saved question is unavailable in this topic; opened the current topic."],
 ])("explains unavailable saved %s without business actions or forced navigation", async (_label, patch, message) => {
   const state = readFixtureState();
   const before = structuredClone(state);
