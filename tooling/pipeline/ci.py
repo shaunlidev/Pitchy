@@ -16,7 +16,7 @@ STAGES = {
     'database-guard': ['pnpm', 'test:server:guard'],
     'build': ['pnpm', 'build'],
     'database': ['pnpm', 'test:server'],
-    'browser': ['pnpm', '--filter', '@pitchroom/web', 'exec', 'playwright', 'test', '--config', '../../scripts/playwright-ci.mjs'],
+    'browser': ['pnpm', '--filter', '@pitchroom/web', 'exec', 'playwright', 'test', '--config', 'playwright-ci.config.mjs'],
 }
 
 
