@@ -234,3 +234,19 @@ it.each(["", "x".repeat(4001)])("retains temporary invalid interpretation text a
  expect(screen.getByLabelText("Proposed interpretation 1")).toHaveProperty("value",text);
  expect(onAction).not.toHaveBeenCalled();window.localStorage.clear();
 });
+
+it("keeps cancelled interpretation edits visibly recoverable across reopening", async () => {
+ window.localStorage.clear();resetFixtureState();
+ addFixtureMaterial({name:"brief.md",mediaType:"text/markdown",text:"The pilot audience remains unknown."});
+ const initial=runFixtureAgent();const saved=submitFixtureClarification({text:"Procurement approves the pilot.",commandId:"cancel-edit",expectedRevision:initial.project.revision});
+ const taskId=saved.clarifications!.at(-1)!.id;await runFixtureClarification(taskId);
+ let state=readFixtureState();const onAction=vi.fn((body:Record<string,unknown>)=>{if(body.action==="dismiss_clarification")state=decideFixtureClarification({taskId,action:"dismiss",commandId:"cancel-edit-dismiss"});return true;});
+ const props={busy:false,text:"",answer:"",correction:"",onTextChange:vi.fn(),onAnswerChange:vi.fn(),onCorrectionChange:vi.fn(),onChooseFile:()=>true,onCancelRun:vi.fn(),onAction,rememberPosition:true};
+ const user=userEvent.setup();let view=render(<WorkspaceView {...props} state={state}/>);await user.click(screen.getByRole("button",{name:/^Clarify$/}));
+ const {fireEvent}=await import("@testing-library/react");fireEvent.change(screen.getByLabelText("Proposed interpretation 1"),{target:{value:"My cancelled unsent interpretation."}});
+ await user.click(screen.getByRole("button",{name:"Keep current understanding"}));view.rerender(<WorkspaceView {...props} state={state}/>);
+ expect(screen.getByRole("region",{name:"Unsubmitted interpretation edits",hidden:true}).textContent).toContain("My cancelled unsent interpretation.");
+ view.unmount();view=render(<WorkspaceView {...props} state={state}/>);await user.click(screen.getByText("Saved answer · Before / Now"));
+ expect(screen.getByRole("region",{name:"Unsubmitted interpretation edits"}).textContent).toContain("My cancelled unsent interpretation.");
+ expect(state.currentVersionId).toBe(initial.currentVersionId);expect(screen.queryByRole("button",{name:"Apply changes to understanding"})).toBeNull();window.localStorage.clear();
+});

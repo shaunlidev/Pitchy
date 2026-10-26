@@ -401,7 +401,7 @@ function TopicMaterials({ state, topic, busy, onChooseFiles, onAction, onMateria
 
 function SavedClarificationPanel({ projectId, remember, ...props }: ComponentProps<typeof ClarificationPanel> & { projectId: string; remember: boolean }) {
   const initial = props.task.status === "proposal_ready" ? props.task.result : undefined;
-  const initialTexts = initial?.operations.map(operation => operation.type === "update_summary" ? operation.text : "") ?? [];
+  const initialTexts = props.task.result?.operations.map(operation => operation.type === "update_summary" ? operation.text : "") ?? [];
   const edits = useLocalDraft({ projectId, enabled: remember, kind: `clarification:${props.task.id}`, context: JSON.stringify([props.task.baseUnderstandingId, props.task.result]), schema: z.array(z.string()), initial: initialTexts, hasContent: value => JSON.stringify(value) !== JSON.stringify(initialTexts) });
   const restored = !initial ? undefined :
     initial.schemaVersion === 4 ? { ...initial, operations: initial.operations.map((operation,index) => operation.type === "update_summary" ? { ...operation, text: edits.value[index] ?? operation.text } : operation) } :
@@ -411,11 +411,16 @@ function SavedClarificationPanel({ projectId, remember, ...props }: ComponentPro
   const onAction: typeof props.onAction = async body => {
     const clear = edits.captureSubmission();
     const saved = await props.onAction(body);
-    if (saved && ["apply_clarification", "dismiss_clarification"].includes(String(body.action))) clear();
+    if (saved && body.action === "apply_clarification") clear();
     return saved;
   };
   return <>
     {remember && <DraftRecovery label="interpretation" draft={edits} describe={value => value.join("\n\n")}/>}
+    {remember && props.task.status !== "proposal_ready" && JSON.stringify(edits.value) !== JSON.stringify(initialTexts) && <section aria-label="Unsubmitted interpretation edits">
+      <h3>Your unsubmitted interpretation edits</h3>
+      <p>These edits belong to saved answer {props.task.id}, based on understanding {props.task.baseUnderstandingId}. They were not applied. Copy them before explicitly reassessing or editing another proposal.</p>
+      {edits.value.map((text,index) => props.task.result?.operations[index]?.type === "update_summary" ? <div key={index}><strong>Interpretation {index + 1}</strong><pre>{text || "(Empty edit)"}</pre></div> : null)}
+    </section>}
     <ClarificationPanel {...props} draft={remember ? restored : props.draft} onDraft={result => { if (remember) edits.set(result.operations.map(operation => operation.type === "update_summary" ? operation.text : "")); else props.onDraft?.(result); }} onAction={onAction}/>
   </>;
 }
