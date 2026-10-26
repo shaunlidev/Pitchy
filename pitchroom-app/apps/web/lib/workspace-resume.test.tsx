@@ -64,3 +64,44 @@ it("does not invite an answer to another topic's question", async () => {
   expect((screen.getByRole("textbox", { name: "Answer the agent’s question" }) as HTMLTextAreaElement).value).toBe("Preserve this unsent answer");
   expect(onAction).not.toHaveBeenCalled();
 });
+
+
+it.each([
+  ["Deck", { deckId: "removed-deck", pageId: "removed-page" }, "The saved Deck is unavailable; selected the current Deck."],
+  ["page", { pageId: "removed-page" }, "The saved page is unavailable; selected the first page."],
+  ["topic", { understandingId: "superseded" }, "The saved topic is unavailable in the current understanding; selected the current default topic."],
+  ["topic index", { overviewSelection: "gap:999" }, "The saved topic is unavailable in the current understanding; selected the current default topic."],
+])("explains unavailable saved %s without business actions or forced navigation", async (_label, patch, message) => {
+  const state = readFixtureState();
+  const before = structuredClone(state);
+  const deck = state.deck!;
+  localStorage.setItem(workspacePositionKey(state.project.id), JSON.stringify({ schemaVersion: 1, destination: "deck", understandingId: state.currentVersionId, overviewSelection: "theme:0", deckId: deck.id, pageId: deck.proposal.pages[1]!.id, ...patch }));
+  const onAction = vi.fn(() => true);
+  show(onAction);
+  await screen.findByText(text => text.includes(message), { selector: '[role="status"]' });
+  expect(screen.getByRole("navigation", { name: "Deck pages" })).toBeTruthy();
+  await userEvent.setup().click(screen.getByRole("button", { name: "Materials" }));
+  expect(screen.getByRole("heading", { name: "Your project materials." })).toBeTruthy();
+  expect(JSON.parse(localStorage.getItem(workspacePositionKey(state.project.id))!).destination).toBe("materials");
+  expect(onAction).not.toHaveBeenCalled();
+  expect(readFixtureState()).toEqual(before);
+});
+
+it("explains an inaccessible saved destination and stays at the safe fallback", async () => {
+  const state = structuredClone(readFixtureState());
+  delete state.deck; state.deckVersions = []; state.sources = []; state.project.phase = "empty";
+  const before = structuredClone(state);
+  localStorage.setItem(workspacePositionKey(state.project.id), JSON.stringify({ schemaVersion: 1, destination: "deck", overviewSelection: "theme:0", deckId: "removed", pageId: "removed" }));
+  const onAction = vi.fn(() => true);
+  render(<WorkspaceView rememberPosition state={state} busy={false} text="" answer="" correction="" onTextChange={() => {}} onAnswerChange={() => {}} onCorrectionChange={() => {}} onChooseFile={() => true} onCancelRun={() => {}} onAction={onAction} />);
+  await screen.findByText(text => text.includes("The saved deck destination is unavailable; opened materials."), { selector: '[role="status"]' });
+  expect(screen.getByRole("button", { name: "Materials" }).getAttribute("aria-current")).toBe("page");
+  expect(screen.queryByRole("navigation", { name: "Deck pages" })).toBeNull();
+  expect(onAction).not.toHaveBeenCalled(); expect(state).toEqual(before);
+});
+
+it("does not warn about recovery on first open or intentional navigation", async () => {
+  show();
+  await userEvent.setup().click(screen.getByRole("button", { name: "Deck" }));
+  expect(screen.queryByText(/The saved .*unavailable/)).toBeNull();
+});

@@ -11,7 +11,17 @@ export function useWorkspacePosition(state: FixtureState, enabled = false, initi
   useEffect(() => {
     if (!enabled) return;
     try {
-      setSaved(resolveWorkspacePosition(state, readWorkspacePosition(window.localStorage, state.project.id)));
+      const previous = readWorkspacePosition(window.localStorage, state.project.id);
+      const restored = resolveWorkspacePosition(state, previous);
+      const reasons: string[] = [];
+      if (previous) {
+        if (previous.destination !== restored.destination) reasons.push(`The saved ${previous.destination} destination is unavailable; opened ${restored.destination}.`);
+        if (previous.deckId && previous.deckId !== restored.deckId) reasons.push(restored.deckId ? "The saved Deck is unavailable; selected the current Deck." : "The saved Deck is unavailable; no Deck is selected.");
+        if (previous.pageId && previous.pageId !== restored.pageId) reasons.push(restored.pageId ? "The saved page is unavailable; selected the first page." : "The saved page is unavailable; no page is selected.");
+        if (previous.understandingId !== restored.understandingId || previous.overviewSelection !== restored.overviewSelection) reasons.push("The saved topic is unavailable in the current understanding; selected the current default topic.");
+      }
+      setStorageNotice(reasons.length ? reasons.join(" ") : undefined);
+      setSaved(restored);
     } catch {
       setSaved(resolveWorkspacePosition(state));
       setStorageNotice("Your working position could not be restored in this browser. Saved project work is unchanged.");
