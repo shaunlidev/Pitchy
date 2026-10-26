@@ -18,7 +18,7 @@ import delivery
 
 class PipelineBehavior(unittest.TestCase):
     def test_live_drift_and_missing_association_are_visible(self):
-        policy = json.loads((ROOT / 'tooling/pipeline/policy.json').read_text())
+        policy = {**json.loads((ROOT / 'tooling/pipeline/policy.json').read_text()), 'mode':'serial_pr_foundation', 'migration_prs':[1,2,3], 'migration_base':'codex/pit-30-git-baseline'}
         prs = [{'number': 2, 'state': 'OPEN', 'baseRefName': 'main', 'statusCheckRollup': []}]
         findings = status.reconcile(policy, prs, [{'status': 'active'}], [], {'PIT-47': {'pull_requests': []}})
         self.assertEqual(len(findings), 5)

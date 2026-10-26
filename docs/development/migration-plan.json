@@ -1,12 +1,32 @@
 {
   "schema_version": 1,
-  "status": "prepared_not_merged",
+  "status": "integrated_main_ci_passed",
   "merge_method": "merge_commit",
   "sequence": [
-    {"pr": 1, "issue": "PIT-30", "base": "main", "purpose": "source-only baseline"},
-    {"pr": 2, "issue": "PIT-47", "base": "codex/pit-30-git-baseline", "purpose": "push guard"},
-    {"issue": "PIT-33", "branch": "codex/pit-33-pipeline-foundation", "base": "codex/pit-47-pr-push-guard", "purpose": "policy, status, CI"},
-    {"pr": 3, "issue": "PIT-22", "base": "codex/pit-30-git-baseline", "purpose": "feature branch; owner must finish latest-head review"}
+    {
+      "pr": 1,
+      "issue": "PIT-30",
+      "base": "main",
+      "purpose": "source-only baseline"
+    },
+    {
+      "pr": 2,
+      "issue": "PIT-47",
+      "base": "codex/pit-30-git-baseline",
+      "purpose": "push guard"
+    },
+    {
+      "issue": "PIT-33",
+      "branch": "codex/pit-33-pipeline-foundation",
+      "base": "codex/pit-47-pr-push-guard",
+      "purpose": "policy, status, CI"
+    },
+    {
+      "pr": 3,
+      "issue": "PIT-22",
+      "base": "codex/pit-30-git-baseline",
+      "purpose": "feature branch; owner must finish latest-head review"
+    }
   ],
   "before_each_merge": [
     "resolve live head and base; prior review of another head is stale",
@@ -24,8 +44,8 @@
   ],
   "legacy_work": "Original dirty work and old delivery commits remain local. Import only an explicitly reviewed task diff; never bulk-import legacy history.",
   "unresolved": [
-    "baseline and existing PR merge approval",
-    "first actual GitHub CI execution and dependency restoration",
-    "native Multica PR event integration (later phase)"
-  ]
+    "native Multica PR event integration is replaced by explicit CLI polling in PIT-48; no native card claim"
+  ],
+  "integrated_main": "6e255e8a6a563b6e1a614bb57943ebf1bd96dafb",
+  "main_ci_run_id": 40325975444
 }

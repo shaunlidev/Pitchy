@@ -29,3 +29,6 @@
 .pipeline-artifact/
 .multica/
 .multica-round/
+
+**/.state/
+.pipeline-handoff-*.json

@@ -17,7 +17,7 @@ def read_json(argv, cwd=ROOT):
 
 def reconcile(policy, prs, autopilots, resources, linked):
     findings = []
-    if any(x.get('status') == 'active' for x in autopilots):
+    if policy.get('mode') != 'serial_polling' and any(x.get('status') == 'active' for x in autopilots):
         findings.append('Scheduled dispatch is active; foundation policy requires paused dispatch.')
     if not any(x.get('resource_ref', {}).get('execution_mode') == 'worktree' for x in resources):
         findings.append('Multica has no worktree resource.')
@@ -28,7 +28,7 @@ def reconcile(policy, prs, autopilots, resources, linked):
         gate = [x for x in checks if x.get('name') == policy['required_ci_check']]
         if not gate or any(x.get('conclusion') != 'SUCCESS' for x in gate):
             findings.append(f"PR #{pr['number']}: required current-head CI gate not successful.")
-        if pr['number'] in policy['migration_prs'] and pr['number'] != 1 and pr['baseRefName'] != policy['migration_base']:
+        if pr['number'] in policy.get('migration_prs', []) and pr['number'] != 1 and pr['baseRefName'] != policy['migration_base']:
             findings.append(f"PR #{pr['number']}: migration base changed; revalidate integration.")
     for issue, data in linked.items():
         if not data.get('pull_requests'):
@@ -39,6 +39,9 @@ def reconcile(policy, prs, autopilots, resources, linked):
 def snapshot(live=False, legacy_root=None):
     policy = json.loads((ROOT / 'tooling/pipeline/policy.json').read_text())
     result = {'policy': policy, 'live_checked': False, 'errors': [], 'findings': []}
+    common = Path(subprocess.check_output(['git', 'rev-parse', '--path-format=absolute', '--git-common-dir'], cwd=ROOT, text=True).strip()).parent
+    activation = common / '.state/pipeline/activation.json'
+    result['runtime_activation_present'] = activation.exists()
     result['local_head'] = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
     if legacy_root:
         for name in ('config.json', 'config-v2.json'):

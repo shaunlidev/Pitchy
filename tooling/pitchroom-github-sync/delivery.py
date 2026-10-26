@@ -35,6 +35,19 @@ def allowed_path(path, reviewed=()):
         'tooling/pipeline/ci.py',
         'tooling/pipeline/check-source.py',
         'tooling/pipeline/test_pipeline.py',
+        'tooling/pipeline/controller.py',
+        'tooling/pipeline/acceptance.py',
+        'tooling/pipeline/artifacts.py',
+        'tooling/pipeline/serial.py',
+        'tooling/pipeline/github_sync.py',
+        'tooling/pipeline/runtime.json',
+        'tooling/pipeline/ROLE_GUIDE.md',
+        'tooling/pipeline/test_controller.py',
+        'tooling/pipeline/test_artifacts.py',
+        'tooling/pipeline/test_acceptance.py',
+        'tooling/pipeline/test_resolutions.py',
+        'tooling/pipeline/test_polling.py',
+
     }
     if path in infrastructure:
         return True
