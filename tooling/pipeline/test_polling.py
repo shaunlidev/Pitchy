@@ -434,6 +434,20 @@ class QAResubmission(unittest.TestCase):
         self.assertEqual(len(self.f.old_call.writes),count)
         self.assertEqual(self.c.db.execute("SELECT count(*) FROM operations WHERE state='uncertain'").fetchone()[0],1)
 
+    def test_other_live_run_on_same_issue_refuses_and_retry_cap_is_explicit(self):
+        before=copy.deepcopy(self.c.lanes()['PIT-1'])
+        for status in serial.RUNNING:
+            for actor in ('qa','dev',None):
+                self.f.old_call.runs['id-1']=[{'id':'qa-old','agent_id':'qa','status':'completed'},
+                    {'id':'other-live','agent_id':actor,'status':status}]
+                with self.assertRaises(serial.Hold):self.c.retry_qa('PIT-1',SHA,'reason')
+                self.assertFalse(self.f.old_call.writes)
+                self.assertEqual(self.c.lanes()['PIT-1'],before)
+        self.f.old_call.runs['id-1']=[{'id':'qa-old','agent_id':'qa','status':'completed'}]
+        before['qa_retries']=1;self.c.save(before)
+        with self.assertRaisesRegex(serial.Hold,'retry limit'):self.c.retry_qa('PIT-1',SHA,'reason')
+        self.assertFalse(self.f.old_call.writes)
+
     def test_expired_or_unknown_history_holds_before_write(self):
         self.c.observation['deadline_monotonic']=0
         with self.assertRaises(serial.Hold):self.c.retry_qa('PIT-1',SHA,'reason')

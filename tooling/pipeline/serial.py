@@ -308,8 +308,10 @@ class Serial(Controller):
         rows=self.issues()
         if self.active_issues(rows)-{key}:raise Hold('Another runtime owns capacity')
         runs=self.call(['issue','runs',lane['id'],'--output','json'])
-        if not isinstance(runs,list) or any(not isinstance(r,dict) or not isinstance(r.get('id'),str) for r in runs):
+        if not isinstance(runs,list) or any(not isinstance(r,dict) or (not isinstance(r.get('id'),str) or r.get('status') not in RUNNING | {'completed','failed','cancelled'}) for r in runs):
             raise Hold('Unknown QA runtime history')
+        if any(r['status'] in RUNNING for r in runs):
+            raise Hold('Target issue still has a live runtime')
         if not any(r['id']==previous.get('run_id') and r.get('agent_id')==self.c['qa'] and r['status']=='completed' for r in runs):
             raise Hold('Prior independent QA is not terminal')
         pr=self.pr_for(lane)
