@@ -251,5 +251,36 @@ class Tests(unittest.TestCase):
         self.assertIn("--no-start", done[0])
 
 
+class RegisteredProductPrerequisite(unittest.TestCase):
+    def test_pit25_consumes_only_the_accepted_integrated_pit24_delivery(self):
+        from artifacts import has_ancestor
+        source=Path(__file__).resolve().parents[2]
+        config=json.loads((source/'tooling/pipeline/runtime.json').read_text())
+        accepted=config['legacy_dependencies']['PIT-24']
+        self.assertEqual(accepted,'061895deca069bf63fd9d40c2e1451b1b97e1fbc')
+        self.assertTrue(has_ancestor(source,'8a2cd7a8837b782ac6f1dd3e8d7ea56ae1897579',accepted))
+        head=subprocess.check_output(['git','-C',str(source),'rev-parse','HEAD'],text=True).strip()
+        old_base=subprocess.check_output(['git','-C',str(source),'rev-parse',accepted+'^1'],text=True).strip()
+        config['repository']=str(source)
+        calls=[]
+        with tempfile.TemporaryDirectory(prefix='pit25-prerequisite-check-') as folder:
+            controller=Controller(config,lambda args:calls.append(args),Path(folder)/'isolated-state')
+            target={'identifier':'PIT-25','metadata':{'depends_on':'["PIT-24"]'}}
+            prior={'identifier':'PIT-24','status':'done'}
+            try:
+                controller.dependencies(target,[target,prior],base=head)
+                with self.assertRaisesRegex(Hold,'not integrated'):
+                    controller.dependencies(target,[target,prior],base=old_base)
+                with self.assertRaisesRegex(Hold,'unaccepted prerequisite'):
+                    controller.dependencies(target,[target,{**prior,'status':'in_review'}],base=head)
+                saved=config['legacy_dependencies'].pop('PIT-24')
+                with self.assertRaisesRegex(Hold,'artifact unavailable'):
+                    controller.dependencies(target,[target,prior],base=head)
+                config['legacy_dependencies']['PIT-24']=saved
+            finally:
+                controller.close()
+        self.assertEqual(calls,[])
+
+
 if __name__ == "__main__":
     unittest.main()

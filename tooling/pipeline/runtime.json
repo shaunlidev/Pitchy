@@ -18,7 +18,8 @@
     "PIT-34"
   ],
   "legacy_dependencies": {
-    "PIT-33": "6e255e8a6a563b6e1a614bb57943ebf1bd96dafb"
+    "PIT-33": "6e255e8a6a563b6e1a614bb57943ebf1bd96dafb",
+    "PIT-24": "061895deca069bf63fd9d40c2e1451b1b97e1fbc"
   },
   "decision_holds": {
     "PIT-6": "Real-model cases, threshold and budget unresolved.",
