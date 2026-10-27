@@ -39,3 +39,13 @@ it("keeps an explicitly human-edited AI opening and its attribution in Story and
  const deck=buildDeterministicDeck({understandingVersionId:"u",understanding:snapshot.understanding,positioningVersionId:"p",positioning:snapshot.positioning,appliedDirectionId:"a",chunks:[safe]});
  expect(deck.pages[0]!.title).toBe(text);
 });
+
+it("does not use another direction's recommendation when the user chooses differently",async()=>{
+ const snapshot=context();snapshot.positioning.recommendation={directionId:"b",judgment:"Only choose B.",comparison:"B has a different argument.",conditionsToReconsider:["Only a B condition."]};
+ const wire=positioningAgentContext(snapshot.positioning,snapshot.selectedChoice!);expect(wire.recommendation).toBeUndefined();
+ const story=(await new SyntheticStoryRunner().run(snapshot)).story;
+ expect(story.strategicRationale.choice).not.toContain("Only choose B");
+ expect(story.strategicRationale.conditionsToReconsider).not.toContain("Only a B condition.");
+ snapshot.positioning.recommendation.directionId="a";
+ expect(positioningAgentContext(snapshot.positioning,snapshot.selectedChoice!).recommendation?.judgment).toBe("Only choose B.");
+});

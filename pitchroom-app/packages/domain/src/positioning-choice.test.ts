@@ -1,3 +1,4 @@
+import {sameStoryOrigin} from "./story";
 import { expect, it } from "vitest";
 import { assertPositioningHead, changePositioningChoice, positioningChoiceLabel, positioningChoices, positioningDecisionResult, positioningProposalV1Schema, readPositioning, resolvePositioningChoice, validateRetainedPositioningChoice, type PositioningRecord, type RetainedPositioningChoice } from "./positioning";
 function record(): PositioningRecord { return {id:"p1",proposal:positioningProposalV1Schema.parse({schemaVersion:1,understandingVersionId:"u1",originalFraming:{title:"Original framing",coreMessage:"An accepted interpretation.",origin:"accepted_understanding"},directions:["a","b"].map(id=>({id,title:id,coreMessage:`AI ${id}`,from:"before",to:"after",tradeoff:"narrow",excludes:[],evidence:[{sourceId:"s",chunkId:"c",quote:"Exact words."}],userInputIds:[]}))})}; }
@@ -24,4 +25,13 @@ it("binds a literal source range to the active project, source hash and chunk",(
  const sources=[{id:"s",name:"brief.md",contentHash:"hash",chunks:[{id:"c",sourceId:"s",text:"  Exact words. other",startOffset:0,endOffset:20}]}];
  expect(()=>validateRetainedPositioningChoice(quote,"project",sources)).not.toThrow();expect(()=>validateRetainedPositioningChoice(quote,"foreign",sources)).toThrow(/unavailable/);expect(()=>validateRetainedPositioningChoice(quote,"project",[])).toThrow(/unavailable/);
  expect(()=>validateRetainedPositioningChoice({...quote,text:"Invented wording"},"project",sources)).toThrow(/unavailable/);expect(()=>validateRetainedPositioningChoice({...quote,sourceHash:"old"},"project",sources)).toThrow(/changed/);
+});
+
+it("uses exact decisions for Story compatibility and limits legacy fallback to legacy origins",()=>{
+ const legacy={understandingVersionId:"u",positioningVersionId:"p",directionId:"a",sourceFingerprint:"sources"};
+ expect(sameStoryOrigin(legacy,{...legacy})).toBe(true);
+ expect(sameStoryOrigin(legacy,{...legacy,positioningDecisionId:"legacy:p:a"})).toBe(true);
+ expect(sameStoryOrigin(legacy,{...legacy,positioningDecisionId:"new-decision"})).toBe(false);
+ expect(sameStoryOrigin({...legacy,positioningDecisionId:"one"},{...legacy,positioningDecisionId:"two"})).toBe(false);
+ expect(sameStoryOrigin({...legacy,positioningDecisionId:"one"},{...legacy,positioningVersionId:"new-candidate-row",positioningDecisionId:"one"})).toBe(true);
 });

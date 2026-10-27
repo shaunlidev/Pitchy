@@ -16,5 +16,5 @@ export function assertPositioningChoiceForAgent(choice:PositioningChoice,chunks:
   if(!chunk||chunk.text!==choice.passage||chunk.text.slice(choice.start,choice.end)!==choice.text||isInstructionLikeSourceText(chunk.text))throw new PitchroomError("PROPOSAL_REJECTED","The selected source passage is unavailable or isolated for Agent review. Its exact wording remains saved.");
 }
 export function positioningAgentContext(proposal:PositioningProposalV1,choice:PositioningChoice) {
-  return {understandingVersionId:proposal.understandingVersionId,selectedChoice:structuredClone(choice),recommendation:choice.kind==="ai_direction"&&samePositioningChoice(choice,positioningChoices(proposal).find(candidate=>candidate.id===choice.id))?proposal.recommendation:undefined};
+  return {understandingVersionId:proposal.understandingVersionId,selectedChoice:structuredClone(choice),recommendation:choice.kind==="ai_direction"&&proposal.recommendation?.directionId===choice.id&&samePositioningChoice(choice,positioningChoices(proposal).find(candidate=>candidate.id===choice.id))?proposal.recommendation:undefined};
 }

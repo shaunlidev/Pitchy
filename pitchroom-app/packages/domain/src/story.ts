@@ -76,11 +76,16 @@ export function compareStories(before: Story | null, after: Story): z.infer<type
   before?.blocks.forEach((block, from) => { if (!after.blocks.some(b => b.id === block.id)) blocks.push({ id: block.id, kind: "removed", before: block, after: null, from, to: null }); });
   return { fields, blocks };
 }
-export function storyIsFresh(origin: Story["origin"], current: { phase: string; understandingId: string | null; positioningId: string | null; directionId: string | null; positioningDecisionId?:string|null; sources: StorySnapshot["sources"] }) {
-  const decisionMatches=origin.positioningDecisionId && current.positioningDecisionId ? origin.positioningDecisionId===current.positioningDecisionId : (!current.positioningDecisionId || current.positioningDecisionId.startsWith("legacy:")) && origin.positioningVersionId===current.positioningId;
-  return current.phase === "accepted" && origin.understandingVersionId === current.understandingId && decisionMatches && origin.directionId === current.directionId && origin.sourceFingerprint === sourceFingerprint(current.sources);
+type PositioningOrigin = { positioningVersionId:string|null; positioningDecisionId?:string|null };
+function samePositioningOrigin(a:PositioningOrigin,b:PositioningOrigin) {
+  if(a.positioningDecisionId&&b.positioningDecisionId)return a.positioningDecisionId===b.positioningDecisionId;
+  if([a.positioningDecisionId,b.positioningDecisionId].some(id=>id&&!id.startsWith("legacy:")))return false;
+  return a.positioningVersionId===b.positioningVersionId;
 }
-export function sameStoryOrigin(a: Story["origin"], b: Story["origin"]) { return a.understandingVersionId === b.understandingVersionId && a.positioningVersionId === b.positioningVersionId && a.directionId === b.directionId && a.sourceFingerprint === b.sourceFingerprint; }
+export function storyIsFresh(origin: Story["origin"], current: { phase: string; understandingId: string | null; positioningId: string | null; directionId: string | null; positioningDecisionId?:string|null; sources: StorySnapshot["sources"] }) {
+  return current.phase === "accepted" && origin.understandingVersionId === current.understandingId && samePositioningOrigin(origin,{positioningVersionId:current.positioningId,positioningDecisionId:current.positioningDecisionId}) && origin.directionId === current.directionId && origin.sourceFingerprint === sourceFingerprint(current.sources);
+}
+export function sameStoryOrigin(a: Story["origin"], b: Story["origin"]) { return a.understandingVersionId === b.understandingVersionId && samePositioningOrigin(a,b) && a.directionId === b.directionId && a.sourceFingerprint === b.sourceFingerprint; }
 export function assertStoryHead(expected: StoryHead, actual: StoryHead) {
   if (expected.generation !== actual.generation || expected.storyId !== actual.storyId) throw new PitchroomError("CONFLICT", "The adopted story changed. Review the current story before continuing.");
 }

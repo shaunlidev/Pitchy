@@ -170,3 +170,13 @@ it("still rejects an allowed local reference that has no defined Story basis", a
  await expect(new ResponsesStoryRunner({apiKey:"offline",model:"offline",baseURL:"https://example.test",fetch:transport}).run(snapshot)).rejects.toThrow("Story has an unknown or duplicate basis reference.");
  expect(snapshot.before).toEqual(story);
 });
+
+it("refuses to restore a Story after A to B to A creates a different decision",async()=>{
+ resetFixtureState();let s=setup();const a=s.positioning!.proposal.directions[0]!.id,b=s.positioning!.proposal.directions[1]!.id;
+ s=await adopt();const oldStoryId=s.story!.head.storyId!;const oldVersion=structuredClone(s.story!.versions.find(v=>v.id===oldStoryId));
+ s=applyFixturePositioning(b,s.project.revision);s=await adopt();s=applyFixturePositioning(a,s.project.revision);
+ const before=structuredClone(s.story!.head);
+ s=await proposeFixtureStory({expected:before,commandId:"restore-after-new-a-decision",request:{kind:"restore",storyId:oldStoryId}});
+ expect(s.story!.proposals.at(-1)!.state.kind).toBe("failed");expect(s.story!.head).toEqual(before);
+ expect(s.story!.versions.find(v=>v.id===oldStoryId)).toEqual(oldVersion);
+});
