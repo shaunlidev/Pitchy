@@ -66,3 +66,5 @@ Before a controlled PR merge, the human operator records the approved head with 
 ### Reassessing a held QA report
 
 Required omissions still block unchanged acceptance rules. Scope exclusions and future integration belong in separate report fields, not required not_run. Operator-only `serial.py retry-qa PIT-N --head SHA --reason TEXT` archives the failed lane/receipt, checks fresh exact-head CI, unchanged contract, terminal prior QA and available capacity, then enqueues one new independent QA run on identical source. It never changes an old verdict to PASS. Same-artifact retry is capped at one; uncertain enqueue is not replayed. Each role/run has its own evidence directory. Source defects still use original-task developer rework and its existing repair cap.
+
+Transition journals include the validated preceding native run ID as well as issue/generation/phase. A held QA and its separately authorized reassessment therefore have distinct identities; repeating the same run still cannot enqueue twice. Existing confirmed/uncertain journal entries and all original receipts remain untouched.
