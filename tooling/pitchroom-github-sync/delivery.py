@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Serial Pitchroom PR push guard; never merges or pushes."""
 import argparse
+import hashlib
 import json
 import re
 import shlex
@@ -13,6 +14,17 @@ URL = 'https://github.com/shaunlidev/pitchroom.git'
 TASK = re.compile(r'refs/heads/codex/pit-\d+-[a-z0-9-]+$')
 ZERO = re.compile(r'0+$')
 RUNTIME_PARTS = {'.pitchroom', '.gstack', '.multica', '.multica-round', '.pipeline-local', '.pipeline-artifact', '.artifacts', '.local', '.vercel', '.trash', 'archive', 'test-results', 'playwright-report', 'node_modules', 'dist', 'build', 'screenshots', 'recordings', 'artifacts', 'evidence', 'logs', 'uploads', 'storage', 'sessions', 'cache', 'tmp', 'temp', 'coverage'}
+
+
+# PIT-58: only the five reviewed product-contract sources from PIT-50 1dba35e.
+# New content requires explicit review and a new receipt; no docs/config wildcard.
+REVIEWED_EVAL_SOURCES = {
+    'pitchroom-app/docs/evals/task-acceptance-protocol.md': '5867f4b818c330fa4fbc97729a04fe4a0b2c56f8174a5e8b31789d21a139d774',
+    'pitchroom-app/packages/evals/config/task-acceptance/pitchroom-r1/case.json': '15a6342a74087a57014392b2e368d2614bd774a27705b7716ceec05e6645a5ca',
+    'pitchroom-app/packages/evals/config/task-acceptance/pitchroom-r1/materials.json': '3af4723a9aaf0c82ff57aa8e20cebfc1d682d0a87718c0b3d3cceb16b5206f21',
+    'pitchroom-app/packages/evals/config/task-acceptance/pitchroom-r1/oracle.json': 'a0753a978dee2bd8cb4406f2351c262ab7b8360ce9495197f428ec2b22654deb',
+    'pitchroom-app/packages/evals/config/task-acceptance/pitchroom-r1/task.md': '24940981939f3c5cc25a724ad34cb75c88a1da4c511d16d9e4a92226a9b0b42b',
+}
 
 
 def git(*args):
@@ -35,6 +47,19 @@ def allowed_path(path, reviewed=()):
         'tooling/pipeline/ci.py',
         'tooling/pipeline/check-source.py',
         'tooling/pipeline/test_pipeline.py',
+        'tooling/pipeline/controller.py',
+        'tooling/pipeline/acceptance.py',
+        'tooling/pipeline/artifacts.py',
+        'tooling/pipeline/serial.py',
+        'tooling/pipeline/github_sync.py',
+        'tooling/pipeline/runtime.json',
+        'tooling/pipeline/ROLE_GUIDE.md',
+        'tooling/pipeline/test_controller.py',
+        'tooling/pipeline/test_artifacts.py',
+        'tooling/pipeline/test_acceptance.py',
+        'tooling/pipeline/test_resolutions.py',
+        'tooling/pipeline/test_polling.py',
+
     }
     if path in infrastructure:
         return True
@@ -49,6 +74,8 @@ def allowed_path(path, reviewed=()):
         return path.removeprefix('tooling/pitchroom-github-sync/') in {'sync.py', 'test_sync.py', 'allowed-files.json', 'README.md', 'delivery.py', 'test_delivery.py'}
     if not path.startswith('pitchroom-app/'):
         return False
+    if path in REVIEWED_EVAL_SOURCES:
+        return True
     relative = path.removeprefix('pitchroom-app/')
     if relative.startswith('docs/'):
         return False
@@ -83,7 +110,11 @@ def audit(commits):
             seen.add(identity)
             if int(git('cat-file', '-s', oid)) > 2_000_000:
                 raise ValueError(f'Oversized committed file: {path}')
-            check(path, subprocess.check_output(['git', 'cat-file', 'blob', oid]))
+            data = subprocess.check_output(['git', 'cat-file', 'blob', oid])
+            expected = REVIEWED_EVAL_SOURCES.get(path)
+            if expected is not None and hashlib.sha256(data).hexdigest() != expected:
+                raise ValueError(f'Reviewed source content changed: {path}; explicit review required')
+            check(path, data)
     return len(seen)
 
 
