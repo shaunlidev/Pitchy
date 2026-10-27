@@ -1,0 +1,42 @@
+{
+  "id": "pitchroom-self-validation-v1",
+  "evaluationProfile": "generic_core_message",
+  "originalFraming": "An AI workspace that turns scattered client material into positioning and a discussion deck.",
+  "sources": [
+    {
+      "id": "v6-prd-objective",
+      "authority": "approved_product_requirement",
+      "url": "https://local.pitchroom.invalid/v6-prd-objective",
+      "material": "Help brand strategy consultants and consulting project leads turn scattered client material into a clear positioning decision, then a client-discussion presentation. Clients know their business but may not know what the audience needs to hear. Consultants need to externalize their judgment, compare alternatives, and translate the chosen story efficiently. The desired first-use reaction is: This structure is ready to discuss with the client; I only need to refine it.",
+      "boundary": "This is the approved product intention and desired reaction. It does not establish measured customer demand, completion, reuse, or willingness to pay."
+    },
+    {
+      "id": "v6-positioning-control",
+      "authority": "approved_product_requirement",
+      "url": "https://local.pitchroom.invalid/v6-positioning-control",
+      "material": "Help me compare defensible choices and see how my judgment changes the story, without taking the decision away from me. Offer materially different directions, each with a core message, supporting material or input and a stated trade-off or exclusion. Compare the directions' advantages and disadvantages, then make an explicit recommendation and explain what evidence would change it. Retain the client's original framing as an option. Separate preview from applying a change. Allow adjustment, keeping original wording, and undoing the latest applied positioning change.",
+      "boundary": "This defines intended interaction and user control. It does not prove that generated choices are useful on arbitrary real material."
+    },
+    {
+      "id": "v6-design-judgment",
+      "authority": "approved_design_rationale",
+      "url": "https://local.pitchroom.invalid/v6-design-judgment",
+      "material": "The large left paper remains the visual reference. The right side has one current job: answer, inspect a proposed change, or continue after applying it. Three direction cards compare strategic choices and trade-offs, not three decorative headline styles. Opening or previewing a direction does not apply it. Original client wording stays available.",
+      "boundary": "This supports the judgment workflow and control mechanism, not outcome claims about better strategy or client approval."
+    },
+    {
+      "id": "core-message-contract",
+      "authority": "current_evaluation_contract",
+      "url": "https://local.pitchroom.invalid/core-message-contract-v2",
+      "material": "Can Pitchroom turn scattered product material into two useful, defensible choices that help a user articulate value they already feel but cannot yet phrase? The mechanism direction leads with a distinctive product behavior and the work it changes. The human-tension direction leads with a supported social, emotional, or identity tension, while retaining a credible product mechanism. They are not two headline styles. The Agent must compare both complete directions and recommend exactly one, while the user may edit, reject, preserve the original framing, or Apply exactly one direction.",
+      "boundary": "This is the hypothesis currently under evaluation. It must not be cited as proof that real users experience the proposed value."
+    },
+    {
+      "id": "validation-boundary",
+      "authority": "approved_product_requirement",
+      "url": "https://local.pitchroom.invalid/validation-boundary",
+      "material": "First-use review should observe: can the consultant explain the strategic difference, retain a direction, identify necessary edits, and use the deck structure for a client discussion? Record what they changed and where they needed help. Treat actual later client use and second-project return as separate evidence, not inferred from a saved deck.",
+      "boundary": "This is a measurement requirement, not evidence that any participant has passed it."
+    }
+  ]
+}

@@ -1,0 +1,173 @@
+{
+  "schemaVersion": 1,
+  "spec": {
+    "caseId": "pitchroom-r1",
+    "caseVersion": "1.0.0",
+    "caseKind": "real_self_test",
+    "materialPackage": {
+      "path": "pitchroom-app/packages/evals/config/task-acceptance/pitchroom-r1/materials.json",
+      "sha256": "3af4723a9aaf0c82ff57aa8e20cebfc1d682d0a87718c0b3d3cceb16b5206f21",
+      "fixtureId": "pitchroom-self-validation-v1"
+    },
+    "materials": [
+      {
+        "sourceId": "v6-prd-objective",
+        "packagePointer": "/sources/0",
+        "sourceVersion": "frozen-existing-fixture-pitchroom-self-validation-v1",
+        "sourceSha256": "e947f6383cdb9bf991a8f6702cff0743da5d9e87133a5e07f8d16c19dfe2c40e",
+        "sourceDate": {
+          "kind": "unknown",
+          "reason": "This curated fixture does not record a per-source authoring date. PRD/design document dates do not establish the date of this exact excerpt."
+        },
+        "permission": {
+          "kind": "local_evaluation_only",
+          "evidenceRef": "Shaun / Codex PIT-50 start request / 2026-10-27; approved local project material inspection and contract preparation",
+          "externalTransfer": "not_authorized"
+        }
+      },
+      {
+        "sourceId": "v6-positioning-control",
+        "packagePointer": "/sources/1",
+        "sourceVersion": "frozen-existing-fixture-pitchroom-self-validation-v1",
+        "sourceSha256": "4f31dcb868d2f460dc4b60cbaa03b263a3113bb15c07a809ab99f461a0ee48a2",
+        "sourceDate": {
+          "kind": "unknown",
+          "reason": "This curated fixture does not record a per-source authoring date. PRD/design document dates do not establish the date of this exact excerpt."
+        },
+        "permission": {
+          "kind": "local_evaluation_only",
+          "evidenceRef": "Shaun / Codex PIT-50 start request / 2026-10-27; approved local project material inspection and contract preparation",
+          "externalTransfer": "not_authorized"
+        }
+      },
+      {
+        "sourceId": "v6-design-judgment",
+        "packagePointer": "/sources/2",
+        "sourceVersion": "frozen-existing-fixture-pitchroom-self-validation-v1",
+        "sourceSha256": "099692ad5deb23dc106e2f27168f016b5fdcae4ee03436f6c48e77f2bdf9c0f4",
+        "sourceDate": {
+          "kind": "unknown",
+          "reason": "This curated fixture does not record a per-source authoring date. PRD/design document dates do not establish the date of this exact excerpt."
+        },
+        "permission": {
+          "kind": "local_evaluation_only",
+          "evidenceRef": "Shaun / Codex PIT-50 start request / 2026-10-27; approved local project material inspection and contract preparation",
+          "externalTransfer": "not_authorized"
+        }
+      },
+      {
+        "sourceId": "core-message-contract",
+        "packagePointer": "/sources/3",
+        "sourceVersion": "frozen-existing-fixture-pitchroom-self-validation-v1",
+        "sourceSha256": "0ad2cab9decef634805f42229d9544bbf67b224f6e9592db3ccd599fccdf7dcd",
+        "sourceDate": {
+          "kind": "unknown",
+          "reason": "This curated fixture does not record a per-source authoring date. PRD/design document dates do not establish the date of this exact excerpt."
+        },
+        "permission": {
+          "kind": "local_evaluation_only",
+          "evidenceRef": "Shaun / Codex PIT-50 start request / 2026-10-27; approved local project material inspection and contract preparation",
+          "externalTransfer": "not_authorized"
+        }
+      },
+      {
+        "sourceId": "validation-boundary",
+        "packagePointer": "/sources/4",
+        "sourceVersion": "frozen-existing-fixture-pitchroom-self-validation-v1",
+        "sourceSha256": "73923848588964528f6f20a63d0ebaa6ef56551f668f16c17c71e44bd74f0adb",
+        "sourceDate": {
+          "kind": "unknown",
+          "reason": "This curated fixture does not record a per-source authoring date. PRD/design document dates do not establish the date of this exact excerpt."
+        },
+        "permission": {
+          "kind": "local_evaluation_only",
+          "evidenceRef": "Shaun / Codex PIT-50 start request / 2026-10-27; approved local project material inspection and contract preparation",
+          "externalTransfer": "not_authorized"
+        }
+      }
+    ],
+    "audience": {
+      "value": "Brand strategy consultants and consulting project leads evaluating whether Pitchroom could support one real client project.",
+      "origin": {
+        "kind": "source_grounded_proposal",
+        "sourceRefs": [
+          {
+            "sourceId": "v6-prd-objective",
+            "quote": "Help brand strategy consultants and consulting project leads"
+          }
+        ],
+        "rationale": "The PRD explicitly names these users. Treat their willingness to try the product as an untested proposition."
+      }
+    },
+    "decisionGoal": {
+      "value": "Help a prospective consultant decide whether to try Pitchroom on one authorized real project, and identify the conditions, trade-offs and unanswered questions that would affect that decision.",
+      "origin": {
+        "kind": "source_grounded_proposal",
+        "sourceRefs": [
+          {
+            "sourceId": "v6-prd-objective",
+            "quote": "turn scattered client material into a clear positioning decision, then a client-discussion presentation."
+          },
+          {
+            "sourceId": "validation-boundary",
+            "quote": "Treat actual later client use and second-project return as separate evidence"
+          }
+        ],
+        "rationale": "A bounded trial decision is a proposed first-use objective inferred from the product journey; the materials do not establish an existing pilot commitment."
+      }
+    },
+    "useContext": {
+      "value": "An English product-positioning discussion draft prepared by Shaun as product owner for a conversation with a potential consultant trial user. Review the value proposition, compare strategic choices and discuss a possible project trial; no meeting, participant or customer agreement is asserted.",
+      "origin": {
+        "kind": "source_grounded_proposal",
+        "sourceRefs": [
+          {
+            "sourceId": "core-message-contract",
+            "quote": "two useful, defensible choices that help a user articulate value they already feel but cannot yet phrase?"
+          },
+          {
+            "sourceId": "validation-boundary",
+            "quote": "use the deck structure for a client discussion?"
+          }
+        ],
+        "rationale": "Adapt the consultant-discussion goal to Pitchroom self-positioning. The potential conversation is a proposed use, not a scheduled or observed event."
+      }
+    },
+    "originalFraming": "An AI workspace that turns scattered client material into positioning and a discussion deck.",
+    "outputLanguage": "en",
+    "requiredStages": [
+      "materials",
+      "understanding",
+      "clarify",
+      "positioning",
+      "story_initial",
+      "story_revision",
+      "deck",
+      "actual_use"
+    ],
+    "rubricVersion": "task-acceptance-v1",
+    "feedbackPolicy": {
+      "kind": "after_actual_output",
+      "requirements": [
+        "Inspect the actual adopted first Story before giving feedback.",
+        "Record exact human feedback plus intended change, required preservation and prohibited changes before requesting a revision.",
+        "Do not prewrite feedback or apply an oracle-derived correction and label it unassisted discovery.",
+        "If no real clarification or revision is needed, preserve that observation; the corresponding full-task coverage remains incomplete, not fabricated."
+      ]
+    },
+    "participantMode": "assisted_self_test"
+  },
+  "status": "frozen",
+  "binding": {
+    "specHash": "90b672ead1d2a40709072077100525af443a95cfac750414e390a301997996ad",
+    "materialPackageHash": "3af4723a9aaf0c82ff57aa8e20cebfc1d682d0a87718c0b3d3cceb16b5206f21",
+    "oracleHash": "edf23195fb2e99cc2d896c500e510ce07f0eaf7fb48c37b27f47cf049d6fb674",
+    "rubricHash": "7d6bee1e03c04ef3cf315f7a6c4cfc86306e81bc40d07c95eef7ef6f28b24c63"
+  },
+  "confirmation": {
+    "actor": "Shaun",
+    "role": "material_owner_and_product_owner",
+    "confirmedAt": "2026-10-27T00:49:24Z",
+    "evidenceRef": "PIT-50 Multica comment 01a17ad5-5704-782c-b163-5d92677d1665; explicit chat reply: 接受三项建议，冻结契约"
+  }
+}

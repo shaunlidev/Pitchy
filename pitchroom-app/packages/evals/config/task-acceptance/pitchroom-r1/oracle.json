@@ -1,0 +1,323 @@
+{
+  "caseId": "pitchroom-r1",
+  "caseVersion": "1.0.0",
+  "oracleVersion": "1.0.0",
+  "rubricVersion": "task-acceptance-v1",
+  "items": [
+    {
+      "id": "R1-O01",
+      "kind": "must_preserve",
+      "meaning": "The intended users are brand strategy consultants and consulting project leads dealing with scattered client material. A different primary audience must be an explicit human decision, not silent drift.",
+      "sourceRefs": [
+        {
+          "sourceId": "v6-prd-objective",
+          "quote": "Help brand strategy consultants and consulting project leads turn scattered client material into a clear positioning decision"
+        }
+      ],
+      "applicableStages": [
+        "understanding",
+        "clarify",
+        "positioning",
+        "story_initial",
+        "story_revision",
+        "deck"
+      ],
+      "severity": "critical",
+      "rationale": "The story must serve the actual task audience."
+    },
+    {
+      "id": "R1-O02",
+      "kind": "must_preserve",
+      "meaning": "Preserve the causal workflow: material → defensible positioning judgment → a reviewable client-discussion deck, with the consultant making the decision.",
+      "sourceRefs": [
+        {
+          "sourceId": "v6-prd-objective",
+          "quote": "turn scattered client material into a clear positioning decision, then a client-discussion presentation."
+        },
+        {
+          "sourceId": "v6-positioning-control",
+          "quote": "without taking the decision away from me."
+        }
+      ],
+      "applicableStages": [
+        "understanding",
+        "clarify",
+        "positioning",
+        "story_initial",
+        "story_revision",
+        "deck"
+      ],
+      "severity": "critical",
+      "rationale": "A generic slide-speed claim loses the intended value and control mechanism."
+    },
+    {
+      "id": "R1-O03",
+      "kind": "unknown",
+      "meaning": "Actual demand, measured completion, reuse, willingness to pay and customer outcomes are not supplied by this requirements fixture. They must not be inferred from a successful local run.",
+      "sourceRefs": [
+        {
+          "sourceId": "validation-boundary",
+          "quote": "Treat actual later client use and second-project return as separate evidence"
+        },
+        {
+          "sourceId": "v6-prd-objective",
+          "quote": "The desired first-use reaction is: This structure is ready to discuss with the client; I only need to refine it."
+        }
+      ],
+      "applicableStages": [
+        "understanding",
+        "clarify",
+        "positioning",
+        "story_initial",
+        "story_revision",
+        "deck",
+        "actual_use"
+      ],
+      "severity": "critical",
+      "rationale": "A desired reaction is not an observed result."
+    },
+    {
+      "id": "R1-O04",
+      "kind": "forbidden_upgrade",
+      "meaning": "Do not upgrade the desired first-use reaction into a testimonial, observed consultant result or quantified performance.",
+      "sourceRefs": [
+        {
+          "sourceId": "v6-prd-objective",
+          "quote": "The desired first-use reaction is:"
+        }
+      ],
+      "applicableStages": [
+        "understanding",
+        "clarify",
+        "positioning",
+        "story_initial",
+        "story_revision",
+        "deck"
+      ],
+      "severity": "critical",
+      "rationale": "Generated confidence cannot create participant evidence."
+    },
+    {
+      "id": "R1-O05",
+      "kind": "must_preserve",
+      "meaning": "Provide two materially different directions, complete support and trade-offs, exactly one comparative recommendation and evidence that would reverse it. Keep the original framing available.",
+      "sourceRefs": [
+        {
+          "sourceId": "core-message-contract",
+          "quote": "The Agent must compare both complete directions and recommend exactly one"
+        },
+        {
+          "sourceId": "v6-positioning-control",
+          "quote": "Retain the client's original framing as an option."
+        },
+        {
+          "sourceId": "v6-positioning-control",
+          "quote": "explain what evidence would change it."
+        }
+      ],
+      "applicableStages": [
+        "positioning"
+      ],
+      "severity": "critical",
+      "rationale": "The alternatives are strategic judgments, not decorative headline variations."
+    },
+    {
+      "id": "R1-O06",
+      "kind": "forbidden_upgrade",
+      "meaning": "The felt-but-unspoken-value proposition is a hypothesis to articulate and evaluate, not a demonstrated emotional need or proven benefit for all consultants.",
+      "sourceRefs": [
+        {
+          "sourceId": "core-message-contract",
+          "quote": "Can Pitchroom turn scattered product material into two useful, defensible choices that help a user articulate value they already feel but cannot yet phrase?"
+        }
+      ],
+      "applicableStages": [
+        "understanding",
+        "clarify",
+        "positioning",
+        "story_initial",
+        "story_revision",
+        "deck"
+      ],
+      "severity": "critical",
+      "rationale": "Do not let a compelling slogan smuggle in unobserved user research."
+    },
+    {
+      "id": "R1-O07",
+      "kind": "must_preserve",
+      "meaning": "Previewing is distinct from applying. A candidate does not replace an adopted version without the human decision, and history/original wording/undo remain available.",
+      "sourceRefs": [
+        {
+          "sourceId": "v6-positioning-control",
+          "quote": "Separate preview from applying a change."
+        },
+        {
+          "sourceId": "v6-positioning-control",
+          "quote": "Allow adjustment, keeping original wording, and undoing the latest applied positioning change."
+        }
+      ],
+      "applicableStages": [
+        "clarify",
+        "positioning",
+        "story_initial",
+        "story_revision",
+        "deck"
+      ],
+      "severity": "critical",
+      "rationale": "Protect authorship and make the adopted artifact identifiable."
+    },
+    {
+      "id": "R1-O08",
+      "kind": "must_preserve",
+      "meaning": "Preserve the exact existing original framing as an available option; alternative wording is a separate candidate, not a replacement of the historical original.",
+      "sourceRefs": [
+        {
+          "sourceId": "v6-positioning-control",
+          "quote": "Retain the client's original framing as an option."
+        }
+      ],
+      "applicableStages": [
+        "positioning",
+        "story_initial",
+        "story_revision",
+        "deck"
+      ],
+      "severity": "critical",
+      "rationale": "Rejected directions and original framing remain traceable."
+    },
+    {
+      "id": "R1-O09",
+      "kind": "forbidden_upgrade",
+      "meaning": "Treat proposed customer trial, consultant comments, internal interpretation and feedback as their actual attributed kind. No source says a particular consultant has agreed to pilot, buy or endorse Pitchroom.",
+      "sourceRefs": [
+        {
+          "sourceId": "validation-boundary",
+          "quote": "Record what they changed and where they needed help."
+        },
+        {
+          "sourceId": "v6-positioning-control",
+          "quote": "supporting material or input"
+        }
+      ],
+      "applicableStages": [
+        "understanding",
+        "clarify",
+        "positioning",
+        "story_initial",
+        "story_revision",
+        "deck",
+        "actual_use"
+      ],
+      "severity": "critical",
+      "rationale": "Attribution, time and certainty must survive later condensation."
+    },
+    {
+      "id": "R1-O10",
+      "kind": "must_preserve",
+      "meaning": "A Story revision must respond to the actual human feedback while preserving unrelated facts, boundaries and unresolved questions. Declare the required change after inspecting the actual first Story, not a preselected winning message.",
+      "sourceRefs": [
+        {
+          "sourceId": "v6-positioning-control",
+          "quote": "see how my judgment changes the story"
+        },
+        {
+          "sourceId": "v6-positioning-control",
+          "quote": "Allow adjustment, keeping original wording"
+        }
+      ],
+      "applicableStages": [
+        "story_revision",
+        "deck"
+      ],
+      "severity": "critical",
+      "rationale": "Real feedback response is distinct from agreeing with every unsupported user assertion."
+    },
+    {
+      "id": "R1-O11",
+      "kind": "unknown",
+      "meaning": "No real external participant, trial agreement, meeting, downstream use or second-project return is evidenced by this case input. Record actual later observations separately.",
+      "sourceRefs": [
+        {
+          "sourceId": "validation-boundary",
+          "quote": "Treat actual later client use and second-project return as separate evidence"
+        }
+      ],
+      "applicableStages": [
+        "understanding",
+        "positioning",
+        "story_initial",
+        "story_revision",
+        "deck",
+        "actual_use"
+      ],
+      "severity": "critical",
+      "rationale": "A generated Deck and an Apply event are not downstream use."
+    },
+    {
+      "id": "R1-O12",
+      "kind": "must_preserve",
+      "meaning": "The adopted direction and Story must be visible in the final Deck, with reasons, support and open questions still understandable to the intended audience.",
+      "sourceRefs": [
+        {
+          "sourceId": "v6-prd-objective",
+          "quote": "translate the chosen story efficiently."
+        },
+        {
+          "sourceId": "v6-positioning-control",
+          "quote": "each with a core message, supporting material or input and a stated trade-off or exclusion."
+        }
+      ],
+      "applicableStages": [
+        "story_initial",
+        "story_revision",
+        "deck"
+      ],
+      "severity": "critical",
+      "rationale": "A fluent artifact can still lose the reason the human chose the direction."
+    },
+    {
+      "id": "R1-O13",
+      "kind": "must_preserve",
+      "meaning": "Compare options and make a justified recommendation without predetermining a mechanism-led or human-tension-led winner. A human may reject the recommendation and retain another direction.",
+      "sourceRefs": [
+        {
+          "sourceId": "core-message-contract",
+          "quote": "while the user may edit, reject, preserve the original framing, or Apply exactly one direction."
+        }
+      ],
+      "applicableStages": [
+        "positioning",
+        "story_initial",
+        "story_revision",
+        "deck"
+      ],
+      "severity": "critical",
+      "rationale": "The oracle constrains meaning and evidence, not a single answer."
+    },
+    {
+      "id": "R1-O14",
+      "kind": "unknown",
+      "meaning": "The fixture does not settle pricing, production readiness, export quality, broad input-format support or a universal production page count. Do not introduce any as a promise without additional approved sources.",
+      "sourceRefs": [
+        {
+          "sourceId": "v6-prd-objective",
+          "quote": "The desired first-use reaction is:"
+        },
+        {
+          "sourceId": "validation-boundary",
+          "quote": "Record what they changed and where they needed help."
+        }
+      ],
+      "applicableStages": [
+        "understanding",
+        "clarify",
+        "positioning",
+        "story_initial",
+        "story_revision",
+        "deck"
+      ],
+      "severity": "critical",
+      "rationale": "This is an absence check for this frozen source set, not a claim that the repository has no implementation."
+    }
+  ]
+}
