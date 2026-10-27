@@ -11,11 +11,11 @@ import { readPositioning, storyToDeck, workspaceStateSchema } from "@pitchroom/d
 import { GET, POST } from "../../../../apps/web/app/api/workspace/route";
 import { healthResponse } from "../../../../apps/web/app/api/health/route";
 import { evaluationInstance } from "../../../../apps/web/lib/evaluation-instance";
-import { resetFixtureState } from "../../../../apps/web/lib/fixture-store";
+import { addFixtureMaterial, resetFixtureState } from "../../../../apps/web/lib/fixture-store";
 import { hashTaskBytes, hashTaskValue } from "./schema";
 import { advance, audit, prepare, recordDecision, report } from "./workflow";
 import { loadEvidencePolicy } from "./capacity";
-import { appendTaskObservation, verifyTaskSession } from "./session";
+import { appendTaskCheckpoint, appendTaskObservation, verifyTaskSession } from "./session";
 
 const roots: string[] = [];
 const servers: Server[] = [];
@@ -278,6 +278,28 @@ it("a changed product makes the displayed checkpoint stale and cannot execute it
   await expect(recordDecision({ run, decision: stale })).rejects.toThrow("WORKFLOW_STALE_DECISION");
   expect(f.commands).toHaveLength(count);
   await expect(recordDecision({ run, decision: stale })).rejects.toThrow("WORKFLOW_DECISION_REJECTED"); expect(f.commands).toHaveLength(count);
+}, 30000);
+
+it("a committed initial snapshot cannot bypass the empty isolated project requirement", async () => {
+  const f = await httpFixture();
+  const existing = workspaceStateSchema.parse(JSON.parse(JSON.stringify(addFixtureMaterial({ name: "preexisting.md", mediaType: "text/markdown", text: "Preexisting synthetic material outside this task run." }))));
+  const control = prepare(f.input);
+  expect(await advance(control)).toMatchObject({ kind: "held", reason: "WORKFLOW_REQUIRES_EMPTY_OWNED_PROJECT" }); expect(f.commands).toHaveLength(0);
+  const run = prepare({ ...f.input, sessionId: randomUUID() });
+  const locator = JSON.parse(readFileSync(run.referenceFile, "utf8")), policy = loadEvidencePolicy(locator.policyInput);
+  const state = verifyTaskSession(policy, locator.initialReference), at = new Date().toISOString();
+  const saved = appendTaskCheckpoint(policy, state.reference, {
+    stage: "materials", attemptId: "synthetic-imported-initial", commandId: "synthetic-read", projectId: existing.project.id, revision: existing.project.revision,
+    startedAt: at, endedAt: at, parentCheckpointHashes: [], versionIds: { understanding: null, positioning: null, story: null, deck: null },
+    model: "not_applicable_http_readback", promptVersion: "synthetic", runtime: state.manifest.identity.runtime,
+    usage: { kind: "unknown", reason: "Synthetic no-provider control" }, request: { kind: "synthetic_read" },
+    response: { kind: "transport_summary", status: "received", httpStatus: 200, providerStatus: null, observedModel: null },
+    originalBodyDigests: { request: { kind: "unknown", reason: "No GET body" }, response: { kind: "known", sha256: hashTaskBytes(JSON.stringify(existing)), scope: "body_bytes_before_projection", evidenceRef: "synthetic fixture read" } },
+    result: { kind: "unverified_record", data: { kind: "workflow_workspace", workspace: existing, workspaceHash: hashTaskValue(existing) } },
+  });
+  appendTaskObservation(policy, saved.reference, { id: "synthetic-imported-snapshot", at, stage: "materials", attemptId: null, commandId: null, checkpointHash: null, kind: "observation", data: { kind: "workflow_snapshot", checkpointHash: saved.checkpointHash } });
+  expect(() => audit(run)).toThrow("WORKFLOW_INITIAL_SNAPSHOT_NOT_EMPTY");
+  await expect(advance(run)).rejects.toThrow("WORKFLOW_INITIAL_SNAPSHOT_NOT_EMPTY"); expect(f.commands).toHaveLength(0);
 }, 30000);
 
 it("a forged resolved-stage event cannot bypass the human action's permitted transition", async () => {

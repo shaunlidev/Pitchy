@@ -465,6 +465,9 @@ function verifyProductEffect(operation: Operation, before: Workspace, after: Wor
     default: failEvidence("WORKFLOW_UNSUPPORTED_PRODUCT_EFFECT");
   }
 }
+function isEmptyInitialWorkspace(workspace: Workspace) {
+  return workspace.project.phase === "empty" && !workspace.sources.length && !workspace.versions.length && !workspace.positioning && !workspace.story?.versions.length && !workspace.deck && !workspace.brief.head;
+}
 function replay(context: Context) {
   let step: Step = "materials", lastCheckpoint: z.infer<typeof sha256Schema> | null = null;
   let pending: Operation | null = null, gate: z.infer<typeof gateSchema> | null = null, held: string | null = null;
@@ -475,7 +478,11 @@ function replay(context: Context) {
   for (const fact of context.facts) {
     switch (fact.kind) {
       case "workflow_started": break;
-      case "workflow_snapshot": snapshot(context, fact.checkpointHash); lastCheckpoint = fact.checkpointHash; break;
+      case "workflow_snapshot": {
+        const observed = snapshot(context, fact.checkpointHash);
+        if (!lastCheckpoint && !isEmptyInitialWorkspace(observed.workspace)) failEvidence("WORKFLOW_INITIAL_SNAPSHOT_NOT_EMPTY");
+        lastCheckpoint = fact.checkpointHash; break;
+      }
       case "workflow_gate": {
         if (pending || held || fact.step !== step || fact.caseBindingHash !== hashTaskValue(context.state.bundle.binding)) failEvidence("WORKFLOW_INVALID_GATE_ORDER");
         if (snapshot(context, fact.checkpointHash).workspaceHash !== fact.workspaceHash) failEvidence("WORKFLOW_GATE_CONTENT_MISMATCH");
@@ -642,7 +649,7 @@ export async function advance(raw: unknown): Promise<TaskWorkflowProgress> {
     if (flow.pending) { const result = await executeOperation(context, flow.pending, false); if (result.kind !== "operation_completed") return result; continue; }
     const read = await client(context).read();
     if (!flow.lastCheckpoint) {
-      if (read.state.project.phase !== "empty" || read.state.sources.length || read.state.versions.length || read.state.positioning || read.state.story?.versions.length || read.state.deck || read.state.brief.head) return held(context, "WORKFLOW_REQUIRES_EMPTY_OWNED_PROJECT", null);
+      if (!isEmptyInitialWorkspace(read.state)) return held(context, "WORKFLOW_REQUIRES_EMPTY_OWNED_PROJECT", null);
       capture(context, read, "materials", null);
     } else if (flow.step !== "clarification_wait") fresh(context, read.state);
     switch (flow.step) {
