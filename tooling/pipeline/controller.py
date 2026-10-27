@@ -361,7 +361,10 @@ class Controller:
         if issue.get("assignee_id") != self.c[role] or digest(issue.get("description") or "") != lane["description_sha256"]:
             raise Hold("handler or acceptance source changed")
         base = lane.get("artifact", {}).get("commit") or git(native, "rev-parse", "HEAD")
-        if lane.get("rework_base_commit") and not has_ancestor(self.c["repository"], lane["rework_base_commit"], base):
+        prior = lane.get("rework_base_commit")
+        if lane.get("artifact"):
+            prior = lane.get("rework_public_commit", prior)
+        if prior and not has_ancestor(self.c["repository"], prior, base):
             raise Hold("rework workspace omits prior delivery; explicit integration required")
         self.dependencies(issue, self.issues(), base)
         return lane, issue

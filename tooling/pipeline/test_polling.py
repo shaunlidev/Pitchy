@@ -495,3 +495,271 @@ class QAResubmission(unittest.TestCase):
             self.assertNotEqual(one,two);self.assertTrue(one.is_dir());self.assertTrue(two.is_dir())
             with self.assertRaises(serial.Hold):self.c.checks(lane,'qa',self.f.f.repo,run_id='qa-one')
         self.assertEqual((root/'original.json').read_text(),'first failed report retained')
+
+
+class DeveloperRecovery(unittest.TestCase):
+    def setUp(self):
+        self.fixture=SerialBehavior();self.fixture.setUp()
+        self.f,self.c=self.fixture.f,self.fixture.c
+        f=self.f;baseline=f.g('rev-parse','HEAD')
+        f.g('checkout','-qb','agent/native')
+        (f.repo/'private-native.txt').write_text('runtime history stays local')
+        (f.repo/'source.txt').write_text('old')
+        f.g('add','private-native.txt','source.txt');f.g('commit','-qm','native prior')
+        self.prior=f.g('rev-parse','HEAD')
+        (f.repo/'source.txt').write_text('lane1');f.g('commit','-qam','preserved repair')
+        self.source=f.g('rev-parse','HEAD')
+        f.g('checkout','-qb','public-history',baseline)
+        (f.repo/'source.txt').write_text('old');f.g('commit','-qam','prior public')
+        self.head=f.g('rev-parse','HEAD')
+        f.g('checkout','main');(f.repo/'new-main.txt').write_text('accepted baseline')
+        f.g('add','new-main.txt');f.g('commit','-qm','main advances independently')
+        self.main=f.g('rev-parse','HEAD')
+        row=f.fake.rows[0];row.update(status='in_progress',assignee_id='dev',revision=7)
+        f.fake.rows=[row]
+        self.oldwork=str(f.root/'removed-native-worktree')
+        f.fake.runs['id-1']=[{'id':'old-dev','issue_id':'id-1','agent_id':'dev','status':'completed','work_dir':self.oldwork,'branch_name':'agent/native'}]
+        criteria=[dict(x,kind='engineering',required=True,check_ids=['normal']) for x in core.requirements(row['description'])]
+        contract={'schema_version':1,'engineering':True,'decisions':[],'description_sha256':serial.digest(row['description']),
+                  'criteria':criteria,'allowed_paths':['source.txt'],'checks':{'normal':{'argv':['python3','check.py'],'cwd':'.','proof':{'kind':'json','pointer':'/passed','equals':True}}}}
+        self.lane={'issue':'PIT-1','id':'id-1','phase':'developer','generation':3,'repairs':2,'native_head':self.prior,
+                   'description_sha256':serial.digest(row['description']),'requirements':core.requirements(row['description']),
+                   'description':row['description'],'contract':contract,'developer_workspace':self.oldwork,
+                   'dependencies':{},'rework_base_commit':self.prior,'rework_public_commit':self.head,
+                   'rework_paths':['source.txt'],'rework_branch':'codex/pit-1-delivery-g1','rework_pr_number':7}
+        self.c.save(self.lane);self.requests=[];old_call=self.c.call
+        def call(args):
+            if args[:2]==['issue','rerun']:
+                self.requests.append(args);return {'id':'unbound-current-assignment-run'}
+            if args[:2]==['issue','update'] and '--assignee-id' in args:
+                self.requests.append(args)
+                result=old_call(args)
+                if getattr(self,'lost_enqueue',False):raise TimeoutError('acknowledgement lost')
+                return result
+            return old_call(args)
+        self.c.call=call
+        outer=self
+        class Remote:
+            def api(self,path):
+                if path=='commits/main':return {'sha':outer.main}
+                return {'state':'open','base':{'ref':'main'},'head':{'sha':outer.head,'ref':'codex/pit-1-delivery-g1'}}
+            def ci(self,sha,event):return {'state':'success'}
+        self.c.github=Remote()
+        self.c.observation={'deadline_monotonic':time.monotonic()+120,'issues':{'PIT-1':{'prs':[{'number':7,'head':self.head,'state':'DRAFT','base':'main','ci':{'state':'success','sha':self.head}}]}}}
+
+    def tearDown(self):self.fixture.tearDown()
+
+    def recover(self,**overrides):
+        args=dict(key='PIT-1',generation=3,head=self.head,main=self.main,run_id='old-dev',source=self.source,reason='preserved repair after main advance')
+        args.update(overrides);return self.c.recover_developer(**args)
+
+    def test_real_git_recovery_preserves_both_histories_and_exact_scope_once(self):
+        result=self.recover();lane=self.c.lanes()['PIT-1']
+        self.assertEqual((lane['generation'],lane['repairs']),(3,2))
+        self.assertEqual(lane['contract'],self.lane['contract']);self.assertNotIn('artifact',lane)
+        public=result['recovered_source'];native=self.f.g('rev-parse','agent/native')
+        for ancestor,child in ((self.head,public),(self.main,public),(self.source,native),(public,native)):
+            self.assertTrue(serial.has_ancestor(self.f.repo,ancestor,child))
+        self.assertEqual(self.f.g('show',public+':source.txt'),'lane1')
+        self.assertEqual(self.f.g('diff','--name-only',self.main,public),'source.txt')
+        self.assertEqual(self.f.g('show',native+':private-native.txt'),'runtime history stays local')
+        self.assertEqual(json.loads(Path(result['archive']).read_text())['original_lane'],self.lane)
+        with self.assertRaises(serial.Hold):self.recover()
+        self.assertEqual(len(self.requests),1)
+
+    def test_recovered_source_still_requires_real_role_then_fast_forwards_original_pr(self):
+        result=self.recover();remote=self.f.root/'remote.git'
+        subprocess.run(['git','clone','--bare',str(self.f.repo),str(remote)],check=True,capture_output=True)
+        subprocess.run(['git','--git-dir',str(remote),'update-ref','refs/heads/codex/pit-1-delivery-g1',self.head],check=True)
+        self.f.g('remote','add','origin',str(remote))
+        native=(self.f.root/'fresh-native').resolve();self.f.g('worktree','add','--detach',str(native),'agent/native')
+        report=self.f.root/'report.json';report.write_text(json.dumps({'outcome':'pass','criterion_results':[{'id':x['id'],'status':'pass'} for x in self.lane['requirements']],'gaps':[],'decisions':[]}))
+        with self.assertRaises(serial.Hold):self.c.stage('PIT-1','developer',report,native)
+        with self.f.runtime('developer',native,run='fresh-dev'):
+            self.c.workspace('PIT-1',native)
+            self.c.stage('PIT-1','developer',report,native)
+        lane=self.c.lanes()['PIT-1'];self.assertEqual(lane['phase'],'awaiting_role_exit')
+        self.assertEqual(lane['artifact']['commit'],result['recovered_source'])
+        self.assertNotIn('rework_expected_pr_head',lane)
+        published=subprocess.check_output(['git','--git-dir',str(remote),'rev-parse','refs/heads/codex/pit-1-delivery-g1'],text=True).strip()
+        self.assertEqual(published,result['recovered_source']);self.assertEqual(lane['pr_number'],7)
+
+    def test_changed_contract_head_source_or_generation_refuses_without_mutation(self):
+        for override in ({'generation':4},{'head':'f'*40},{'source':self.prior},{'source':'HEAD'},{'main':'f'*40}):
+            with self.subTest(override=override):
+                with self.assertRaises(serial.Hold):self.recover(**override)
+        self.f.fake.rows[0]['revision']=None
+        with self.assertRaises(serial.Hold):self.recover()
+        self.f.fake.rows[0]['revision']=7
+        self.f.fake.rows[0]['description']+='changed'
+        with self.assertRaises(serial.Hold):self.recover()
+        self.assertEqual(self.c.lanes()['PIT-1'],self.lane);self.assertEqual(self.requests,[])
+        self.assertEqual(self.f.g('rev-parse','agent/native'),self.source)
+        self.assertEqual(self.c.db.execute('select count(*) from operations').fetchone()[0],0)
+
+    def test_live_unknown_and_uncertain_state_refuse(self):
+        original=copy.deepcopy(self.f.fake.runs['id-1'])
+        for status in ('running','queued','mystery'):
+            self.f.fake.runs['id-1']=[dict(original[0],status=status)]
+            with self.subTest(status=status):
+                with self.assertRaises(serial.Hold):self.recover()
+        self.f.fake.runs['id-1']=original
+        self.c.reserve('unresolved')
+        with self.assertRaisesRegex(serial.Hold,'Uncertain'):self.recover()
+        self.assertEqual(self.requests,[])
+
+    def test_task_path_change_on_main_or_unscoped_native_source_refuses(self):
+        (self.f.repo/'source.txt').write_text('another main change');self.f.g('commit','-qam','shared path moves')
+        self.main=self.f.g('rev-parse','HEAD')
+        with self.assertRaisesRegex(serial.Hold,'task paths'):self.recover()
+        self.assertEqual(self.requests,[])
+
+    def test_lost_enqueue_never_replays_or_spends_another_repair(self):
+        self.lost_enqueue=True
+        with self.assertRaises(TimeoutError):self.recover()
+        lane=self.c.lanes()['PIT-1'];self.assertEqual((lane['generation'],lane['repairs']),(3,2))
+        with self.assertRaisesRegex(serial.Hold,'Uncertain'):self.recover()
+        self.assertEqual(len(self.requests),1)
+        self.assertTrue(Path(lane['developer_recovery']).exists())
+
+    def test_unscoped_native_commit_and_checked_out_branch_are_not_recovered(self):
+        self.f.g('checkout','agent/native')
+        (self.f.repo/'private-native.txt').write_text('unexpected native edit')
+        self.f.g('commit','-qam','unscoped native change');self.source=self.f.g('rev-parse','HEAD')
+        self.f.g('checkout','main')
+        with self.assertRaisesRegex(serial.Hold,'declared source'):self.recover()
+        self.assertEqual(self.requests,[])
+
+    def test_live_native_checkout_is_not_updated(self):
+        other=self.f.root/'still-owned';self.f.g('worktree','add',str(other),'agent/native')
+        with self.assertRaisesRegex(serial.Hold,'checked out'):self.recover()
+        self.assertEqual(self.requests,[])
+        self.assertEqual(self.f.g('rev-parse','agent/native'),self.source)
+
+    def test_role_context_and_unsuccessful_ci_refuse(self):
+        with patch.dict(serial.os.environ,{'MULTICA_TASK_ID':'actual-role'}):
+            with self.assertRaisesRegex(serial.Hold,'operator'):self.recover()
+        self.c.github.ci=lambda *args:{'state':'failure'}
+        with self.assertRaisesRegex(serial.Hold,'successful current main'):self.recover()
+        self.assertEqual(self.requests,[])
+
+    def test_concurrent_native_ref_update_is_preserved_and_journal_holds(self):
+        original=serial.git
+        def git(repo,*args):
+            if args[0]=='update-ref':
+                original(repo,'update-ref','refs/heads/agent/native',self.main,self.source)
+            return original(repo,*args)
+        with patch.object(serial,'git',side_effect=git):
+            with self.assertRaises((serial.Hold,subprocess.CalledProcessError)):self.recover()
+        self.assertEqual(self.f.g('rev-parse','agent/native'),self.main)
+        self.assertEqual(self.requests,[])
+        self.assertEqual(self.c.db.execute("select count(*) from operations where state='uncertain'").fetchone()[0],1)
+        self.assertEqual(self.c.lanes()['PIT-1'],self.lane)
+
+    def test_original_publication_gate_still_refuses_unintegrated_rework(self):
+        native=(self.f.root/'unintegrated-native').resolve()
+        self.f.g('worktree','add','--detach',str(native),self.source)
+        with self.assertRaisesRegex(serial.Hold,'base is stale'):
+            self.c.publish_checkpoint(self.lane,native,'PIT-1')
+        self.assertEqual(self.c.lanes()['PIT-1'],self.lane)
+        self.assertEqual(self.requests,[])
+
+    def test_another_project_runtime_started_before_ref_commit_holds(self):
+        self.f.fake.rows.append(issue(2))
+        original=self.c.github.api
+        def api(path):
+            if path=='pulls/7':
+                self.f.fake.runs['id-2']=[{'id':'other','status':'running'}]
+            return original(path)
+        self.c.github.api=api
+        with self.assertRaisesRegex(serial.Hold,'Live runtime'):self.recover()
+        self.assertEqual(self.requests,[])
+        self.assertEqual(self.f.g('rev-parse','agent/native'),self.source)
+        self.assertTrue(self.c.db.execute("select 1 from operations where state='uncertain'").fetchone())
+
+    def test_changed_owner_after_mapping_is_preserved_without_enqueue(self):
+        original=serial.write_json
+        def write(path,data):
+            original(path,data)
+            if Path(path).name=='mapping.json':
+                self.f.fake.rows[0].update(status='started_3',assignee_id='qa',revision=8)
+        with patch.object(serial,'write_json',side_effect=write):
+            with self.assertRaisesRegex(serial.Hold,'assignment changed'):self.recover()
+        self.assertEqual(self.requests,[])
+        self.assertEqual(self.f.fake.rows[0]['assignee_id'],'qa')
+        lane=self.c.lanes()['PIT-1'];self.assertTrue(Path(lane['developer_recovery']).exists())
+        self.assertTrue(self.c.db.execute("select 1 from operations where state='uncertain'").fetchone())
+
+    def test_live_runtime_after_mapping_is_not_enqueued_again(self):
+        original=serial.write_json
+        def write(path,data):
+            original(path,data)
+            if Path(path).name=='mapping.json':
+                self.f.fake.runs['id-1'].append({'id':'intervening','status':'queued'})
+        with patch.object(serial,'write_json',side_effect=write):
+            with self.assertRaisesRegex(serial.Hold,'Live runtime'):self.recover()
+        self.assertEqual(self.requests,[])
+        self.assertTrue(self.c.db.execute("select 1 from operations where state='uncertain'").fetchone())
+
+    def test_explicit_transition_binds_developer_from_both_permitted_statuses(self):
+        self.f.fake.rows[0]['status']='todo'
+        self.recover()
+        args=self.requests[0]
+        self.assertEqual(args[:2],['issue','update'])
+        self.assertEqual(args[args.index('--assignee-id')+1],'dev')
+        self.assertEqual(args[args.index('--status')+1],'in_progress')
+
+    def test_other_issue_becomes_live_after_local_mapping_holds(self):
+        self.f.fake.rows.append(issue(2))
+        original=serial.write_json
+        def write(path,data):
+            original(path,data)
+            if Path(path).name=='mapping.json':
+                self.f.fake.runs['id-2']=[{'id':'late-other','status':'running'}]
+        with patch.object(serial,'write_json',side_effect=write):
+            with self.assertRaisesRegex(serial.Hold,'Live runtime'):self.recover()
+        self.assertEqual(self.requests,[])
+        self.assertTrue(self.c.db.execute("select 1 from operations where state='uncertain'").fetchone())
+
+    def test_completed_target_history_change_after_mapping_also_holds(self):
+        original=serial.write_json
+        def write(path,data):
+            original(path,data)
+            if Path(path).name=='mapping.json':
+                self.f.fake.runs['id-1'].append({'id':'intervening-finished','status':'completed'})
+        with patch.object(serial,'write_json',side_effect=write):
+            with self.assertRaisesRegex(serial.Hold,'runtime history changed'):self.recover()
+        self.assertEqual(self.requests,[])
+        self.assertTrue(self.c.db.execute("select 1 from operations where state='uncertain'").fetchone())
+
+    def test_malformed_runtime_identities_hold_without_local_effects(self):
+        self.f.fake.rows.append(issue(2))
+        rows=[{'status':'completed'}]+[{'id':x,'status':'completed'} for x in (None,'',17,False,[],{},' ')]
+        for run in rows:
+            self.f.fake.runs['id-2']=[run]
+            with self.subTest(run=run):
+                with self.assertRaisesRegex(serial.Hold,'Unknown runtime history'):self.recover()
+                self.assertEqual(self.requests,[])
+                self.assertEqual(self.f.g('rev-parse','agent/native'),self.source)
+                self.assertEqual(self.c.lanes()['PIT-1'],self.lane)
+                self.assertEqual(self.c.db.execute('select count(*) from operations').fetchone()[0],0)
+
+    def test_valid_completed_runtime_identity_still_permits_recovery(self):
+        self.f.fake.rows.append(issue(2))
+        self.f.fake.runs['id-2']=[{'id':'valid-completed-run','status':'completed'}]
+        self.recover()
+        self.assertEqual(len(self.requests),1)
+        self.assertEqual(self.c.lanes()['PIT-1']['developer_recoveries'],1)
+
+    def test_malformed_identity_after_mapping_holds_without_enqueue(self):
+        self.f.fake.rows.append(issue(2))
+        original=serial.write_json
+        def write(path,data):
+            original(path,data)
+            if Path(path).name=='mapping.json':
+                self.f.fake.runs['id-2']=[{'status':'completed'}]
+        with patch.object(serial,'write_json',side_effect=write):
+            with self.assertRaisesRegex(serial.Hold,'Unknown runtime history'):self.recover()
+        self.assertEqual(self.requests,[])
+        self.assertTrue(self.c.db.execute("select 1 from operations where state='uncertain'").fetchone())
+        self.assertTrue(Path(self.c.lanes()['PIT-1']['developer_recovery']).exists())
