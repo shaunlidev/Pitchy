@@ -28,6 +28,7 @@ const bindingSchema = z.object({
   timeoutMs: z.number().int().min(10).max(120_000),
   maximumResponseBytes: z.number().int().min(1024).max(16_000_000),
 }).strict();
+export function parseWorkspaceBinding(raw: unknown) { return bindingSchema.parse(raw); }
 const preparedSchema = z.object({
   kind: z.literal("workspace_command_prepared"), dispatchOwner: z.string().uuid(), binding: bindingSchema,
   attemptId: z.string().min(1), stage: taskStageSchema, commandId: z.string().min(1),
@@ -42,18 +43,39 @@ const outcomeSchema = z.discriminatedUnion("kind", [
 export type WorkspaceCommandOutcome = z.infer<typeof outcomeSchema>;
 const terminalSchema = z.object({ kind: z.literal("workspace_command_outcome"), preparedHash: z.string(), outcome: outcomeSchema }).strict();
 
+/** Read-only projection of a PIT-51-verified session; mutation never uses this shortcut. */
+export function inspectWorkspaceReceipt(input: { state: ReturnType<typeof verifyTaskSession>; binding: unknown; commandId: string }) {
+  const { state, commandId } = input;
+  const binding = parseWorkspaceBinding(input.binding);
+    const rawPrepared = state.observations.find(item => item.id === `workspace:${commandId}:prepared`);
+    const rawOutcome = state.observations.find(item => item.id === `workspace:${commandId}:outcome`);
+    if (!rawPrepared) {
+      if (rawOutcome) throw new Error("WORKSPACE_OUTCOME_WITHOUT_PREPARE");
+      return { kind: "not_dispatched" } satisfies { kind: "not_dispatched" };
+    }
+    const prepared = preparedSchema.parse(rawPrepared.data);
+    if (prepared.commandId !== commandId || prepared.request.commandId !== commandId || prepared.requestBodyHash !== hashTaskBytes(JSON.stringify(prepared.request)) || hashTaskValue(prepared.binding) !== hashTaskValue(binding)) throw new Error("WORKSPACE_RECEIPT_BINDING_MISMATCH");
+    if (!rawOutcome) return { kind: "prepared", prepared } satisfies { kind: "prepared"; prepared: typeof prepared };
+    const saved = terminalSchema.parse(rawOutcome.data);
+    if (saved.preparedHash !== hashTaskValue(prepared) || state.observations.indexOf(rawOutcome) <= state.observations.indexOf(rawPrepared)) throw new Error("WORKSPACE_OUTCOME_BINDING_MISMATCH");
+    return { kind: "outcome", prepared, outcome: saved.outcome, outcomeHash: hashTaskValue(rawOutcome.data) } satisfies { kind: "outcome"; prepared: typeof prepared; outcome: typeof saved.outcome; outcomeHash: string };
+}
+
 export class IsolatedWorkspaceClient {
   readonly #binding: z.infer<typeof bindingSchema>;
   readonly #policy: EvidencePolicy;
   #reference: TaskSessionRef;
   #busy = false;
   constructor(input: { binding: unknown; policy: EvidencePolicy; reference: unknown }) {
-    this.#binding = bindingSchema.parse(input.binding);
+    this.#binding = parseWorkspaceBinding(input.binding);
     this.#policy = input.policy;
     this.#reference = taskSessionRefSchema.parse(input.reference);
     verifyTaskSession(input.policy, this.#reference);
   }
   get reference() { return { ...this.#reference }; }
+  getReceipt(commandId: string) {
+    return inspectWorkspaceReceipt({ state: verifyTaskSession(this.#policy, this.#reference), binding: this.#binding, commandId });
+  }
   async #fetch(path: string, method = "GET", body?: string) {
     const identity = this.#binding.instance;
     const response = await fetch(new URL(path, this.#binding.baseURL), {
