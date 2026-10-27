@@ -468,6 +468,7 @@ function verifyProductEffect(operation: Operation, before: Workspace, after: Wor
 function isEmptyInitialWorkspace(workspace: Workspace) {
   return workspace.project.phase === "empty" && !workspace.sources.length && !workspace.versions.length && !workspace.positioning && !workspace.story?.versions.length && !workspace.deck && !workspace.brief.head;
 }
+function withoutAsyncFields({ clarifications: _tasks, events: _events, workflowRuns: _runs, ...rest }: Workspace) { return rest; }
 function replay(context: Context) {
   let step: Step = "materials", lastCheckpoint: z.infer<typeof sha256Schema> | null = null;
   let pending: Operation | null = null, gate: z.infer<typeof gateSchema> | null = null, held: string | null = null;
@@ -481,6 +482,19 @@ function replay(context: Context) {
       case "workflow_snapshot": {
         const observed = snapshot(context, fact.checkpointHash);
         if (!lastCheckpoint && !isEmptyInitialWorkspace(observed.workspace)) failEvidence("WORKFLOW_INITIAL_SNAPSHOT_NOT_EMPTY");
+        if (lastCheckpoint && pending) {
+          const pendingCommandId = pending.command.commandId;
+          const receipt = inspectWorkspaceReceipt({ state: context.state, binding: context.locator.launchReceipt, commandId: pending.command.commandId ?? "" });
+          if (receipt.kind !== "outcome" || (receipt.outcome.kind !== "confirmed" && receipt.outcome.kind !== "recovered") || receipt.prepared.attemptId !== pending.operationId || receipt.prepared.requestBodyHash !== hashTaskBytes(JSON.stringify(pending.command)) || observed.workspaceHash !== hashTaskValue(receipt.outcome.state)) failEvidence("WORKFLOW_SNAPSHOT_RECEIPT_MISMATCH");
+          const at = context.state.observations.findIndex(item => hashTaskValue(item.data) === hashTaskValue(fact));
+          const receiptAt = context.state.observations.findIndex(item => item.id === `workspace:${pendingCommandId}:outcome`);
+          if (receiptAt < 0 || at <= receiptAt) failEvidence("WORKFLOW_SNAPSHOT_RECEIPT_ORDER");
+        } else if (lastCheckpoint && step === "clarification_wait") {
+          const submitted = [...completed.values()].filter(item => item.operation.command.action === "submit_clarification").at(-1);
+          if (!submitted || hashTaskValue(withoutAsyncFields(snapshot(context, submitted.checkpointHash).workspace)) !== hashTaskValue(withoutAsyncFields(observed.workspace))) failEvidence("WORKFLOW_CLARIFICATION_BASE_CHANGED");
+        } else if (lastCheckpoint && !gate && snapshot(context, lastCheckpoint).workspaceHash !== observed.workspaceHash) {
+          failEvidence("WORKFLOW_UNEXPLAINED_SNAPSHOT_CHANGE");
+        }
         lastCheckpoint = fact.checkpointHash; break;
       }
       case "workflow_gate": {
@@ -665,8 +679,7 @@ export async function advance(raw: unknown): Promise<TaskWorkflowProgress> {
         const submitted = [...flow.completed.values()].filter(item => item.operation.command.action === "submit_clarification").at(-1);
         if (!submitted) failEvidence("WORKFLOW_CLARIFICATION_SUBMISSION_MISSING");
         const baseline = snapshot(context, submitted.checkpointHash).workspace;
-        const withoutAsync = ({ clarifications: _tasks, events: _events, workflowRuns: _runs, ...rest }: Workspace) => rest;
-        if (hashTaskValue(withoutAsync(baseline)) !== hashTaskValue(withoutAsync(read.state))) return held(context, "WORKFLOW_CLARIFICATION_BASE_CHANGED", null);
+        if (hashTaskValue(withoutAsyncFields(baseline)) !== hashTaskValue(withoutAsyncFields(read.state))) return held(context, "WORKFLOW_CLARIFICATION_BASE_CHANGED", null);
         const task = read.state.clarifications?.find(item => item.commandId === submitted.operation.command.commandId);
         if (!task) return held(context, "WORKFLOW_CLARIFICATION_TASK_MISSING", null);
         capture(context, read, "clarification_wait", null);
