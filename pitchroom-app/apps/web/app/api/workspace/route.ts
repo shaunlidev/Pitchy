@@ -1,3 +1,4 @@
+import { evaluationRequestGuard } from "../../../lib/evaluation-instance";
 import {saveFixturePositioningWording} from "../../../lib/fixture-store";
 import {savePersistentPositioningWording} from "../../../lib/persistent-workspace";
 import { changeFixtureTopicMaterial } from "../../../lib/fixture-store";
@@ -25,10 +26,14 @@ export async function workspaceResponse(readState?: () => unknown | Promise<unkn
     return NextResponse.json(envelope, { status: 503, headers: headers(requestId, runtime) });
   }
 }
-export async function GET() {
+export async function GET(request?: Request) {
+  const rejected = evaluationRequestGuard(request);
+  if (rejected) return rejected;
   return workspaceResponse();
 }
 export async function POST(request: Request) {
+  const rejected = evaluationRequestGuard(request);
+  if (rejected) return rejected;
   const requestId = crypto.randomUUID();
   const configured = readRuntimeMode();
   if (!configured.success) return invalidRuntimeResponse(requestId);
