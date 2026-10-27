@@ -72,6 +72,9 @@ def render(data, now=None):
             r'codex/pit-' + issue[4:] + r'-[a-z0-9-]+', branch))
         usable = bool(fresh and data['live_checked'] and version and schema.identity(data['owner'])
                       and not any(r != 'ci_not_successful' and r != 'task_blocked' for r in reasons))
+        # The CI state and its blocker must describe the same observation.
+        if (ci != 'success') != ('ci_not_successful' in reasons):
+            usable = False
         if data['passed'] != (not reasons and ci == 'success'):
             usable = False
         lines = [f'{issue} · {STAGES[stage]}',

@@ -47,6 +47,23 @@ class ViewTests(unittest.TestCase):
                 if state != 'success':
                     self.assertNotIn('CI 通过', text)
 
+    def test_cli_rejects_contradictory_ci_evidence(self):
+        command = [sys.executable, '-B', str(Path(view.__file__))]
+        cases = [('success', ['ci_not_successful'], False),
+                 ('success', ['ci_not_successful'], True),
+                 ('failure', [], False), ('missing', [], False)]
+        for ci, reasons, passed in cases:
+            with self.subTest(ci=ci, reasons=reasons, passed=passed):
+                data = fixture()
+                data.update(observed_at=datetime.now(timezone.utc).isoformat(),
+                            ci=ci, blocked_reasons=reasons, passed=passed)
+                result = subprocess.run(command, input=json.dumps(data),
+                                        text=True, capture_output=True)
+                self.assertEqual(result.returncode, 2, result.stdout)
+                self.assertIn('检查：无法判断', result.stdout)
+                self.assertNotIn('检查：CI 通过', result.stdout)
+                self.assertIn('获取新快照', result.stdout)
+
     def test_stale_future_and_offline(self):
         for delta in (-121, 1):
             data = fixture()
