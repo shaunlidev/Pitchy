@@ -140,8 +140,7 @@ class Controller:
             if not has_ancestor(self.c["repository"], required, base_commit):
                 raise Hold("prerequisite not integrated in base; no auto merge: " + key)
 
-    def dispatch(self, apply=False):
-        issues, lanes = self.issues(), self.lanes()
+    def active_issues(self, issues):
         active = {x["identifier"] for x in issues if x["status"] in ACTIVE}
         # A role may have posted in_review before its process actually exits.
         for issue in issues:
@@ -151,6 +150,11 @@ class Controller:
                     raise Hold("unknown run history shape")
                 if any(x.get("status") in RUNNING for x in runs):
                     active.add(issue["identifier"])
+        return active
+
+    def dispatch(self, apply=False):
+        issues, lanes = self.issues(), self.lanes()
+        active = self.active_issues(issues)
         slots = max(0, self.c.get("max_lanes", 2) - len(active))
         result = {"active": sorted(active), "slots": slots, "started": [], "held": {}}
         order = self.c.get("order", [])

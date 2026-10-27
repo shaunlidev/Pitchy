@@ -279,3 +279,69 @@ class ReworkPublication(SerialBehavior):
         with patch.object(serial.subprocess,'run',side_effect=run):self.c.publish_pr(lane)
         self.assertEqual(calls,[]);self.assertEqual(lane['pr_number'],7);self.assertEqual(lane['branch'],branch)
         target=subprocess.check_output(['git','--git-dir',str(remote),'rev-parse','refs/heads/'+branch],text=True).strip();self.assertEqual(target,sha)
+
+
+class SerialCapacity(unittest.TestCase):
+    def make(self, issues, histories=None, lanes=None):
+        c = serial.Serial.__new__(serial.Serial)
+        c.c = {'developer': 'dev', 'reviewer': 'review', 'qa': 'qa'}
+        c.lanes = lambda: lanes or {}
+        c.call = lambda args: (histories or {}).get(args[2], [])
+        return c
+
+    def test_idle_human_work_does_not_occupy_automatic_lane(self):
+        human = {'id': 'human', 'identifier': 'PIT-24', 'status': 'in_progress', 'assignee_id': 'owner'}
+        c = self.make([human], {'human': [{'status': 'completed'}]})
+        before = copy.deepcopy(human)
+        self.assertEqual(c.active_issues([human]), set())
+        self.assertEqual(human, before)
+
+    def test_pipeline_owned_work_and_merge_wait_consume_capacity(self):
+        task = {'id': 'task', 'identifier': 'PIT-1', 'status': 'todo', 'assignee_id': 'dev'}
+        c = self.make([task])
+        self.assertEqual(c.active_issues([task]), {'PIT-1'})
+        c = self.make([], lanes={'PIT-2': {'issue': 'PIT-2', 'phase': 'awaiting_merge'}})
+        self.assertEqual(c.active_issues([]), {'PIT-2'})
+
+    def test_live_runs_block_even_after_reassignment_or_unassignment(self):
+        for owner in ('owner', None):
+            task = {'id': 'task', 'identifier': 'PIT-1', 'status': 'in_review', 'assignee_id': owner}
+            for state in serial.RUNNING:
+                c = self.make([task], {'task': [{'status': state}]})
+                self.assertEqual(c.active_issues([task]), {'PIT-1'})
+
+    def test_unknown_runtime_history_holds(self):
+        task = {'id': 'task', 'identifier': 'PIT-1', 'status': 'in_progress', 'assignee_id': 'owner'}
+        for history in ({}, [None], [{}], [{'status': 'future_unknown'}]):
+            with self.assertRaises(serial.Hold):
+                self.make([task], {'task': history}).active_issues([task])
+        c = self.make([task])
+        def outage(args): raise gs.SyncError('unavailable')
+        c.call = outage
+        with self.assertRaises(gs.SyncError): c.active_issues([task])
+
+    def test_real_dispatch_starts_one_without_touching_idle_human_then_no_duplicate(self):
+        fixture = SerialBehavior(); fixture.setUp()
+        try:
+            human = core.item(24, 'in_progress'); human['assignee_id'] = 'owner'
+            fixture.old_call.rows = [human, core.item(1), core.item(2)]
+            fixture.c.github.api = lambda path: {'sha': fixture.f.g('rev-parse', 'HEAD')}
+            fixture.c.github.ci = lambda sha, event: {'state': 'success'}
+            fixture.c.observation = {'deadline_monotonic': time.monotonic() + 120, 'issues': {}}
+            result = fixture.c.dispatch(True)
+            self.assertEqual(result['started'], ['PIT-1'])
+            self.assertEqual(fixture.c.dispatch(True)['started'], [])
+            self.assertEqual(human['status'], 'in_progress')
+            self.assertEqual(human['assignee_id'], 'owner')
+            self.assertFalse(any('id-24' in args for args in fixture.old_call.writes))
+        finally: fixture.tearDown()
+
+    def test_only_exact_status_tool_paths_allowed_for_publication(self):
+        import importlib.util
+        path = Path(__file__).resolve().parents[1] / 'pitchroom-github-sync/delivery.py'
+        spec = importlib.util.spec_from_file_location('capacity_delivery', path)
+        mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+        for name in ('snapshot.py', 'test_snapshot.py', 'view.py', 'test_view.py'):
+            self.assertTrue(mod.allowed_path('tooling/pipeline-status/' + name))
+        for name in ('secrets.json', '.env', 'extra.py', '../pipeline/serial.py'):
+            self.assertFalse(mod.allowed_path('tooling/pipeline-status/' + name))
