@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { inspectEvidenceCapacity, loadEvidencePolicy, recoverEvidenceLock, withEvidenceLock } from "./capacity";
 import { appendTaskCheckpoint, appendTaskObservation, captureTaskSourceIdentity, createTaskSession, rebuildTaskLedgerReport, taskRuntimeIdentitySchema, verifyTaskSession } from "./session";
-import { hashTaskValue } from "./schema";
+import { hashTaskBytes, hashTaskValue } from "./schema";
 
 const roots: string[] = [], children: ChildProcess[] = [];
 const fixtureRoot = new URL("../../config/task-acceptance/pitchroom-r1/", import.meta.url);
@@ -32,6 +32,7 @@ const checkpoint = (attemptId = "synthetic-first") => ({
   versionIds: { understanding: null, positioning: null, story: null, deck: null },
   model: "synthetic-no-provider", promptVersion: "offline-control-v1", runtime,
   usage: { kind: "unknown", reason: "No provider was called" }, request: { action: "synthetic-import" }, response: { kind: "transport_summary", status: "not_dispatched", httpStatus: null, providerStatus: null, observedModel: null },
+  originalBodyDigests: { request: { kind: "unknown", reason: "No wire transport in this synthetic control" }, response: { kind: "unknown", reason: "No wire transport in this synthetic control" } },
   result: { kind: "unverified_record", data: { text: "Synthetic imported material; not a real R1 run" } },
 });
 afterEach(async () => {
@@ -143,6 +144,25 @@ describe("PIT-51 append-only session integrity and recovery", () => {
     }
     expect(readdirSync(join(f.sessionRoot, "checkpoints"))).toEqual([]);
     expect(verifyTaskSession(f.policy, f.ref).events).toHaveLength(1);
+  });
+
+  it("distinguishes original body digests from stored response summary without persisting the body", () => {
+    const f = fixture(), marker = "SYNTHETIC_UNSTORED_PROVIDER_BODY";
+    const rawA = JSON.stringify({ output: marker, syntheticVariant: "a" }), rawB = JSON.stringify({ output: marker, syntheticVariant: "b" });
+    const summary = { kind: "transport_summary", status: "received", httpStatus: 200, providerStatus: "completed", observedModel: "synthetic-no-provider" };
+    const originalA = { kind: "known", sha256: hashTaskBytes(rawA), scope: "body_bytes_before_projection", evidenceRef: "Synthetic in-memory transport only; no network" };
+    const originalB = { ...originalA, sha256: hashTaskBytes(rawB) };
+    const firstInput = { ...checkpoint("wire-a"), response: summary, originalBodyDigests: { request: { kind: "unknown", reason: "Not captured in this control" }, response: originalA } };
+    const first = appendTaskCheckpoint(f.policy, f.ref, firstInput);
+    const second = appendTaskCheckpoint(f.policy, first.reference, { ...checkpoint("wire-b"), response: summary, originalBodyDigests: { ...firstInput.originalBodyDigests, response: originalB } });
+    const state = verifyTaskSession(f.policy, second.reference), a = state.checkpoints.get("wire-a")?.value, b = state.checkpoints.get("wire-b")?.value;
+    expect(a?.storedResponseSummaryHash).toBe(b?.storedResponseSummaryHash);
+    expect(a?.input.originalBodyDigests.response).toEqual(originalA);
+    expect(b?.input.originalBodyDigests.response).toEqual(originalB);
+    expect(a?.input.originalBodyDigests.request.kind).toBe("unknown");
+    const bytes = readFileSync(join(f.sessionRoot, "checkpoints", `${first.checkpointHash}.json`), "utf8");
+    expect(bytes).not.toContain(marker);
+    expect(() => appendTaskCheckpoint(f.policy, second.reference, { ...firstInput, originalBodyDigests: { ...firstInput.originalBodyDigests, response: originalB } })).toThrow("ATTEMPT_ID_CONFLICT");
   });
 
   it("does not commit or erase old evidence when the per-session budget is exhausted", () => {

@@ -32,6 +32,10 @@ export const taskTransportSummarySchema = z.object({
   providerStatus: z.string().regex(/^[A-Za-z0-9_.-]{1,200}$/).nullable(),
   observedModel: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,199}$/).nullable(),
 }).strict();
+export const originalBodyDigestSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("known"), sha256: sha256Schema, scope: z.literal("body_bytes_before_projection"), evidenceRef: text }).strict(),
+  z.object({ kind: z.literal("unknown"), reason: text }).strict(),
+]);
 export const checkpointInputSchema = z.object({
   stage: taskStageSchema, attemptId: text, commandId: text, projectId: text, revision: z.number().int().nonnegative(),
   startedAt: timestamp, endedAt: timestamp, parentCheckpointHashes: z.array(sha256Schema),
@@ -42,6 +46,7 @@ export const checkpointInputSchema = z.object({
     z.object({ kind: z.literal("unknown"), reason: text }).strict(),
   ]),
   request: json, response: taskTransportSummarySchema,
+  originalBodyDigests: z.object({ request: originalBodyDigestSchema, response: originalBodyDigestSchema }).strict(),
   result: z.discriminatedUnion("kind", [
     z.object({ kind: z.literal("product_output"), data: productCheckpointPayloadSchema }).strict(),
     z.object({ kind: z.literal("unverified_record"), data: json }).strict(),
@@ -53,7 +58,7 @@ export const checkpointInputSchema = z.object({
   if (input.result.kind === "product_output" && input.result.data.stage !== input.stage) context.addIssue({ code: "custom", message: "Product payload must match its recorded stage." });
   if (new Set(input.parentCheckpointHashes).size !== input.parentCheckpointHashes.length) context.addIssue({ code: "custom", message: "Parent checkpoint references must be unique." });
 });
-const checkpointSchema = z.object({ schemaVersion: z.literal(1), input: checkpointInputSchema, requestHash: sha256Schema, responseHash: sha256Schema, resultHash: sha256Schema }).strict();
+const checkpointSchema = z.object({ schemaVersion: z.literal(1), input: checkpointInputSchema, storedRequestHash: sha256Schema, storedResponseSummaryHash: sha256Schema, storedResultHash: sha256Schema }).strict();
 const observationSchema = z.object({ id: text, at: timestamp, stage: taskStageSchema, attemptId: text.nullable(), commandId: text.nullable(), checkpointHash: sha256Schema.nullable(), kind: z.enum(["observation", "failure", "review_record"]), data: json }).strict();
 const manifestSchema = z.object({
   schemaVersion: z.literal(1), sessionId: sessionIdSchema, purpose: z.enum(["tool_validation", "task_evidence"]), createdAt: timestamp, maximumBytes: z.number().int().positive(),
@@ -178,7 +183,7 @@ export function verifyTaskSession(policy: EvidencePolicy, rawReference: unknown)
     if (!/^[a-f0-9]{64}\.json$/.test(name)) failEvidence("UNKNOWN_CHECKPOINT_FILE");
     const value = checkpointSchema.parse(readJson(join(root, "checkpoints", name)));
     const hash = hashTaskValue(value);
-    if (`${hash}.json` !== name || hashTaskValue(value.input.request) !== value.requestHash || hashTaskValue(value.input.response) !== value.responseHash || hashTaskValue(value.input.result) !== value.resultHash) failEvidence("CHECKPOINT_TAMPERED");
+    if (`${hash}.json` !== name || hashTaskValue(value.input.request) !== value.storedRequestHash || hashTaskValue(value.input.response) !== value.storedResponseSummaryHash || hashTaskValue(value.input.result) !== value.storedResultHash) failEvidence("CHECKPOINT_TAMPERED");
     const prior = checkpoints.get(value.input.attemptId);
     if (prior && prior.hash !== hash) failEvidence("ATTEMPT_ID_CONFLICT");
     checkpoints.set(value.input.attemptId, { hash, value });
@@ -237,7 +242,7 @@ export function verifyTaskSession(policy: EvidencePolicy, rawReference: unknown)
 export function appendTaskCheckpoint(policy: EvidencePolicy, rawReference: unknown, rawInput: unknown, secrets: readonly string[] = []) {
   const expected = taskSessionRefSchema.parse(rawReference), input = checkpointInputSchema.parse(rawInput);
   rejectSensitive(input, secrets);
-  const checkpoint = checkpointSchema.parse({ schemaVersion: 1, input, requestHash: hashTaskValue(input.request), responseHash: hashTaskValue(input.response), resultHash: hashTaskValue(input.result) });
+  const checkpoint = checkpointSchema.parse({ schemaVersion: 1, input, storedRequestHash: hashTaskValue(input.request), storedResponseSummaryHash: hashTaskValue(input.response), storedResultHash: hashTaskValue(input.result) });
   const objectHash = hashTaskValue(checkpoint);
   return withEvidenceLock(policy, () => {
     const state = verifyTaskSession(policy, expected), root = rootFor(policy, expected.sessionId);
