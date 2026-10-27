@@ -731,3 +731,35 @@ class DeveloperRecovery(unittest.TestCase):
             with self.assertRaisesRegex(serial.Hold,'runtime history changed'):self.recover()
         self.assertEqual(self.requests,[])
         self.assertTrue(self.c.db.execute("select 1 from operations where state='uncertain'").fetchone())
+
+    def test_malformed_runtime_identities_hold_without_local_effects(self):
+        self.f.fake.rows.append(issue(2))
+        rows=[{'status':'completed'}]+[{'id':x,'status':'completed'} for x in (None,'',17,False,[],{},' ')]
+        for run in rows:
+            self.f.fake.runs['id-2']=[run]
+            with self.subTest(run=run):
+                with self.assertRaisesRegex(serial.Hold,'Unknown runtime history'):self.recover()
+                self.assertEqual(self.requests,[])
+                self.assertEqual(self.f.g('rev-parse','agent/native'),self.source)
+                self.assertEqual(self.c.lanes()['PIT-1'],self.lane)
+                self.assertEqual(self.c.db.execute('select count(*) from operations').fetchone()[0],0)
+
+    def test_valid_completed_runtime_identity_still_permits_recovery(self):
+        self.f.fake.rows.append(issue(2))
+        self.f.fake.runs['id-2']=[{'id':'valid-completed-run','status':'completed'}]
+        self.recover()
+        self.assertEqual(len(self.requests),1)
+        self.assertEqual(self.c.lanes()['PIT-1']['developer_recoveries'],1)
+
+    def test_malformed_identity_after_mapping_holds_without_enqueue(self):
+        self.f.fake.rows.append(issue(2))
+        original=serial.write_json
+        def write(path,data):
+            original(path,data)
+            if Path(path).name=='mapping.json':
+                self.f.fake.runs['id-2']=[{'status':'completed'}]
+        with patch.object(serial,'write_json',side_effect=write):
+            with self.assertRaisesRegex(serial.Hold,'Unknown runtime history'):self.recover()
+        self.assertEqual(self.requests,[])
+        self.assertTrue(self.c.db.execute("select 1 from operations where state='uncertain'").fetchone())
+        self.assertTrue(Path(self.c.lanes()['PIT-1']['developer_recovery']).exists())

@@ -306,7 +306,7 @@ class Serial(Controller):
             histories={}
             for row in self.issues():
                 runs=self.call(['issue','runs',row['id'],'--output','json'])
-                if not isinstance(runs,list) or any(not isinstance(r,dict) or r.get('status') not in RUNNING | {'completed','failed','cancelled'} for r in runs):
+                if not isinstance(runs,list) or any(not isinstance(r,dict) or not isinstance(r.get('id'),str) or not r['id'].strip() or not isinstance(r.get('status'),str) or r['status'] not in RUNNING | {'completed','failed','cancelled'} for r in runs):
                     raise Hold('Unknown runtime history')
                 if any(r['status'] in RUNNING for r in runs):raise Hold('Live runtime prevents recovery')
                 histories[row['id']]=runs
