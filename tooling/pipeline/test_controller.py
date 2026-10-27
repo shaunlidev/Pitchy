@@ -67,6 +67,7 @@ class Tests(unittest.TestCase):
         self.c = {"project": "project", "repository": str(self.repo), "developer": "dev", "reviewer": "review", "qa": "qa", "max_lanes": 2, "review_status": "started_2", "qa_status": "started_3"}
         self.fake = Fake([item(1), item(2), item(3)], self.c)
         self.ctl = Controller(self.c, self.fake, self.root / "state")
+        (self.root/"state/evidence-budget.json").write_text(json.dumps({"cap_bytes":320000000,"accounted_bytes":300000000,"allocation_bytes":20000000,"accounting_sha256":"a"*64}))
 
     def tearDown(self):
         self.ctl.close(); self.tmp.cleanup()
@@ -332,3 +333,87 @@ class RegisteredProductPrerequisite(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class DurableRoleEvidence(unittest.TestCase):
+    setUp=Tests.setUp
+    tearDown=Tests.tearDown
+    g=Tests.g
+
+    def prepare(self, run='review-run', role='reviewer', outcome='pass'):
+        self.local=self.repo/'.pipeline-local';self.local.mkdir(exist_ok=True)
+        self.probe=self.local/'probe.py';self.probe.write_text('print("independent check")')
+        self.raw=self.local/'output.log';self.raw.write_text('actual result: '+outcome)
+        self.report=self.local/'report.json'
+        self.report.write_text(json.dumps({'outcome':outcome,'evidence_files':['.pipeline-local/probe.py','.pipeline-local/output.log']}))
+        self.lane={'issue':'PIT-1','generation':3,'description_sha256':'description',
+                   'artifact':{'commit':self.g('rev-parse','HEAD'),'contract_sha256':'contract'}}
+        self.role,self.run=role,run
+
+    def retain(self):
+        return Path(self.ctl.retain_role_evidence(self.lane,self.role,self.report,self.repo,self.c[self.role],self.run))
+
+    def test_declared_evidence_survives_source_cleanup_with_bound_hashes(self):
+        self.prepare();manifest=self.retain();data=json.loads(manifest.read_text())
+        import shutil
+        shutil.rmtree(self.local)
+        verified=self.ctl.verify_role_evidence(manifest.parent,data['binding'])
+        self.assertEqual(verified['binding']['run_id'],'review-run')
+        self.assertEqual(len(verified['files']),3)
+        self.assertEqual((manifest.parent/'files/.pipeline-local/output.log').read_text(),'actual result: pass')
+        self.assertLessEqual(sum(p.stat().st_size for p in manifest.parent.rglob('*') if p.is_file()),verified['reserved_bytes'])
+
+    def test_failure_success_and_roles_are_separate_never_overwritten(self):
+        self.prepare(run='failure',outcome='fail');first=self.retain();original=first.read_bytes()
+        with self.assertRaises(Hold):self.retain()
+        self.prepare(run='success',role='qa');second=self.retain()
+        self.assertNotEqual(first,second);self.assertEqual(first.read_bytes(),original)
+        self.assertEqual(json.loads((first.parent/'report.json').read_text())['outcome'],'fail')
+
+    def test_missing_symlink_escape_and_malformed_declarations_refuse(self):
+        self.prepare();outside=self.root/'private';outside.write_text('must not be copied')
+        (self.local/'link').symlink_to(outside)
+        for name in ['../private',str(outside),'.pipeline-local/missing','.pipeline-local/link']:
+            self.report.write_text(json.dumps({'evidence_files':[name]}))
+            with self.subTest(name=name):
+                with self.assertRaises(Hold):self.retain()
+        for names in [{},[{}],['.pipeline-local/probe.py','.pipeline-local/probe.py']]:
+            self.report.write_text(json.dumps({'evidence_files':names}))
+            with self.assertRaises(Hold):self.retain()
+        self.assertFalse((self.ctl.root/'role-evidence').exists())
+
+    def test_corruption_wrong_identity_and_partial_copy_never_verify(self):
+        self.prepare();manifest=self.retain();data=json.loads(manifest.read_text())
+        with self.assertRaises(Hold):self.ctl.verify_role_evidence(manifest.parent,{**data['binding'],'role':'qa'})
+        (manifest.parent/'files/.pipeline-local/output.log').write_text('tampered')
+        with self.assertRaises(Hold):self.ctl.verify_role_evidence(manifest.parent,data['binding'])
+        manifest.unlink()
+        with self.assertRaises(Hold):self.ctl.verify_role_evidence(manifest.parent,data['binding'])
+        with self.assertRaises(Hold):self.retain()
+
+    def test_budget_cap_and_deleted_output_do_not_refund(self):
+        self.prepare()
+        grant=self.ctl.root/'evidence-budget.json';original=grant.read_text()
+        value=json.loads(original);value['allocation_bytes']=320000000;grant.write_text(json.dumps(value))
+        with self.assertRaises(Hold):self.retain()
+        value['allocation_bytes']=1;grant.write_text(json.dumps(value))
+        with self.assertRaises(Hold):self.retain()
+        grant.write_text(original);manifest=self.retain()
+        before=(self.ctl.root/'evidence-reservations.json').read_bytes()
+        import shutil
+        shutil.rmtree(manifest.parent)
+        with self.assertRaises(Hold):self.retain()
+        self.assertEqual((self.ctl.root/'evidence-reservations.json').read_bytes(),before)
+
+    def test_copy_interruption_keeps_intent_reservation_and_partial_files(self):
+        self.prepare();original=Path.open
+        def opened(path,*args,**kwargs):
+            if str(path).endswith('files/.pipeline-local/output.log') and args and args[0]=='xb':
+                raise OSError('synthetic copy interruption')
+            return original(path,*args,**kwargs)
+        with patch.object(Path,'open',opened):
+            with self.assertRaises(OSError):self.retain()
+        target=self.ctl.root/'role-evidence/PIT-1/3/reviewer/review-run'
+        self.assertTrue((target/'intent.json').exists())
+        self.assertTrue((target/'report.json').exists())
+        self.assertFalse((target/'manifest.json').exists())
+        with self.assertRaises(Hold):self.retain()
