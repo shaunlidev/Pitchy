@@ -115,7 +115,7 @@ class Serial(Controller):
         existing=lane.get('rework_pr_number')
         if existing:
             pr=self.github.api('pulls/'+str(existing))
-            if pr['state']!='open' or pr['base']['ref']!='main' or pr['head']['sha']!=lane['rework_public_commit'] or pr['head']['ref']!=branch:
+            if pr['state']!='open' or pr['base']['ref']!='main' or pr['head']['sha']!=lane.get('rework_expected_pr_head',lane['rework_public_commit']) or pr['head']['ref']!=branch:
                 raise Hold('Original PR changed/closed; no automatic replacement')
         token = 'publish:' + key + ':' + str(lane['generation'])
         self.reserve(token)
@@ -134,6 +134,7 @@ class Serial(Controller):
         if not url.startswith(expected) or not url[len(expected):].isdigit():
             raise Hold('Unexpected PR identity')
         lane['pr_number'], lane['branch'] = int(url[len(expected):]), branch
+        lane.pop('rework_expected_pr_head',None)
         self.save(lane); self.finish(token)
         for name, value in {'pr_url':url,'pr_number':str(lane['pr_number']),'artifact_sha':artifact['commit']}.items():
             self.call(['issue','metadata','set',lane['id'],'--key',name,'--value',value])
@@ -282,6 +283,115 @@ class Serial(Controller):
             results.append({'issue':lane['issue'],'status':pending['target']})
         return results
 
+    def recover_developer(self, key, generation, head, main, run_id, source, reason):
+        if os.environ.get('MULTICA_TASK_ID'):
+            raise Hold('Developer recovery requires an explicit operator')
+        self.require_fresh()
+        if not isinstance(source,str) or len(source)!=40 or any(c not in '0123456789abcdef' for c in source):
+            raise Hold('Full immutable native source commit required')
+        if not reason.strip():raise Hold('Concrete recovery reason required')
+        if self.db.execute("SELECT 1 FROM operations WHERE state='uncertain'").fetchone():
+            raise Hold('Uncertain operation requires reconciliation')
+        lane=self.lanes().get(key)
+        if (not lane or lane['phase']!='developer' or lane['generation']!=generation
+                or lane.get('artifact') or lane.get('pending') or lane.get('developer_recoveries',0)):
+            raise Hold('Only one unsubmitted Developer recovery in the exact generation is allowed')
+        if head!=lane.get('rework_public_commit') or not lane.get('contract') or not lane.get('developer_workspace'):
+            raise Hold('Preserved original rework and frozen contract required')
+        issue=self.issue(key)
+        if (issue['status'] not in ('todo','in_progress') or issue.get('assignee_id')!=self.c['developer']
+                or digest(issue.get('description') or '')!=lane['description_sha256']):
+            raise Hold('Developer ownership or original contract changed')
+        histories={}
+        for row in self.issues():
+            runs=self.call(['issue','runs',row['id'],'--output','json'])
+            if not isinstance(runs,list) or any(not isinstance(r,dict) or r.get('status') not in RUNNING | {'completed','failed','cancelled'} for r in runs):
+                raise Hold('Unknown runtime history')
+            if any(r['status'] in RUNNING for r in runs):raise Hold('Live runtime prevents recovery')
+            histories[row['id']]=runs
+        matches=[r for r in histories.get(lane['id'],[]) if r.get('id')==run_id and r.get('agent_id')==self.c['developer'] and r['status']=='completed']
+        if len(matches)!=1 or matches[0].get('work_dir')!=lane['developer_workspace']:
+            raise Hold('Completed bound Developer runtime required')
+        branch=matches[0].get('branch_name') or (matches[0].get('result') or {}).get('branch_name')
+        if not isinstance(branch,str) or not branch.startswith('agent/'):
+            raise Hold('Preserved native branch provenance missing')
+        repo=Path(self.c['repository'])
+        if git(repo,'branch','--show-current')!='main' or git(repo,'status','--porcelain'):
+            raise Hold('Canonical main must be clean')
+        if git(repo,'rev-parse','HEAD')!=main or self.github.api('commits/main')['sha']!=main or self.github.ci(main,'push')['state']!='success':
+            raise Hold('Exact successful current main required')
+        if git(repo,'rev-parse',source+'^{commit}')!=source or git(repo,'rev-parse','refs/heads/'+branch)!=source:
+            raise Hold('Preserved native source changed')
+        if 'branch refs/heads/'+branch+'\n' in git(repo,'worktree','list','--porcelain')+'\n':
+            raise Hold('Native branch still checked out')
+        paths=lane['contract']['allowed_paths']
+        if 'AGENTS.md' in paths:raise Hold('Recovery cannot publish governance instructions')
+        if not has_ancestor(repo,lane.get('native_head',''),source):raise Hold('Native source lost prior delivery')
+        changed=set(git(repo,'diff','--no-renames','--name-only',lane['native_head'],source).splitlines())
+        if not changed or changed-set(paths):raise Hold('Preserved native changes exceed declared source')
+        if has_ancestor(repo,main,head):raise Hold('No advanced-main integration to recover')
+        common=git(repo,'merge-base',main,head)
+        if set(git(repo,'diff','--no-renames','--name-only',common,main).splitlines()) & set(paths):
+            raise Hold('Main changed task paths; explicit source conflict resolution required')
+        prs=self.observation['issues'].get(key,{}).get('prs',[])
+        current=[p for p in prs if p['number']==lane.get('rework_pr_number') and p['head']==head]
+        if len(current)!=1 or current[0]['state'] not in ('OPEN','DRAFT') or current[0]['base']!='main' or current[0]['ci']['state']!='success':
+            raise Hold('Original active PR and exact-head CI required')
+        archive=self.root/'developer-recoveries'/f'{key}-g{generation}.json'
+        if archive.exists():raise Hold('Prior recovery exists; reconcile without replay')
+        token=f'recover-developer:{key}:{generation}:{run_id}'
+        self.reserve(token)
+        write_json(archive,{'original_lane':lane,'reason':reason,'runtime':run_id,'native_source':source,'public_head':head,'main':main})
+        def commit_tree(tree, parents, message):
+            argv=['git','-C',str(repo),'commit-tree',tree]
+            for parent in parents:argv+=['-p',parent]
+            result=subprocess.run(argv,input=message+'\n',capture_output=True,text=True,check=True,timeout=45)
+            return result.stdout.strip()
+        tree=git(repo,'merge-tree','--write-tree',head,main)
+        base=commit_tree(tree,[head,main],f'{key}: explicit recovery integration generation {generation}')
+        folder=archive.with_suffix('')
+        if folder.exists() or folder.is_symlink():raise Hold('Recovery workspace already exists')
+        folder=folder.parent.resolve()/folder.name;folder.mkdir()
+        native=folder/'native-source';public=folder/'public-source'
+        materialize(repo,source,native);materialize(repo,base,public)
+        for name in paths:
+            _path(native,name);_path(public,name)
+            src,dst=native/name,public/name
+            if src.exists():
+                if src.stat().st_size>2000000:raise Hold('Oversized recovered source')
+                dst.parent.mkdir(parents=True,exist_ok=True);shutil.copy2(src,dst)
+            elif dst.exists():dst.unlink()
+        recovered=checkpoint(public,key,generation,paths,repository=repo)['commit']
+        if set(git(repo,'diff','--no-renames','--name-only',main,recovered).splitlines())-set(paths):
+            raise Hold('Recovery public tree exceeds task scope')
+        native_tree=git(repo,'merge-tree','--write-tree',source,recovered)
+        native_head=commit_tree(native_tree,[source,recovered],f'{key}: preserve native recovery generation {generation}')
+        self.require_fresh()
+        fresh=self.issue(key)
+        if fresh.get('revision')!=issue.get('revision') or fresh.get('description')!=issue.get('description') or fresh.get('assignee_id')!=self.c['developer']:
+            raise Hold('Issue changed during recovery')
+        if self.github.api('commits/main')['sha']!=main:raise Hold('Main changed during recovery')
+        pr=self.github.api('pulls/'+str(lane['rework_pr_number']))
+        if pr['state']!='open' or pr['base']['ref']!='main' or pr['head']['sha']!=head or pr['head']['ref']!=lane['rework_branch']:
+            raise Hold('Original PR changed during recovery')
+        latest=self.call(['issue','runs',lane['id'],'--output','json'])
+        if not isinstance(latest,list) or [(r.get('id'),r.get('status')) for r in latest]!=[(r.get('id'),r.get('status')) for r in histories[lane['id']]]:
+            raise Hold('Target runtime history changed during recovery')
+        if 'branch refs/heads/'+branch+'\n' in git(repo,'worktree','list','--porcelain')+'\n':
+            raise Hold('Native branch acquired a live checkout during recovery')
+        self.require_fresh()
+        git(repo,'update-ref','refs/heads/'+branch,native_head,source)
+        updated=json.loads(json.dumps(lane))
+        updated.update(rework_base_commit=native_head,rework_public_commit=recovered,rework_expected_pr_head=head,
+                       developer_recoveries=1,developer_recovery=str(archive))
+        for name in ('developer_workspace','dependencies'):updated.pop(name,None)
+        self.save(updated)
+        write_json(folder/'mapping.json',{'native_source':source,'native_head':native_head,'public_head':head,'public_recovered':recovered,'main':main})
+        self.require_fresh()
+        self.call(['issue','rerun',lane['id'],'--output','json'])
+        self.finish(token)
+        return {'issue':key,'generation':generation,'repairs':lane['repairs'],'recovered_source':recovered,'status':'developer_retry_requested','archive':str(archive)}
+
     def retry_qa(self, key, head, reason):
         if os.environ.get('MULTICA_TASK_ID'):
             raise Hold('QA resubmission requires an explicit operator')
@@ -410,6 +520,8 @@ def main():
     q=sub.add_parser('activate');q.add_argument('--receipt',type=Path,required=True)
     q=sub.add_parser('approve-merge');q.add_argument('issue');q.add_argument('--approved-head',required=True)
     q=sub.add_parser('retry-qa');q.add_argument('issue');q.add_argument('--head',required=True);q.add_argument('--reason',required=True)
+    q=sub.add_parser('recover-developer');q.add_argument('issue');q.add_argument('--generation',type=int,required=True)
+    for field in ('head','main','run','source','reason'):q.add_argument('--'+field,required=True)
     for name in ('workspace','plan','checkout','stage','return'):
         q=sub.add_parser(name);q.add_argument('issue');q.add_argument('--workdir',type=Path,default=Path.cwd())
         if name in ('checkout','stage','return'):q.add_argument('--role',choices=['developer','reviewer','qa'],required=True)
@@ -419,13 +531,15 @@ def main():
     if SOURCE!=root:raise Hold('Execute the integrated canonical controller, never a task copy')
     config=configured(root);policy=json.loads((root/'tooling/pipeline/policy.json').read_text());state=root/'.state/pipeline'
     def call(a):return cli(['multica','--profile',config['profile'],'--workspace-id',config['workspace'],*a])
-    name='controller' if args.command in ('tick','activate','approve-merge','retry-qa') else 'issue-'+args.issue
+    name='controller' if args.command in ('tick','activate','approve-merge','retry-qa','recover-developer') else 'issue-'+args.issue
     if '/' in name or '..' in name:raise Hold('Invalid issue identity')
     with lock(state,name=name,wait=45):
         c=Serial(config,call,state,GitHub(policy['repository']),policy)
         try:
             if args.command=='activate':result=activate(root,config,state,c.github,call,args.receipt)
             elif args.command=='tick':result=c.tick(args.apply)
+            elif args.command=='recover-developer':
+                c.require_enabled();c.refresh(False);result=c.recover_developer(args.issue,args.generation,args.head,args.main,args.run,args.source,args.reason)
             elif args.command=='retry-qa':
                 c.require_enabled();c.refresh(False);result=c.retry_qa(args.issue,args.head,args.reason)
             elif args.command=='approve-merge':
