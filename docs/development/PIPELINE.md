@@ -62,3 +62,7 @@ Completion verifies that the actual single-parent squash commit is directly abov
 
 
 Before a controlled PR merge, the human operator records the approved head with canonical `serial.py approve-merge PIT-N --approved-head SHA` after human exact-head approval. This captures live pre-merge main and requires its CI, then performs no merge itself. Use the approved-head squash command immediately afterwards. A changed base requires explicit reconciliation; never infer the recorded base from the completed merge. Without the independent pre-merge binding, even a rebase merge can have the same final tree, so completion holds. For operator bootstrap PRs, capture the pre-merge main in the local activation receipt as `reviewed_integration_base` before merging; the same proof applies. Do not automatically re-sign activation after controller changes.
+
+### Reassessing a held QA report
+
+Required omissions still block unchanged acceptance rules. Scope exclusions and future integration belong in separate report fields, not required not_run. Operator-only `serial.py retry-qa PIT-N --head SHA --reason TEXT` archives the failed lane/receipt, checks fresh exact-head CI, unchanged contract, terminal prior QA and available capacity, then enqueues one new independent QA run on identical source. It never changes an old verdict to PASS. Same-artifact retry is capped at one; uncertain enqueue is not replayed. Each role/run has its own evidence directory. Source defects still use original-task developer rework and its existing repair cap.

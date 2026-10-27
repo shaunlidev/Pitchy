@@ -142,6 +142,14 @@ class AcceptanceTests(unittest.TestCase):
                 reports = copy.deepcopy(self.reports); reports[role].update(patch)
                 with self.assertRaises(AcceptanceError): validate_completion(self.contract, self.artifact, *reports, self.root)
 
+    def test_scope_notes_do_not_waive_required_checks(self):
+        reports=copy.deepcopy(self.reports)
+        reports[2]['scope_exclusions']=['Product models outside this contract']
+        reports[2]['pending_integration']=['Human-approved merge and exact main CI']
+        validate_completion(self.contract,self.artifact,*reports,self.root)
+        reports[2]['not_run']=['A required check']
+        with self.assertRaises(AcceptanceError):validate_completion(self.contract,self.artifact,*reports,self.root)
+
     def test_missing_controller_receipt_blocks_agent_pass(self):
         (self.root / "checks/browser_restart.json").unlink()
         with self.assertRaises(AcceptanceError): self.evaluate()

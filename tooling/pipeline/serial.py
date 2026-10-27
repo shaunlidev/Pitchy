@@ -282,6 +282,54 @@ class Serial(Controller):
             results.append({'issue':lane['issue'],'status':pending['target']})
         return results
 
+    def retry_qa(self, key, head, reason):
+        if os.environ.get('MULTICA_TASK_ID'):
+            raise Hold('QA resubmission requires an explicit operator')
+        self.require_fresh()
+        if not reason.strip():raise Hold('Concrete report-reconciliation reason required')
+        if self.db.execute("SELECT 1 FROM operations WHERE state='uncertain'").fetchone():
+            raise Hold('Uncertain operation requires reconciliation')
+        lane=self.lanes().get(key)
+        if not lane or lane['phase']!='held':
+            raise Hold('Only held QA evidence may be reassessed')
+        previous=lane.get('receipts',{}).get('qa',{})
+        if lane.get('pending') and (lane['pending']['role']!='qa' or lane['pending']['engineering_verified']):
+            raise Hold('QA is not held for evidence reconciliation')
+        if not previous.get('gaps') or previous.get('outcome')!='pass':
+            raise Hold('Source defects require original-task rework')
+        if head!=lane.get('artifact',{}).get('commit') or previous.get('commit')!=head:
+            raise Hold('Reassessment must keep the identical artifact')
+        if lane.get('qa_retries',0)>=1:raise Hold('QA evidence retry limit reached')
+        issue=self.issue(key)
+        if issue['status'] not in ('in_review','blocked'):
+            raise Hold('QA hold must be acknowledged by the scheduler')
+        if digest(issue.get('description') or '')!=lane['description_sha256']:
+            raise Hold('Original contract changed')
+        rows=self.issues()
+        if self.active_issues(rows)-{key}:raise Hold('Another runtime owns capacity')
+        runs=self.call(['issue','runs',lane['id'],'--output','json'])
+        if not isinstance(runs,list) or any(not isinstance(r,dict) or (not isinstance(r.get('id'),str) or r.get('status') not in RUNNING | {'completed','failed','cancelled'}) for r in runs):
+            raise Hold('Unknown QA runtime history')
+        if any(r['status'] in RUNNING for r in runs):
+            raise Hold('Target issue still has a live runtime')
+        if not any(r['id']==previous.get('run_id') and r.get('agent_id')==self.c['qa'] and r['status']=='completed' for r in runs):
+            raise Hold('Prior independent QA is not terminal')
+        pr=self.pr_for(lane)
+        if pr['state'] not in ('OPEN','DRAFT') or pr['base']!='main' or pr['ci']['state']!='success':
+            raise Hold('Active exact-head PR CI required')
+        token='retry-qa:'+key+':'+str(lane['generation'])+':'+head
+        self.reserve(token)
+        path=self.root/'qa-retries'/f'{key}-g{lane["generation"]}.json'
+        if path.exists():raise Hold('Prior retry evidence exists; reconcile without replay')
+        write_json(path,{'original_lane':lane,'reason':reason,'artifact':head,'prior_run':previous['run_id']})
+        next_lane=json.loads(json.dumps(lane));next_lane.pop('pending',None)
+        next_lane.get('receipts',{}).pop('qa',None);next_lane.get('checkouts',{}).pop('qa',None)
+        next_lane.update(phase='qa',qa_retries=1)
+        self.save(next_lane)
+        self.call(['issue','update',lane['id'],'--status',self.c['qa_status'],'--assignee-id',self.c['qa'],'--output','json'])
+        self.finish(token)
+        return {'issue':key,'status':self.c['qa_status'],'artifact':head,'qa_retries':1,'original_evidence':str(path)}
+
     def active_issues(self, issues):
         actors = {self.c[role] for role in ('developer', 'reviewer', 'qa')}
         active = {lane['issue'] for lane in self.lanes().values()
@@ -361,6 +409,7 @@ def main():
     q=sub.add_parser('tick');q.add_argument('--apply',action='store_true')
     q=sub.add_parser('activate');q.add_argument('--receipt',type=Path,required=True)
     q=sub.add_parser('approve-merge');q.add_argument('issue');q.add_argument('--approved-head',required=True)
+    q=sub.add_parser('retry-qa');q.add_argument('issue');q.add_argument('--head',required=True);q.add_argument('--reason',required=True)
     for name in ('workspace','plan','checkout','stage','return'):
         q=sub.add_parser(name);q.add_argument('issue');q.add_argument('--workdir',type=Path,default=Path.cwd())
         if name in ('checkout','stage','return'):q.add_argument('--role',choices=['developer','reviewer','qa'],required=True)
@@ -370,13 +419,15 @@ def main():
     if SOURCE!=root:raise Hold('Execute the integrated canonical controller, never a task copy')
     config=configured(root);policy=json.loads((root/'tooling/pipeline/policy.json').read_text());state=root/'.state/pipeline'
     def call(a):return cli(['multica','--profile',config['profile'],'--workspace-id',config['workspace'],*a])
-    name='controller' if args.command in ('tick','activate','approve-merge') else 'issue-'+args.issue
+    name='controller' if args.command in ('tick','activate','approve-merge','retry-qa') else 'issue-'+args.issue
     if '/' in name or '..' in name:raise Hold('Invalid issue identity')
     with lock(state,name=name,wait=45):
         c=Serial(config,call,state,GitHub(policy['repository']),policy)
         try:
             if args.command=='activate':result=activate(root,config,state,c.github,call,args.receipt)
             elif args.command=='tick':result=c.tick(args.apply)
+            elif args.command=='retry-qa':
+                c.require_enabled();c.refresh(False);result=c.retry_qa(args.issue,args.head,args.reason)
             elif args.command=='approve-merge':
                 c.require_enabled();c.refresh(False);result=c.record_merge_approval(args.issue,args.approved_head)
             else:

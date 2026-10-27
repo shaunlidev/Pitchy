@@ -378,3 +378,95 @@ class SerialCapacity(unittest.TestCase):
             self.assertTrue(mod.allowed_path('tooling/pipeline-status/' + name))
         for name in ('secrets.json', '.env', 'extra.py', '../pipeline/serial.py'):
             self.assertFalse(mod.allowed_path('tooling/pipeline-status/' + name))
+
+
+class QAResubmission(unittest.TestCase):
+    def setUp(self):
+        self.f=SerialBehavior();self.f.setUp();self.c=self.f.c
+        lane=self.f.lane(target='in_review');lane.pop('pending');lane['phase']='held'
+        lane['receipts']={'qa':{'outcome':'pass','gaps':['qa has not_run'],'commit':SHA,'run_id':'qa-old'}}
+        self.c.save(lane)
+        self.f.old_call.rows[0].update(status='in_review',assignee_id='owner')
+        self.f.old_call.runs['id-1']=[{'id':'qa-old','agent_id':'qa','status':'completed'}]
+
+    def tearDown(self):self.f.tearDown()
+
+    def test_archives_failure_and_persists_next_state_before_enqueue(self):
+        before=copy.deepcopy(self.c.lanes()['PIT-1']);original=self.c.call;observed=[]
+        def call(args):
+            if args[:2]==['issue','update']:
+                observed.append(self.c.lanes()['PIT-1']['phase'])
+                self.assertTrue((self.c.root/'qa-retries/PIT-1-g1.json').exists())
+            return original(args)
+        self.c.call=call
+        result=self.c.retry_qa('PIT-1',SHA,'Report scope reconciliation; no source changes')
+        self.assertEqual(result['qa_retries'],1);self.assertEqual(observed,['qa'])
+        archive=json.loads(Path(result['original_evidence']).read_text())
+        self.assertEqual(archive['original_lane'],before)
+        self.assertEqual(self.c.lanes()['PIT-1']['artifact'],before['artifact'])
+        self.assertNotIn('qa',self.c.lanes()['PIT-1']['receipts'])
+        count=len(self.f.old_call.writes)
+        with self.assertRaises(serial.Hold):self.c.retry_qa('PIT-1',SHA,'repeat')
+        self.assertEqual(len(self.f.old_call.writes),count)
+
+    def test_role_changed_head_contract_live_and_ci_refuse(self):
+        from unittest.mock import patch
+        import os
+        before=copy.deepcopy(self.c.lanes()['PIT-1'])
+        with patch.dict(os.environ,MULTICA_TASK_ID='actual-role'):
+            with self.assertRaises(serial.Hold):self.c.retry_qa('PIT-1',SHA,'reason')
+        with self.assertRaises(serial.Hold):self.c.retry_qa('PIT-1','b'*40,'reason')
+        self.f.old_call.rows[0]['description']+='changed'
+        with self.assertRaises(serial.Hold):self.c.retry_qa('PIT-1',SHA,'reason')
+        self.f.old_call.rows[0]['description']=before['description'] if 'description' in before else core.DESCRIPTION
+        self.f.old_call.runs['id-1'][0]['status']='running'
+        with self.assertRaises(serial.Hold):self.c.retry_qa('PIT-1',SHA,'reason')
+        self.f.old_call.runs['id-1'][0]['status']='completed'
+        self.c.observation['issues']['PIT-1']['prs'][0]['ci']['state']='cancelled'
+        with self.assertRaises(serial.Hold):self.c.retry_qa('PIT-1',SHA,'reason')
+        self.assertFalse(self.f.old_call.writes)
+
+    def test_lost_enqueue_response_stays_uncertain_and_cannot_replay(self):
+        self.f.old_call.fail_update=True
+        with self.assertRaises(TimeoutError):self.c.retry_qa('PIT-1',SHA,'reason')
+        count=len(self.f.old_call.writes)
+        with self.assertRaises(serial.Hold):self.c.retry_qa('PIT-1',SHA,'reason')
+        self.assertEqual(len(self.f.old_call.writes),count)
+        self.assertEqual(self.c.db.execute("SELECT count(*) FROM operations WHERE state='uncertain'").fetchone()[0],1)
+
+    def test_other_live_run_on_same_issue_refuses_and_retry_cap_is_explicit(self):
+        before=copy.deepcopy(self.c.lanes()['PIT-1'])
+        for status in serial.RUNNING:
+            for actor in ('qa','dev',None):
+                self.f.old_call.runs['id-1']=[{'id':'qa-old','agent_id':'qa','status':'completed'},
+                    {'id':'other-live','agent_id':actor,'status':status}]
+                with self.assertRaises(serial.Hold):self.c.retry_qa('PIT-1',SHA,'reason')
+                self.assertFalse(self.f.old_call.writes)
+                self.assertEqual(self.c.lanes()['PIT-1'],before)
+        self.f.old_call.runs['id-1']=[{'id':'qa-old','agent_id':'qa','status':'completed'}]
+        before['qa_retries']=1;self.c.save(before)
+        with self.assertRaisesRegex(serial.Hold,'retry limit'):self.c.retry_qa('PIT-1',SHA,'reason')
+        self.assertFalse(self.f.old_call.writes)
+
+    def test_expired_or_unknown_history_holds_before_write(self):
+        self.c.observation['deadline_monotonic']=0
+        with self.assertRaises(serial.Hold):self.c.retry_qa('PIT-1',SHA,'reason')
+        self.c.observation['deadline_monotonic']=time.monotonic()+120
+        self.f.old_call.runs['id-1']=[{'id':'qa-old','status':'unknown'}]
+        count=len(self.f.old_call.writes)
+        with self.assertRaises(serial.Hold):self.c.retry_qa('PIT-1',SHA,'reason')
+        self.assertEqual(len(self.f.old_call.writes),count)
+
+    def test_checks_keep_each_run_and_reject_same_run_resubmission(self):
+        root=self.c.root/'evidence/PIT-1/1/qa';root.mkdir(parents=True)
+        (root/'original.json').write_text('first failed report retained')
+        lane={'issue':'PIT-1','generation':1,'contract':{'checks':{}},'artifact':{'tree':'tree'}}
+        from unittest.mock import patch
+        import controller
+        with patch.object(controller,'verify_dependencies'),patch.object(controller,'verify_clean_tree'):
+            lane['dependencies']={}
+            one=self.c.checks(lane,'qa',self.f.f.repo,run_id='qa-one')
+            two=self.c.checks(lane,'qa',self.f.f.repo,run_id='qa-two')
+            self.assertNotEqual(one,two);self.assertTrue(one.is_dir());self.assertTrue(two.is_dir())
+            with self.assertRaises(serial.Hold):self.c.checks(lane,'qa',self.f.f.repo,run_id='qa-one')
+        self.assertEqual((root/'original.json').read_text(),'first failed report retained')
