@@ -54,4 +54,89 @@ class PushSafety(unittest.TestCase):
         for path in ['pitchroom-app/.env.local','pitchroom-app/packages/data.sqlite','pitchroom-app/apps/web/data.db']:
             with self.assertRaises(ValueError):check(path,b'synthetic')
 
-if __name__=='__main__':unittest.main()
+
+
+class ReviewedEvalSourceSafety(unittest.TestCase):
+    def test_only_five_exact_paths_are_exempted(self):
+        paths = {'pitchroom-app/docs/evals/task-acceptance-protocol.md'} | {
+            f'pitchroom-app/packages/evals/config/task-acceptance/pitchroom-r1/{name}'
+            for name in ['case.json', 'materials.json', 'oracle.json', 'task.md']
+        }
+        self.assertEqual(set(delivery.REVIEWED_EVAL_SOURCES), paths)
+        for path in paths:
+            self.assertTrue(delivery.allowed_path(path), path)
+            self.assertRegex(delivery.REVIEWED_EVAL_SOURCES[path], r'^[a-f0-9]{64}$')
+        for path in [
+            'pitchroom-app/docs/evals/another-contract.md',
+            'pitchroom-app/docs/evals/participant.md',
+            'pitchroom-app/docs/evals/task-acceptance-protocol.md.bak',
+            'pitchroom-app/packages/evals/config/task-acceptance/pitchroom-r2/materials.json',
+            'pitchroom-app/packages/evals/config/task-acceptance/pitchroom-r1/participant.json',
+            'pitchroom-app/packages/evals/config/task-acceptance/pitchroom-r1/raw-qa.json',
+            'pitchroom-app/packages/evals/config/task-acceptance/pitchroom-r1/other.json',
+        ]:
+            self.assertFalse(delivery.allowed_path(path), path)
+
+    def test_real_git_checks_all_pinned_content_history_and_file_modes(self):
+        import hashlib
+        source = 'pitchroom-app/docs/evals/task-acceptance-protocol.md'
+        fixture = 'pitchroom-app/packages/evals/config/task-acceptance/pitchroom-r1/materials.json'
+        approved = b'# Synthetic reviewed product requirements\n'
+        receipts = {source: hashlib.sha256(approved).hexdigest(), fixture: hashlib.sha256(approved).hexdigest()}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            original = subprocess.check_output
+            def g(*args):
+                return original(['git', *args], cwd=root, text=True).strip()
+            def commit(message):
+                g('add', '.'); g('commit', '-m', message)
+                return g('rev-parse', 'HEAD')
+            def output(argv, **kwargs):
+                return original(argv, cwd=root, **kwargs)
+            g('init', '-b', 'main'); g('config', 'user.name', 'Synthetic'); g('config', 'user.email', 'synthetic@example.invalid')
+            policy = root/'tooling/pitchroom-github-sync/allowed-files.json'
+            policy.parent.mkdir(parents=True); policy.write_text('[]')
+            for path in [source, fixture]:
+                p = root/path; p.parent.mkdir(parents=True, exist_ok=True); p.write_bytes(approved)
+            safe = commit('Synthetic exact receipts')
+            with patch.object(delivery, 'REVIEWED_EVAL_SOURCES', receipts), patch.object(delivery.subprocess, 'check_output', side_effect=output):
+                self.assertEqual(delivery.audit([safe]), 3)
+                for path in [source, fixture]:
+                    with self.subTest(path=path):
+                        p = root/path
+                        p.write_bytes(b'Customer records under an approved filename.\n')
+                        unsafe = commit('Synthetic changed approved path')
+                        p.write_bytes(approved); clean = commit('Synthetic restored head')
+                        self.assertEqual(delivery.audit([clean]), 3)
+                        with self.assertRaisesRegex(ValueError, 'content changed'):
+                            delivery.audit([safe, unsafe, clean])
+                        p.unlink(); p.symlink_to('outside')
+                        symlink = commit('Synthetic approved path symlink')
+                        with self.assertRaisesRegex(ValueError, 'mode'):
+                            delivery.audit([symlink])
+                        p.unlink(); p.write_bytes(approved); commit('Synthetic restore regular file')
+
+    def test_exact_receipt_does_not_bypass_secret_scan(self):
+        import hashlib
+        path = 'pitchroom-app/packages/evals/config/task-acceptance/pitchroom-r1/materials.json'
+        secret = ('sk-' + 'a'*32).encode()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); original = subprocess.check_output
+            def g(*args):
+                return original(['git', *args], cwd=root, text=True).strip()
+            g('init', '-b', 'main'); g('config', 'user.name', 'Synthetic'); g('config', 'user.email', 'synthetic@example.invalid')
+            policy = root/'tooling/pitchroom-github-sync/allowed-files.json'
+            policy.parent.mkdir(parents=True); policy.write_text('[]')
+            p = root/path; p.parent.mkdir(parents=True); p.write_bytes(secret)
+            g('add', '.'); g('commit', '-m', 'Synthetic secret control')
+            def output(argv, **kwargs):
+                return original(argv, cwd=root, **kwargs)
+            with patch.object(delivery, 'REVIEWED_EVAL_SOURCES', {path: hashlib.sha256(secret).hexdigest()}), patch.object(delivery.subprocess, 'check_output', side_effect=output):
+                with self.assertRaises(ValueError) as caught:
+                    delivery.audit([g('rev-parse', 'HEAD')])
+                self.assertIn('Possible credential', str(caught.exception))
+                self.assertNotIn(secret.decode(), str(caught.exception))
+
+
+if __name__ == '__main__':
+    unittest.main()
