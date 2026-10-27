@@ -1,3 +1,4 @@
+import {readPositioning} from "@pitchroom/domain";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
 import { type Story, type StoryProposal, type UnderstandingProposalV1, type PositioningProposalV1 } from "@pitchroom/domain";
@@ -15,7 +16,7 @@ async function setup(){
  const run=await repo.createRun(project.id,"understanding","test","synthetic");const understanding=await repo.completeRun({projectId:project.id,runId:run.id,expectedRevision:0,proposal});await repo.acceptUnderstanding({projectId:project.id,understandingId:understanding.id,expectedRevision:1,actorId:"test",idempotencyKey:"accept"});
  const direction=(id:string):PositioningProposalV1["directions"][number]=>({id,title:id,coreMessage:"Make review ownership clear",from:"Unclear ownership",to:"An identified reviewer",tradeoff:"No speed promise",excludes:["Performance claims"],evidence:[evidence],userInputIds:[]});
  const pos=await repo.createPositioning({projectId:project.id,understandingId:understanding.id,expectedRevision:1,idempotencyKey:"positioning",proposal:{schemaVersion:1,understandingVersionId:understanding.id,originalFraming:{title:"Original framing",coreMessage:"An approval tool"},directions:[direction("d1"),direction("d2")]}});
- await repo.applyPositioning({projectId:project.id,directionId:"d1",expectedRevision:1,idempotencyKey:"choose"});return {projectId:project.id,posId:pos.id,evidence};
+ await repo.applyPositioning({ expectedPositioning:readPositioning((await repo.getCurrentPositioning(project.id))!).head,projectId:project.id,directionId:"d1",expectedRevision:1,idempotencyKey:"choose"});return {projectId:project.id,posId:pos.id,evidence};
 }
 function candidate(p:StoryProposal):Story {
  const e=p.snapshot.positioning.directions[0]!.evidence[0]!;
@@ -50,7 +51,7 @@ describe("Story PostgreSQL transactions",()=>{
  it.each([false,true])("rejects an invalid completion before persisting candidate content, stale=%s", async stale => {
   const {projectId} = await setup();
   const started = await stories.start({projectId,expected:{storyId:null,generation:0},commandId:"invalid-result",request:{kind:"develop_direction"},model:"synthetic"});
-  if (stale) await repo.applyPositioning({projectId,directionId:"d2",expectedRevision:1,idempotencyKey:"change-direction"});
+  if (stale) await repo.applyPositioning({ expectedPositioning:readPositioning((await repo.getCurrentPositioning(projectId))!).head,projectId,directionId:"d2",expectedRevision:1,idempotencyKey:"change-direction"});
   const invalid = candidate(started.proposal);
   invalid.blocks[0]!.title = "";
   await expect(stories.finish(started.proposal,{story:invalid,responseToJudgment:"Invalid candidate"})).rejects.toThrow();
@@ -78,7 +79,7 @@ describe("Story PostgreSQL transactions",()=>{
  });
  it("rejects direction changes during generation and lets stale proposals be dismissed",async()=>{
   const {projectId,posId}=await setup();const started=await stories.start({projectId,expected:{storyId:null,generation:0},commandId:"running",request:{kind:"develop_direction"},model:"test"});
-  await repo.applyPositioning({projectId,directionId:"d2",expectedRevision:1,idempotencyKey:"changed"});expect((await repo.getCurrentPositioning(projectId))?.id).toBe(posId);
+  await repo.applyPositioning({ expectedPositioning:readPositioning((await repo.getCurrentPositioning(projectId))!).head,projectId,directionId:"d2",expectedRevision:1,idempotencyKey:"changed"});expect((await repo.getCurrentPositioning(projectId))?.id).toBe(posId);
   const completed=await stories.finish(started.proposal,{story:candidate(started.proposal),responseToJudgment:"Late result"});expect(completed.state.kind).toBe("stale");
   await expect(stories.decide({projectId,proposalId:completed.id,expected:completed.baseHead,commandId:"bad-apply",decision:"apply"})).rejects.toThrow("fresh");await stories.decide({projectId,proposalId:completed.id,expected:completed.baseHead,commandId:"dismiss",decision:"keep_current"});expect((await stories.read(projectId)).proposals[0]!.state.kind).toBe("kept");
  });

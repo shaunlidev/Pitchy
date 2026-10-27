@@ -1,5 +1,5 @@
 import { and, eq, inArray, isNull, sql } from "drizzle-orm";
-import { assertStoryHead, sameStoryOrigin, compareStories, exactStoryEdit, PitchroomError, sourceFingerprint, storyIsFresh, storySchema, storyProposalSchema, storyToDeck, storyVersionSchema, type Story, type StoryHead, type StoryProposal, type StoryRequest, type StorySnapshot, type StoryWorkspace } from "@pitchroom/domain";
+import { readPositioning, assertStoryHead, sameStoryOrigin, compareStories, exactStoryEdit, PitchroomError, sourceFingerprint, storyIsFresh, storySchema, storyProposalSchema, storyToDeck, storyVersionSchema, type Story, type StoryHead, type StoryProposal, type StoryRequest, type StorySnapshot, type StoryWorkspace } from "@pitchroom/domain";
 import type { Database } from "./repository";
 import * as schema from "./schema";
 
@@ -12,7 +12,8 @@ async function context(db: Store, projectId: string) {
   const rows = await db.select().from(schema.sources).where(and(eq(schema.sources.projectId, projectId), isNull(schema.sources.deletedAt)));
   const chunks = rows.length ? await db.select().from(schema.sourceChunks).where(inArray(schema.sourceChunks.sourceId, rows.map(s => s.id))) : [];
   const sources = rows.map(row => ({ id: row.id, projectId, name: row.name, mediaType: row.mediaType, contentHash: row.contentHash, chunks: chunks.filter(c => c.sourceId === row.id).map(c => ({ id: c.id, sourceId: c.sourceId, text: c.text, startOffset: c.startOffset, endOffset: c.endOffset })) }));
-  return { project, positioning, sources, current: { phase: project.phase, understandingId: project.currentUnderstandingId, positioningId: project.currentPositioningId, directionId: positioning?.appliedDirectionId ?? null, sources } };
+  const applied=positioning ? readPositioning(positioning).applied : null;
+  return { project, positioning, sources, current: { phase: project.phase, understandingId: project.currentUnderstandingId, positioningId: applied?.positioningId ?? null, positioningDecisionId:applied?.decisionId, directionId: applied?.choice.id ?? null, sources } };
 }
 async function receipt(db: Store, input: { projectId: string; commandId: string }, type: string, hash: string) {
   const row = await db.query.commandReceipts.findFirst({ where: and(eq(schema.commandReceipts.projectId, input.projectId), eq(schema.commandReceipts.idempotencyKey, input.commandId)) });
@@ -67,7 +68,8 @@ export class StoryRepository {
       const userText = input.request.kind === "revise_story" ? input.request.judgment : input.request.kind === "exact_edit" ? `${input.request.title}\n${input.request.body}` : undefined;
       const userInput = prior?.snapshot.userInput ?? (userText ? { id: crypto.randomUUID(), text: userText } : null);
       if (userInput && !prior) await tx.insert(schema.userInputs).values({ id:userInput.id, projectId:input.projectId, kind:"story_judgment", text:userInput.text, actorId:"local-user", targetVersion:ctx.project.version, idempotencyKey:input.commandId });
-      const snapshot: StorySnapshot = prior ? { ...prior.snapshot, model:input.model, promptVersion:input.promptVersion??"story-v1" } : { origin: { understandingVersionId:understanding.id, positioningVersionId:ctx.positioning.id, directionId:ctx.positioning.appliedDirectionId, sourceFingerprint:sourceFingerprint(ctx.sources) }, understanding:understanding.proposal, positioning:ctx.positioning.proposal, sources:ctx.sources, before, request:input.request, userInput, model:input.model, promptVersion:input.promptVersion??"story-v1" };
+      const applied=readPositioning(ctx.positioning).applied!;
+      const snapshot: StorySnapshot = prior ? { ...prior.snapshot, model:input.model, promptVersion:input.promptVersion??"story-v1" } : { origin: { understandingVersionId:understanding.id, positioningVersionId:applied.positioningId, positioningDecisionId:applied.decisionId ?? undefined, directionId:applied.choice.id, sourceFingerprint:sourceFingerprint(ctx.sources) }, understanding:understanding.proposal, positioning:ctx.positioning.proposal, selectedChoice:structuredClone(applied.choice), sources:ctx.sources, before, request:input.request, userInput, model:input.model, promptVersion:input.promptVersion??"story-v1" };
       const id = crypto.randomUUID();
       const proposal: StoryProposal = { id, projectId:input.projectId, commandId:input.commandId, createdAt:new Date().toISOString(), baseHead:input.expected, snapshot, state:{kind:"running",attemptId:crypto.randomUUID(),deadline:new Date(Date.now()+120000).toISOString()} };
       await tx.insert(schema.storyProposals).values({ id, projectId:input.projectId,commandId:input.commandId,requestHash:hash,payload:proposal });

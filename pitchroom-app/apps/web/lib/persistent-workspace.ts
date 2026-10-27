@@ -1,3 +1,4 @@
+import {readPositioning,positioningSelectionKey,assertPositioningHead,type PositioningHead,type PositioningWordingInput} from "@pitchroom/domain";
 import { TopicMaterialRepository } from "@pitchroom/persistence";
 import { BriefRepository } from "@pitchroom/persistence";
 import { workflowEventLabel } from "./workspace-ux-state";
@@ -99,7 +100,7 @@ export async function readPersistentState(mode: "postgres-fake" | "live" = "post
   const currentProject = await project();
   const [sources, versions, eventRows, positioning, positioningVersions, deck, deckVersions, workflowRuns] = await Promise.all([repository().listSources(currentProject.id), repository().listVersions(currentProject.id), repository().listEvents(currentProject.id), repository().getCurrentPositioning(currentProject.id), repository().listPositioningVersions(currentProject.id), repository().getCurrentDeck(currentProject.id), repository().listDeckVersions(currentProject.id), repository().listWorkflowRuns(currentProject.id)]);
   const story = await new StoryRepository(repository().db).read(currentProject.id);
-  const deckStale = Boolean(deck && (deck.proposal.schemaVersion === 2 ? story.stale || deck.proposal.storyVersionId !== story.head.storyId || deck.proposal.storyGeneration !== story.head.generation : (deck.understandingId !== currentProject.currentUnderstandingId || deck.positioningId !== currentProject.currentPositioningId || deck.appliedDirectionId !== positioning?.appliedDirectionId)));
+  const deckStale = Boolean(deck && (deck.proposal.schemaVersion === 2 ? story.stale || deck.proposal.storyVersionId !== story.head.storyId || deck.proposal.storyGeneration !== story.head.generation : (deck.understandingId !== currentProject.currentUnderstandingId || !positioning || !readPositioning(positioning).applied || positioningSelectionKey({positioningId:deck.proposal.positioningVersionId,decisionId:deck.proposal.positioningDecisionId,directionId:deck.proposal.appliedDirectionId}) !== positioningSelectionKey(readPositioning(positioning).applied!))));
   const streamedEvents = mergeWorkspaceStreamEvents(
     eventRows.map(({ event }) => ({ ...eventView(event.type, event.payload), at: event.createdAt.toISOString() })),
     workflowRuns.map((run) => ({ id: run.id, kind: run.kind as "positioning" | "deck" | "story", status: run.status as "running" | "completed" | "failed", failureMessage: run.failureMessage ?? undefined, events: run.events })),
@@ -113,8 +114,8 @@ export async function readPersistentState(mode: "postgres-fake" | "live" = "post
     sources: sources.map((source) => ({ sourceId: source.id, name: source.name, kind: source.kind ?? "file", mediaType: source.mediaType as "text/plain" | "text/markdown", content: reconstructSourceContent(source.chunks), contentHash: source.contentHash, chunks: source.chunks.map((chunk, ordinal) => ({ ...chunk, ordinal })), agentReview: agentReviewForChunks(source.chunks) })),
     versions: versions.map((version) => ({ id: version.id, number: version.version, parentUnderstandingId: version.parentUnderstandingId ?? undefined, clarificationTaskId: version.clarificationTaskId ?? undefined, proposal: version.proposal, createdBy: version.createdBy === "user" ? "user" : "agent", createdAt: version.createdAt.toISOString() })),
     currentVersionId: currentProject.currentUnderstandingId ?? undefined,
-    positioning: positioning ? { id: positioning.id, number: positioning.version, proposal: positioning.proposal, appliedDirectionId: positioning.appliedDirectionId ?? undefined, previousAppliedDirectionId: positioning.previousAppliedDirectionId ?? undefined, createdAt: positioning.createdAt.toISOString() } : undefined,
-    positioningVersions: positioningVersions.map((version) => ({ id: version.id, number: version.version, proposal: version.proposal, appliedDirectionId: version.appliedDirectionId ?? undefined, previousAppliedDirectionId: version.previousAppliedDirectionId ?? undefined, createdAt: version.createdAt.toISOString() })),
+    positioning: positioning ? { head:readPositioning(positioning).head, id: positioning.id, number: positioning.version, proposal: positioning.proposal, appliedDirectionId: positioning.appliedDirectionId ?? undefined, previousAppliedDirectionId: positioning.previousAppliedDirectionId ?? undefined, createdAt: positioning.createdAt.toISOString() } : undefined,
+    positioningVersions: positioningVersions.map((version) => ({ head:readPositioning(version).head, id: version.id, number: version.version, proposal: version.proposal, appliedDirectionId: version.appliedDirectionId ?? undefined, previousAppliedDirectionId: version.previousAppliedDirectionId ?? undefined, createdAt: version.createdAt.toISOString() })),
     deck: deck ? { id: deck.id, number: deck.version, proposal: deck.proposal, createdBy: deck.createdBy === "user" ? "user" as const : "agent" as const, createdAt: deck.createdAt.toISOString(), stale: deckStale } : undefined,
     deckVersions: deckVersions.map((version) => ({ id: version.id, number: version.version, proposal: version.proposal, createdBy: version.createdBy === "user" ? "user" as const : "agent" as const, createdAt: version.createdAt.toISOString() })),
     workflowRuns: workflowRuns.map((run) => ({ id: run.id, kind: run.kind as "positioning" | "deck" | "story", status: run.status as "running" | "completed" | "failed", failureMessage: run.failureMessage ?? undefined, events: run.events })),
@@ -185,7 +186,7 @@ export async function acceptPersistent(expectedRevision: number, idempotencyKey:
   return readPersistentState();
 }
 
-export async function generatePersistentPositioning(expectedRevision: number, idempotencyKey: string, mode: "postgres-fake" | "live" = "postgres-fake") {
+export async function generatePersistentPositioning(expectedRevision: number, idempotencyKey: string, mode: "postgres-fake" | "live" = "postgres-fake", expectedPositioning:PositioningHead = {positioningId:null,decisionId:null}) {
   const currentProject = await project();
   if (currentProject.phase !== "accepted" || currentProject.version !== expectedRevision || !currentProject.currentUnderstandingId) throw new PitchroomError("CONFLICT", "Accept the current understanding before creating positioning directions.");
   const version = (await repository().listVersions(currentProject.id)).find((candidate) => candidate.id === currentProject.currentUnderstandingId);
@@ -203,11 +204,12 @@ export async function generatePersistentPositioning(expectedRevision: number, id
     throw new PitchroomError("CONFLICT", "This positioning command is already running.");
   }
   try {
+    assertPositioningHead(await repository().getCurrentPositioning(currentProject.id),expectedPositioning);
     await repository().appendWorkflowEvent(run.id, "context_loaded", `${chunks.length} source chunks locked`);
     await repository().appendWorkflowEvent(run.id, "model_requested", "Generating distinct positioning directions");
     const proposal = await runner.run({ understandingVersionId: version.id, understanding: version.proposal, chunks });
     await repository().appendWorkflowEvent(run.id, "proposal_validated", `${proposal.directions.length} directions passed evidence validation`);
-    const created = await repository().createPositioning({ projectId: currentProject.id, understandingId: version.id, expectedRevision, proposal, idempotencyKey });
+    const created = await repository().createPositioning({ projectId: currentProject.id, understandingId: version.id, expectedRevision, expectedPositioning, proposal, idempotencyKey });
     await repository().completeWorkflowRun(run.id, created.id);
     return readPersistentState(mode);
   } catch (error) {
@@ -216,27 +218,32 @@ export async function generatePersistentPositioning(expectedRevision: number, id
   }
 }
 
-export async function applyPersistentPositioning(directionId: string, expectedRevision: number, idempotencyKey: string) {
+export async function applyPersistentPositioning(directionId: string, expectedRevision: number, idempotencyKey: string, expectedPositioning:PositioningHead) {
   const currentProject = await project();
-  await repository().applyPositioning({ projectId: currentProject.id, directionId, expectedRevision, idempotencyKey });
+  await repository().applyPositioning({ projectId: currentProject.id, directionId, expectedRevision, expectedPositioning, idempotencyKey });
   return readPersistentState();
 }
 
-export async function undoPersistentPositioning(expectedRevision: number, idempotencyKey: string) {
+export async function undoPersistentPositioning(expectedRevision: number, idempotencyKey: string, expectedPositioning:PositioningHead) {
   const currentProject = await project();
-  await repository().undoPositioning({ projectId: currentProject.id, expectedRevision, idempotencyKey });
+  await repository().undoPositioning({ projectId: currentProject.id, expectedRevision, expectedPositioning, idempotencyKey });
   return readPersistentState();
 }
 
-export async function adjustPersistentPositioning(directionId: string, mode: "headline" | "judgment_note", text: string, expectedRevision: number, idempotencyKey: string) {
+export async function adjustPersistentPositioning(directionId: string, mode: "headline" | "judgment_note", text: string, expectedRevision: number, idempotencyKey: string, expectedPositioning:PositioningHead) {
   const currentProject = await project();
-  await repository().adjustPositioning({ projectId: currentProject.id, directionId, mode, text, expectedRevision, idempotencyKey });
+  await repository().adjustPositioning({ projectId: currentProject.id, directionId, mode, text, expectedRevision, expectedPositioning, idempotencyKey });
   return readPersistentState();
 }
 
-export async function generatePersistentDeck(expectedRevision: number, idempotencyKey: string, mode: "postgres-fake" | "live" = "postgres-fake") {
+export async function savePersistentPositioningWording(input:{wording:PositioningWordingInput;expectedRevision:number;expectedPositioning:PositioningHead;commandId:string}) {
+  const currentProject=await project();await repository().savePositioningWording({...input,projectId:currentProject.id,idempotencyKey:input.commandId});return readPersistentState();
+}
+
+export async function generatePersistentDeck(expectedRevision: number, idempotencyKey: string, mode: "postgres-fake" | "live" = "postgres-fake", expectedPositioning?:PositioningHead) {
   const currentProject = await project();
   const positioning = await repository().getCurrentPositioning(currentProject.id);
+  if(expectedPositioning)assertPositioningHead(positioning,expectedPositioning);
   if (currentProject.phase !== "accepted" || currentProject.version !== expectedRevision || !currentProject.currentUnderstandingId || !positioning?.appliedDirectionId) throw new PitchroomError("CONFLICT", "Apply a current positioning direction before creating a deck.");
   const understanding = (await repository().listVersions(currentProject.id)).find((candidate) => candidate.id === currentProject.currentUnderstandingId);
   if (!understanding) throw new PitchroomError("NOT_FOUND", "The accepted understanding was not found.");
@@ -254,9 +261,9 @@ export async function generatePersistentDeck(expectedRevision: number, idempoten
   try {
     await repository().appendWorkflowEvent(run.id, "inputs_locked", `understanding ${understanding.id}; positioning ${positioning.id}`);
     await repository().appendWorkflowEvent(run.id, "model_requested", "Building the discussion deck from the applied direction");
-    const proposal = await runner.run({ understandingVersionId: understanding.id, understanding: understanding.proposal, positioningVersionId: positioning.id, positioning: positioning.proposal, appliedDirectionId: positioning.appliedDirectionId, chunks });
+    const proposal = await runner.run({ understandingVersionId: understanding.id, understanding: understanding.proposal, positioningVersionId: positioning.id, positioning: positioning.proposal, appliedDirectionId: positioning.appliedDirectionId, positioningDecisionId:readPositioning(positioning).applied?.decisionId ?? undefined, chunks });
     await repository().appendWorkflowEvent(run.id, "draft_validated", "five-page schema and evidence passed");
-    const deck = await repository().createDeck({ projectId: currentProject.id, understandingId: understanding.id, positioningId: positioning.id, appliedDirectionId: positioning.appliedDirectionId, expectedRevision, proposal, idempotencyKey });
+    const deck = await repository().createDeck({ projectId: currentProject.id, understandingId: understanding.id, positioningId: positioning.id, appliedDirectionId: positioning.appliedDirectionId, expectedRevision, expectedPositioning:readPositioning(positioning).head, proposal, idempotencyKey });
     await repository().completeWorkflowRun(run.id, deck.id); return readPersistentState(mode);
   } catch (error) {
     if (await recoverPersistedWorkflowResult({ projectId: currentProject.id, idempotencyKey, commandType: "generate_deck", runId: run.id, runStatus: run.status })) return readPersistentState(mode);

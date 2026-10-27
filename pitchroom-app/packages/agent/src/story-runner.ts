@@ -1,7 +1,8 @@
+import {assertPositioningChoiceForAgent,positioningAgentContext} from "./positioning-choice-context";
 import { storyReferenceContract } from "./story-reference-contract";
 import { outputLanguageInstruction } from "./output-language";
 import { z } from "zod";
-import { activeUnderstanding, PitchroomError, storyContentSchema, understandingStoryUnknowns, validateStory, type StorySnapshot } from "@pitchroom/domain";
+import { activeUnderstanding, positioningHumanWording, storySelectedChoice, PitchroomError, storyContentSchema, understandingStoryUnknowns, validateStory, type StorySnapshot } from "@pitchroom/domain";
 import { isInstructionLikeSourceText } from "./prompt-safety";
 
 export const storyPromptVersion = "story-v5-body-budget";
@@ -9,9 +10,10 @@ export type StoryRunner = { run(snapshot: StorySnapshot): Promise<{ story: Retur
 export class ResponsesStoryRunner implements StoryRunner {
   constructor(private readonly config: { apiKey: string; model: string; baseURL: string; fetch?: typeof fetch }) {}
   async run(snapshot: StorySnapshot) {
+    const selected=storySelectedChoice(snapshot);assertPositioningChoiceForAgent(selected,snapshot.sources.flatMap(source=>source.chunks));
     const eligibleSources = snapshot.sources.map(source=>({...source,chunks:source.chunks.filter(c=>!isInstructionLikeSourceText(c.text))}));
     const { resultSchema, referenceContract } = storyReferenceContract(snapshot);
-    const input = { ...snapshot, referenceContract, sources: eligibleSources, understanding: activeUnderstanding(snapshot.understanding), requiredUnknowns: understandingStoryUnknowns(snapshot) };
+    const input = { ...snapshot, positioning:positioningAgentContext(snapshot.positioning,selected), selectedChoice:selected, referenceContract, sources: eligibleSources, understanding: activeUnderstanding(snapshot.understanding), requiredUnknowns: understandingStoryUnknowns(snapshot) };
     const deepSeek = new URL(this.config.baseURL).hostname === "api.deepseek.com";
     const response = await (this.config.fetch ?? fetch)(`${this.config.baseURL.replace(/\/+$/, "")}/responses`, {
       method:"POST",headers:{authorization:`Bearer ${this.config.apiKey}`,"content-type":"application/json"},signal:AbortSignal.timeout(110000),
@@ -40,17 +42,20 @@ export function createLiveStoryRunner(config:{apiKey?:string;model?:string;baseU
 }
 export class SyntheticStoryRunner implements StoryRunner {
   async run(snapshot:StorySnapshot) {
-    const direction=snapshot.positioning.directions.find(d=>d.id===snapshot.origin.directionId);
-    const core=snapshot.origin.directionId==="original"?snapshot.positioning.originalFraming.coreMessage:direction?.coreMessage??"A discussion draft";
-    const evidence=direction?.evidence??snapshot.positioning.directions[0]?.evidence??[];
+    const selected=storySelectedChoice(snapshot);assertPositioningChoiceForAgent(selected,snapshot.sources.flatMap(source=>source.chunks));
+    const direction=selected.kind==="ai_direction"?selected.direction:undefined;
+    const recommendation=positioningAgentContext(snapshot.positioning,selected).recommendation;
+    const core=selected.text;
+    const evidence=selected.kind==="source_quote"?[{sourceId:selected.sourceId,chunkId:selected.chunkId,quote:selected.text}]:direction?.evidence??snapshot.positioning.directions[0]?.evidence??[];
     const bases=evidence.map((e,i)=>({kind:"source_excerpt" as const,id:`basis-${i}`,...e,statement:"Saved source record, not a verified outcome.",nature:"record" as const}));
     const unknowns=understandingStoryUnknowns(snapshot);
     const first=(text:string)=>text.split(/\s+/).slice(0,40).join(" ");
     const content:z.infer<typeof storyContentSchema>=snapshot.before&&snapshot.request.kind==="revise_story"?structuredClone(snapshot.before):{
       audience:direction?.audience??"The project decision-maker",coreMessage:core,
-      strategicRationale:{choice:snapshot.positioning.recommendation?.judgment??"Retain the selected direction.",tradeoff:direction?.tradeoff??"Original framing retained.",exclusions:direction?.excludes??[],conditionsToReconsider:snapshot.positioning.recommendation?.conditionsToReconsider??[],basisRefs:bases.map(b=>b.id)},bases,unknowns,
-      blocks:[{id:"promise",role:"promise",title:core,body:first(direction?.to??core),emphasis:[],basisRefs:bases.map(b=>b.id),unknownIds:[],wording:"agent_proposed"},{id:"choice",role:"rationale",title:"Why this choice",body:first(direction?.tradeoff??"Keep the original framing for discussion."),emphasis:[],basisRefs:bases.map(b=>b.id),unknownIds:[],wording:"agent_proposed"},{id:"questions",role:"open_questions",title:"What remains open",body:"Discuss these unanswered questions before making a commitment.",emphasis:[],basisRefs:[],unknownIds:unknowns.map(u=>u.id),wording:"agent_proposed"}],
+      strategicRationale:{choice:direction ? recommendation?.judgment??"Retain the selected direction." : "Retain the explicitly selected wording without treating it as verified evidence.",tradeoff:direction?.tradeoff??"Keep the explicitly selected wording.",exclusions:direction?.excludes??[],conditionsToReconsider:direction ? recommendation?.conditionsToReconsider??[] : ["Review this wording when new source material or audience evidence changes its applicability."],basisRefs:bases.map(b=>b.id)},bases,unknowns,
+      blocks:[{id:"promise",role:"promise",title:core,body:first(direction?.to??core),emphasis:[],basisRefs:bases.map(b=>b.id),unknownIds:[],wording:"agent_proposed"},{id:"choice",role:"rationale",title:"Why this choice",body:first(direction?.tradeoff??"Keep the explicitly selected wording for discussion."),emphasis:[],basisRefs:bases.map(b=>b.id),unknownIds:[],wording:"agent_proposed"},{id:"questions",role:"open_questions",title:"What remains open",body:"Discuss these unanswered questions before making a commitment.",emphasis:[],basisRefs:[],unknownIds:unknowns.map(u=>u.id),wording:"agent_proposed"}],
     };
+    const humanWording=positioningHumanWording(selected);if(humanWording) {const id=`wording-${humanWording.userInputId}`;if(!content.bases.some(b=>b.id===id))content.bases.push({kind:"consultant_judgment",id,userInputId:humanWording.userInputId,statement:humanWording.text});if(!content.blocks[0]!.basisRefs.includes(id))content.blocks[0]!.basisRefs.push(id);}
     if(snapshot.request.kind==="revise_story"&&snapshot.userInput){const id=`input-${snapshot.userInput.id}`;content.bases.push({kind:"consultant_judgment",id,userInputId:snapshot.userInput.id,statement:snapshot.request.judgment});const block=content.blocks[1];if(block){block.body=first(snapshot.request.judgment);block.basisRefs=[id];block.emphasis=["Synthetic fixture uses the saved judgment literally."];}}
     const body={audience:content.audience,coreMessage:content.coreMessage,strategicRationale:content.strategicRationale,bases:content.bases,unknowns:content.unknowns,blocks:content.blocks};
     return {story:validateStory(body,snapshot),responseToJudgment:"Synthetic fixture only. This is a deterministic illustration, not live AI interpretation."};

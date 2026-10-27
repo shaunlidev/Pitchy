@@ -1,3 +1,4 @@
+import {resolvePositioningChoice} from "@pitchroom/domain";
 import { z } from "zod";
 import { beforeEach, describe, expect, it } from "vitest";
 import { compareStories, validateStory, assertStoryHead, exactStoryEdit, storySchema, storyContentSchema, type StorySnapshot } from "@pitchroom/domain";
@@ -60,7 +61,8 @@ describe("story boundary regressions", () => {
     content.blocks.forEach(block => { block.unknownIds = []; });
     const revised: StorySnapshot = { ...snapshot, before: story, request: { kind: "revise_story", judgment: "Make the opening sharper." }, userInput: { id: "judgment", text: "Make the opening sharper." } };
     expect(() => validateStory(content, revised)).toThrow("remove or resolve");
-    const next: StorySnapshot = { ...snapshot, before: story, origin: { ...snapshot.origin, understandingVersionId: "accepted-v2", positioningVersionId: "positioning-v2" }, understanding: { ...snapshot.understanding, gaps: [] } };
+    const nextPositioning={...snapshot.positioning,understandingVersionId:"accepted-v2",decisionJournal:undefined};
+    const next: StorySnapshot = { ...snapshot, before: story,positioning:nextPositioning,selectedChoice:resolvePositioningChoice(nextPositioning,snapshot.origin.directionId), origin: { ...snapshot.origin, understandingVersionId: "accepted-v2", positioningVersionId: "positioning-v2",positioningDecisionId:`legacy:positioning-v2:${snapshot.origin.directionId}` }, understanding: { ...snapshot.understanding, gaps: [] } };
     expect(validateStory(content, next).unknowns).toEqual([]);
   });
 });

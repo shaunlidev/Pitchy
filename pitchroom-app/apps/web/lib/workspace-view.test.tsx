@@ -147,8 +147,8 @@ describe("WorkspaceView state matrix", () => {
     const proposed = generateFixturePositioning();
     const html = render(proposed, { initialDestination: "positioning" });
     expect(html).toContain("Preview only");
-    expect(html).toContain("Original framing");
-    expect(html).toContain("Keep original");
+    expect(html).toContain("Accepted interpretation");
+    expect(html).toContain("Keep accepted interpretation");
     expect(html).toContain("Product mechanism");
     expect(html).toContain("Human tension");
     expect(html).toContain("Agent recommendation");

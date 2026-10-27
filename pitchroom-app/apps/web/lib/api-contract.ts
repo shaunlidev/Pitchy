@@ -1,7 +1,7 @@
 import { topicTaskSelectionSchema, topicRefSchema, topicMaterialSchema } from "@pitchroom/domain";
 import { briefWorkspaceSchema, saveBriefSchema } from "@pitchroom/domain";
 import { z } from "zod";
-import { clarificationTaskSchema, clarificationResultSchema, acceptedMediaTypes, storyHeadSchema, storyRequestSchema, storyWorkspaceSchema, deckProposalSchema, positioningProposalV1Schema, sourceChunkSchema, understandingProposalV1Schema } from "@pitchroom/domain";
+import { positioningHeadSchema, positioningWordingInputSchema, clarificationTaskSchema, clarificationResultSchema, acceptedMediaTypes, storyHeadSchema, storyRequestSchema, storyWorkspaceSchema, deckProposalSchema, positioningProposalV1Schema, sourceChunkSchema, understandingProposalV1Schema } from "@pitchroom/domain";
 
 const commandId = z.string().trim().min(1).max(200).optional();
 const expectedRevision = z.number().int().nonnegative();
@@ -33,11 +33,12 @@ export const workspaceCommandSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("answer"), commandId, expectedRevision, text: z.string().trim().min(1).max(10_000) }),
   z.object({ action: z.literal("keep_unknown"), commandId, expectedRevision }),
   z.object({ action: z.literal("accept"), commandId, expectedRevision }),
-  z.object({ action: z.literal("generate_positioning"), commandId, expectedRevision }),
-  z.object({ action: z.literal("apply_positioning"), commandId, expectedRevision, directionId: z.string().min(1) }),
-  z.object({ action: z.literal("undo_positioning"), commandId, expectedRevision }),
-  z.object({ action: z.literal("adjust_positioning"), commandId, expectedRevision, directionId: z.string().min(1), mode: z.enum(["headline", "judgment_note"]), text: z.string().trim().min(1).max(10_000) }),
-  z.object({ action: z.literal("generate_deck"), commandId, expectedRevision }),
+  z.object({ action: z.literal("generate_positioning"), commandId, expectedRevision, expectedPositioning: positioningHeadSchema }),
+  z.object({ action: z.literal("apply_positioning"), commandId, expectedRevision, expectedPositioning: positioningHeadSchema, directionId: z.string().min(1) }),
+  z.object({ action: z.literal("undo_positioning"), commandId, expectedRevision, expectedPositioning: positioningHeadSchema }),
+  z.object({ action: z.literal("adjust_positioning"), commandId, expectedRevision, expectedPositioning: positioningHeadSchema, directionId: z.string().min(1), mode: z.enum(["headline", "judgment_note"]), text: z.string().min(1).max(10_000).refine(value=>Boolean(value.trim())) }),
+  z.object({ action: z.literal("save_positioning_wording"), commandId, expectedRevision, expectedPositioning: positioningHeadSchema, wording: positioningWordingInputSchema }),
+  z.object({ action: z.literal("generate_deck"), commandId, expectedRevision, expectedPositioning:positioningHeadSchema }),
   z.object({ action: z.literal("edit_deck_page"), commandId, deckId: z.string().min(1), expectedDeckVersion: z.number().int().positive(), pageId: z.string().min(1), title: z.string().min(1).max(500), body: z.string().min(1).max(20_000) }),
 ]);
 
@@ -67,6 +68,7 @@ const versionSchema = z.object({
 });
 
 const positioningVersionSchema = z.object({
+  head:positioningHeadSchema.optional(),
   id: z.string().min(1),
   number: z.number().int().positive(),
   proposal: positioningProposalV1Schema,

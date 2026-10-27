@@ -461,7 +461,7 @@ describe("P1 steering and continuity", () => {
   it("requires Apply for the preview and explicit deck confirmation, cancel sends nothing", async () => {
     const user = userEvent.setup(); render(<HomePage />);
     await user.click(await screen.findByRole("button", { name: "Positioning" }));
-    await user.click(screen.getByRole("button", { name: "Keep original" }));
+    await user.click(screen.getByRole("button", { name: "Keep accepted interpretation" }));
     await user.click(await screen.findByRole("button", { name: "Review deck inputs" }));
     await user.click(screen.getByRole("button", { name: "Cancel deck creation" }));
     expect(posts().map(body => body.action)).toEqual(["apply_positioning"]);

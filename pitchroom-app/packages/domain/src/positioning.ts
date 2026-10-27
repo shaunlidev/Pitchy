@@ -25,6 +25,7 @@ export const positioningDirectionSchema = z.object({
   evidence: z.array(positioningEvidenceSchema).min(1),
   userInputIds: z.array(z.string().min(1)).default([]),
   judgmentNote: z.string().min(1).optional(),
+  coreMessageOrigin:z.object({kind:z.literal("manual_exact"),userInputId:z.string().min(1)}).optional(),
   counterEvidence: z.array(positioningEvidenceSchema).optional(),
   unknowns: z.array(z.string().min(1)).optional(),
   emphasis: z.array(z.string().min(1)).optional(),
@@ -40,20 +41,20 @@ export const positioningWordingInputSchema = z.discriminatedUnion("kind", [
 ]);
 export type PositioningWordingInput = z.infer<typeof positioningWordingInputSchema>;
 const retainedChoiceSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("source_quote"), id, text: exactText, projectId: id, sourceId: id, sourceName: id, sourceHash: id, chunkId: id, start: z.number().int().nonnegative(), end: z.number().int().positive(), userInputId: id }),
-  z.object({ kind: z.literal("manual_exact"), id, text: exactText, userInputId: id }),
+  z.object({ kind: z.literal("source_quote"), id, text: exactText, understandingId:id, projectId: id, sourceId: id, sourceName: id, sourceHash: id, passage:id, chunkId: id, start: z.number().int().nonnegative(), end: z.number().int().positive(), userInputId: id }),
+  z.object({ kind: z.literal("manual_exact"), id, text: exactText, understandingId:id, userInputId: id }),
 ]);
-const choiceSchema = z.discriminatedUnion("kind", [
+export const positioningChoiceSchema = z.discriminatedUnion("kind", [
   ...retainedChoiceSchema.options,
   z.object({ kind: z.literal("accepted_understanding"), id: z.literal("original"), text: id, understandingId: id }),
   z.object({ kind: z.literal("legacy_wording"), id: z.literal("original"), text: id }),
-  z.object({ kind: z.literal("ai_direction"), id, text: id, direction: positioningDirectionSchema }),
+  z.object({ kind: z.literal("ai_direction"), id, text: id, understandingId:id, direction: positioningDirectionSchema }),
 ]);
-const choiceSnapshotSchema = z.object({ positioningId: id, choice: choiceSchema });
-const decisionSchema = z.object({ id, commandId: id, action: z.enum(["apply", "undo"]), before: choiceSnapshotSchema.nullable(), after: choiceSnapshotSchema.nullable() });
+const choiceSnapshotSchema = z.object({ positioningId: id, choice: positioningChoiceSchema });
+const decisionSchema = z.object({ id, commandId: id, action: z.enum(["apply", "undo", "legacy_snapshot"]), before: choiceSnapshotSchema.nullable(), after: choiceSnapshotSchema.nullable() });
 export const positioningHeadSchema = z.object({ positioningId: id.nullable(), decisionId: id.nullable() }).strict();
 export type PositioningHead = z.infer<typeof positioningHeadSchema>;
-export type PositioningChoice = z.infer<typeof choiceSchema>;
+export type PositioningChoice = z.infer<typeof positioningChoiceSchema>;
 export type RetainedPositioningChoice = z.infer<typeof retainedChoiceSchema>;
 
 export const positioningProposalV1Schema = z.object({
@@ -74,6 +75,7 @@ export const positioningProposalV1Schema = z.object({
     conditionsToReconsider: z.array(z.string().min(1)),
   }).optional(),
 }).superRefine((proposal, context) => {
+  for(const direction of proposal.directions)if(direction.coreMessageOrigin&&!direction.userInputIds.includes(direction.coreMessageOrigin.userInputId))context.addIssue({code:"custom",message:"Exact human wording must reference its recorded input."});
   const ids = ["original", ...proposal.directions.map(item => item.id), ...(proposal.retainedChoices ?? []).map(item => item.id)];
   if (new Set(ids).size !== ids.length) context.addIssue({ code: "custom", message: "Positioning choice IDs must be unique." });
   if (proposal.recommendation && !proposal.directions.some((direction) => direction.id === proposal.recommendation?.directionId)) {
@@ -100,7 +102,7 @@ export function positioningChoices(proposal: PositioningProposalV1): Positioning
   const original: PositioningChoice = proposal.originalFraming.origin === "accepted_understanding"
     ? { kind: "accepted_understanding", id: "original", text: proposal.originalFraming.coreMessage, understandingId: proposal.understandingVersionId }
     : { kind: "legacy_wording", id: "original", text: proposal.originalFraming.coreMessage };
-  return [original, ...proposal.directions.map((direction): PositioningChoice => ({ kind: "ai_direction", id: direction.id, text: direction.coreMessage, direction })), ...(proposal.retainedChoices ?? [])];
+  return [original, ...proposal.directions.map((direction): PositioningChoice => ({ kind: "ai_direction", id: direction.id, text: direction.coreMessage, understandingId:proposal.understandingVersionId, direction })), ...(proposal.retainedChoices ?? [])];
 }
 export function resolvePositioningChoice(proposal: PositioningProposalV1, choiceId: string): PositioningChoice {
   const choice = positioningChoices(proposal).find(item => item.id === choiceId);
@@ -122,8 +124,8 @@ export function readPositioning(record: PositioningRecord) {
   const snapshot = last ? last.after : legacy;
   return { head: { positioningId: record.id, decisionId: last?.id ?? null } satisfies PositioningHead,
     choices: positioningChoices(record.proposal),
-    applied: snapshot ? { ...snapshot, decisionId: last?.id ?? null } : null,
-    canUndo: last ? last.action === "apply" : Boolean(record.appliedDirectionId),
+    applied: snapshot ? { ...snapshot, decisionId: last?.id ?? `legacy:${record.id}:${snapshot.choice.id}` } : null,
+    canUndo: last ? last.action !== "undo" : Boolean(record.appliedDirectionId),
   };
 }
 export function assertPositioningHead(record: PositioningRecord | undefined, expected: PositioningHead) {
@@ -157,6 +159,31 @@ export function validateRetainedPositioningChoice(choice: RetainedPositioningCho
   if (choice.kind !== "source_quote") return;
   const source = sources.find(item => item.id === choice.sourceId);
   const chunk = source?.chunks.find(item => item.id === choice.chunkId);
-  if (choice.projectId !== projectId || !source || source.contentHash !== choice.sourceHash || !chunk || chunk.sourceId !== choice.sourceId || choice.end <= choice.start || chunk.text.slice(choice.start, choice.end) !== choice.text)
+  if (choice.projectId !== projectId || !source || source.contentHash !== choice.sourceHash || !chunk || chunk.sourceId !== choice.sourceId || choice.passage !== chunk.text || choice.end <= choice.start || chunk.text.slice(choice.start, choice.end) !== choice.text)
     throw new PitchroomError("CONFLICT", "The selected source wording is unavailable or changed. Choose a current exact passage; the saved wording remains in history.");
+}
+
+export function positioningProposalForCandidate(record: PositioningRecord): PositioningProposalV1 {
+  const proposal=structuredClone(record.proposal);
+  if (!proposal.decisionJournal?.length && record.appliedDirectionId) {
+    const view=readPositioning(record);
+    proposal.decisionJournal=[{id:view.applied!.decisionId!,commandId:`legacy-state:${record.id}`,action:"legacy_snapshot",before:record.previousAppliedDirectionId ? {positioningId:record.id,choice:structuredClone(resolvePositioningChoice(proposal,record.previousAppliedDirectionId))}:null,after:{positioningId:record.id,choice:structuredClone(view.applied!.choice)}}];
+  }
+  return proposal;
+}
+
+export function positioningSelectionKey(selection: {positioningId:string;decisionId?:string|null;choice?:{id:string};directionId?:string}) {
+  return selection.decisionId && !selection.decisionId.startsWith("legacy:") ? `decision:${selection.decisionId}` : `positioning:${selection.positioningId}:${selection.choice?.id ?? selection.directionId ?? "none"}`;
+}
+
+export function requireAppliedPositioning(record:PositioningRecord) {
+  const applied=readPositioning(record).applied;
+  if(!applied || applied.choice.id!==record.appliedDirectionId)throw new PitchroomError("CONFLICT","An explicit, current positioning choice is required.");
+  return applied;
+}
+
+export function positioningHumanWording(choice:PositioningChoice) {
+  if(choice.kind==="manual_exact")return {userInputId:choice.userInputId,text:choice.text};
+  if(choice.kind==="ai_direction"&&choice.direction.coreMessageOrigin)return {userInputId:choice.direction.coreMessageOrigin.userInputId,text:choice.text};
+  return undefined;
 }

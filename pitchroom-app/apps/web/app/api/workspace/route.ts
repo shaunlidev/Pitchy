@@ -1,3 +1,5 @@
+import {saveFixturePositioningWording} from "../../../lib/fixture-store";
+import {savePersistentPositioningWording} from "../../../lib/persistent-workspace";
 import { changeFixtureTopicMaterial } from "../../../lib/fixture-store";
 import { changePersistentTopicMaterial } from "../../../lib/persistent-workspace";
 import { saveFixtureBrief } from "../../../lib/fixture-store";
@@ -69,11 +71,12 @@ export async function POST(request: Request) {
       case "answer": state = persistent ? await answerPersistentQuestion(body.text, body.expectedRevision, commandId) : answerFixtureQuestion(body.text, body.expectedRevision); break;
       case "keep_unknown": state = persistent ? await keepPersistentUnknown(body.expectedRevision, commandId) : keepFixtureUnknown(body.expectedRevision); break;
       case "accept": state = persistent ? await acceptPersistent(body.expectedRevision, commandId) : acceptFixture(body.expectedRevision); break;
-      case "generate_positioning": state = persistent ? await generatePersistentPositioning(body.expectedRevision, commandId, persistentMode) : generateFixturePositioning(body.expectedRevision); break;
-      case "apply_positioning": state = persistent ? await applyPersistentPositioning(body.directionId, body.expectedRevision, commandId) : applyFixturePositioning(body.directionId, body.expectedRevision); break;
-      case "undo_positioning": state = persistent ? await undoPersistentPositioning(body.expectedRevision, commandId) : undoFixturePositioning(body.expectedRevision); break;
-      case "adjust_positioning": state = persistent ? await adjustPersistentPositioning(body.directionId, body.mode, body.text, body.expectedRevision, commandId) : adjustFixturePositioning(body.directionId, body.mode, body.text, body.expectedRevision); break;
-      case "generate_deck": state = persistent ? await generatePersistentDeck(body.expectedRevision, commandId, persistentMode) : generateFixtureDeck(body.expectedRevision); break;
+      case "generate_positioning": state = persistent ? await generatePersistentPositioning(body.expectedRevision, commandId, persistentMode, body.expectedPositioning) : generateFixturePositioning(body.expectedRevision,body.expectedPositioning,commandId); break;
+      case "apply_positioning": state = persistent ? await applyPersistentPositioning(body.directionId, body.expectedRevision, commandId, body.expectedPositioning) : applyFixturePositioning(body.directionId, body.expectedRevision,body.expectedPositioning,commandId); break;
+      case "undo_positioning": state = persistent ? await undoPersistentPositioning(body.expectedRevision, commandId, body.expectedPositioning) : undoFixturePositioning(body.expectedRevision,body.expectedPositioning,commandId); break;
+      case "adjust_positioning": state = persistent ? await adjustPersistentPositioning(body.directionId, body.mode, body.text, body.expectedRevision, commandId,body.expectedPositioning) : adjustFixturePositioning(body.directionId, body.mode, body.text, body.expectedRevision,body.expectedPositioning,commandId); break;
+      case "save_positioning_wording": state=persistent ? await savePersistentPositioningWording({...body,commandId}) : saveFixturePositioningWording({...body,commandId});break;
+      case "generate_deck": state = persistent ? await generatePersistentDeck(body.expectedRevision, commandId, persistentMode,body.expectedPositioning) : generateFixtureDeck(body.expectedRevision,body.expectedPositioning); break;
       case "edit_deck_page": state = persistent ? await editPersistentDeckPage(body.deckId, body.expectedDeckVersion, body.pageId, body.title, body.body, commandId) : editFixtureDeckPage(body.deckId, body.expectedDeckVersion, body.pageId, body.title, body.body); break;
     }
     if (persistent && runtime === "live") state = { ...state, mode: "live" as const };

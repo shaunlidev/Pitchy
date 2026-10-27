@@ -23,7 +23,7 @@ export function buildDeterministicPositioning(input: PositioningAgentInput): Pos
   const proposal = positioningProposalV1Schema.parse({
     schemaVersion: 1,
     understandingVersionId: input.understandingVersionId,
-    originalFraming: { title: "Original framing", coreMessage: original },
+    originalFraming: { title: "Original framing", coreMessage: original, origin: "accepted_understanding" },
     directions: [
       {
         id: "evidence-first",
@@ -80,7 +80,7 @@ export function coreMessageToPositioning(proposal: CoreMessageProposalV2, input:
     return {sourceId:e.sourceId,chunkId:chunk.id,quote:e.quote};
   };
   return positioningProposalV1Schema.parse({schemaVersion:1, understandingVersionId:input.understandingVersionId,
-    originalFraming:{title:"Original framing",coreMessage:input.understanding.themes.map(t=>t.summary).join(" ")},
+    originalFraming:{title:"Original framing",coreMessage:input.understanding.themes.map(t=>t.summary).join(" "),origin:"accepted_understanding"},
     directions:proposal.hypotheses.map(h=>({id:h.id,lens:h.lens,title:h.title,audience:h.audience,positioningThesis:h.positioningThesis,mechanism:h.mechanism,humanTension:h.audienceSituation,coreMessage:h.coreMessage,from:h.from,to:h.to,tradeoff:h.hiddenTradeoff,excludes:h.exclusions,evidence:h.supportingEvidence.map(cite),counterEvidence:h.counterEvidence.map(cite),unknowns:h.unknowns,emphasis:h.emphasis,audienceRecognition:h.audienceRecognition,humanPayoff:h.humanPayoff,userInputIds:[]})),
     recommendation:{directionId:proposal.recommendation.hypothesisId,judgment:proposal.recommendation.judgment,comparison:proposal.recommendation.comparison,conditionsToReconsider:proposal.recommendation.conditionsToReconsider}
   });
@@ -111,6 +111,7 @@ export class ResponsesPositioningRunner implements PositioningAgentRunner {
           outputLanguage,
           languageInstruction: outputLanguageInstruction,
           originalFraming:input.understanding.themes.map(t=>t.summary).join(" "),
+          originalFramingOrigin:{kind:"accepted_understanding",understandingVersionId:input.understandingVersionId,scope:"An accepted interpretation, not a client quotation. Original source wording is chosen explicitly outside model output."},
           sources:[...new Set(input.chunks.map(c=>c.sourceId))].map(id=>({id,authority:"Supplied project material; records are not automatically current or verified",material:input.chunks.filter(c=>c.sourceId===id).map(c=>c.text).join("\n"),evidenceBoundary:"Cite an exact quote within one chunk. Preserve uncertainty and source attribution."})),
           understanding:input.understanding,
           groundingPolicy:"Preserved claims record historical material, not necessarily current applicability. Respect summaryInterpretation groundingV4/legacy applicability, scope and attribution. User-reported requirements remain unverified; user_edited_unreviewed is not endorsed by original Agent reasoning. Never turn suggestions into requirements."
