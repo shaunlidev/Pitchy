@@ -1,0 +1,38 @@
+{
+  "profile": "local",
+  "workspace": "824f2f2e-b815-4117-90d5-af284a4eccec",
+  "project": "e9b58af4-e44d-40a3-b0d6-65efd204356f",
+  "developer": "da50eeba-d5bf-4215-b872-340cec62ade7",
+  "reviewer": "4e569377-f78e-40a7-b1f2-d5d2152543ea",
+  "qa": "9250d99a-9c3d-45b2-b344-d044c524b282",
+  "dispatcher": "9f6ccacb-3110-4d7a-bbfc-fe344fcd8034",
+  "max_lanes": 1,
+  "machine_cap": 5,
+  "review_status": "started_2",
+  "qa_status": "started_3",
+  "order": [
+    "PIT-23",
+    "PIT-25",
+    "PIT-26",
+    "PIT-27",
+    "PIT-34"
+  ],
+  "legacy_dependencies": {
+    "PIT-33": "6e255e8a6a563b6e1a614bb57943ebf1bd96dafb"
+  },
+  "decision_holds": {
+    "PIT-6": "Real-model cases, threshold and budget unresolved.",
+    "PIT-8": "Material formats/retention decision unresolved.",
+    "PIT-9": "Outreach/participant authorization unresolved.",
+    "PIT-10": "Deferred PDF/accessibility scope.",
+    "PIT-32": "Cloud data/environment changes need explicit authorization.",
+    "PIT-35": "Identity/authorization architecture decision unresolved.",
+    "PIT-36": "Hosted worker/install/deployment authorization unresolved.",
+    "PIT-37": "Staging deployment authorization unresolved.",
+    "PIT-38": "Production/recovery operations authorization unresolved.",
+    "PIT-39": "Monitoring provider, cost/limit/retention decisions unresolved.",
+    "PIT-40": "Deployment evidence prerequisites unresolved.",
+    "PIT-41": "Candidate language rules unresolved."
+  },
+  "owner": "6eb8e344-e80b-41d0-80c8-68e602195912"
+}
