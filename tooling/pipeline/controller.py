@@ -432,9 +432,11 @@ class Controller:
         self.save(lane)
         return {"checkout": str(destination), "artifact": artifact, "contract": lane["contract"]}
 
-    def checks(self, lane, role, checkout_path):
+    def checks(self, lane, role, checkout_path, run_id="unbound"):
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", run_id):
+            raise Hold("invalid evidence run identity")
         contract, artifact = lane["contract"], lane["artifact"]
-        root = self.root / "evidence" / lane["issue"] / str(lane["generation"]) / role
+        root = self.root / "evidence" / lane["issue"] / str(lane["generation"]) / role / run_id
         if root.exists():
             raise Hold("stage evidence already exists; do not rerun an uncertain check")
         root.mkdir(parents=True)
@@ -530,7 +532,7 @@ class Controller:
             checkout_path = Path(registered_path)
             if not checkout_path.is_dir():
                 raise Hold("materialize the exact artifact first")
-        root = self.checks(lane, role, checkout_path)
+        root = self.checks(lane, role, checkout_path, run_id=run)
         artifact = lane["artifact"]
         receipt = {**note, **{k: artifact[k] for k in ("issue", "commit", "tree", "generation", "contract_sha256", "description_sha256")},
                    "role": role, "actor_id": actor, "run_id": run, "dirty": False}
