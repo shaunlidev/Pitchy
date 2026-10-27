@@ -466,11 +466,25 @@ class Controller:
             raise Hold('Invalid evidence identity')
         if not re.fullmatch(r'PIT-[1-9][0-9]*',lane['issue']) or type(lane['generation']) is not int or lane['generation']<1:
             raise Hold('Invalid evidence task identity')
-        report=Path(report)
-        if report.is_symlink():raise Hold('Evidence report is a symlink')
+        workspace=Path(workdir).absolute()
+        base=workspace.resolve()
+        report=Path(report).absolute()
+        relative=None
+        for prefix in (workspace,base):
+            try:relative=report.relative_to(prefix);break
+            except ValueError:pass
+        if relative is None or '..' in relative.parts:
+            raise Hold('Report must be inside the actual runtime workspace')
+        report=base
+        for part in relative.parts:
+            report=report/part
+            if report.is_symlink():raise Hold('Report path symlink refused')
+        if not report.is_file() or not report.resolve().is_relative_to(base):
+            raise Hold('Missing or outside role report')
         report_data=report.read_bytes()
         if len(report_data)>1000000:raise Hold('Oversized role report')
         note=json.loads(report_data)
+        if not isinstance(note,dict):raise Hold('Role report must be an object')
         names=note.get('evidence_files',[])
         if not isinstance(names,list) or len(names)>100 or any(not isinstance(n,str) for n in names) or len(set(names))!=len(names):
             raise Hold('Declare unique relative evidence_files')
@@ -622,7 +636,6 @@ class Controller:
 
     def stage(self, key, role, report, workdir):
         lane, issue = self.current(key, role)
-        note = json.loads(Path(report).read_text())
         actor, run = self.actor(role)
         if role == "developer":
             if "contract" not in lane:

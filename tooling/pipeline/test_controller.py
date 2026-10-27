@@ -20,6 +20,13 @@ def item(number, status="backlog", deps=None):
             "metadata": {"automation_mode": "dependency_queue", "depends_on": json.dumps(deps or [])}}
 
 
+def bound_report(workdir, source):
+    path=Path(workdir).resolve()/'.pipeline-artifact/role-report.json'
+    path.parent.mkdir(parents=True,exist_ok=True)
+    path.write_bytes(Path(source).read_bytes())
+    return path
+
+
 class Fake:
     def __init__(self, rows, config):
         self.rows, self.c, self.writes = rows, config, []
@@ -280,7 +287,7 @@ class Tests(unittest.TestCase):
         with self.runtime("developer", native, "dev-run"):
             self.ctl.workspace("PIT-1", native)
             self.ctl.plan("PIT-1", plan_path)
-            self.assertEqual(self.ctl.stage("PIT-1", "developer", report_path, native)["status"], "started_2")
+            self.assertEqual(self.ctl.stage("PIT-1", "developer", bound_report(native,report_path), native)["status"], "started_2")
         commit = self.ctl.lanes()["PIT-1"]["artifact"]["commit"]
         for role, actor in (("reviewer", "review"), ("qa", "qa")):
             root = self.root / role
@@ -290,7 +297,7 @@ class Tests(unittest.TestCase):
                 checkout = self.ctl.checkout("PIT-1", role, root)
                 self.assertEqual(subprocess.check_output(["git", "-C", checkout["checkout"], "rev-parse", "HEAD"], text=True).strip(), commit)
                 report_path.write_text(json.dumps({**report, "complete_contract_review": True}))
-                output = self.ctl.stage("PIT-1", role, report_path, root)
+                output = self.ctl.stage("PIT-1", role, bound_report(root,report_path), root)
             self.assertEqual(subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD"], text=True).strip(), native_before)
         self.assertEqual(output["status"], "done")
         self.assertEqual(self.g("rev-parse", "HEAD"), main_before)
@@ -417,3 +424,15 @@ class DurableRoleEvidence(unittest.TestCase):
         self.assertTrue((target/'report.json').exists())
         self.assertFalse((target/'manifest.json').exists())
         with self.assertRaises(Hold):self.retain()
+
+    def test_report_outside_workspace_or_through_parent_symlink_is_refused(self):
+        self.prepare();original=self.report
+        outside=self.root/'outside-report.json';outside.write_text(original.read_text())
+        self.report=outside
+        with self.assertRaisesRegex(Hold,'inside'):self.retain()
+        linked=self.local/'linked-parent';linked.symlink_to(self.local,target_is_directory=True)
+        self.report=linked/'report.json'
+        with self.assertRaisesRegex(Hold,'symlink'):self.retain()
+        self.assertFalse((self.ctl.root/'role-evidence').exists())
+        self.assertFalse((self.ctl.root/'evidence-reservations.json').exists())
+        self.report=original;self.assertTrue(self.retain().is_file())

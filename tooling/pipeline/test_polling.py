@@ -269,7 +269,7 @@ class FullSerialChain(SerialBehavior):
         def published(lane):lane['pr_number']=1;lane['branch']='codex/pit-1-delivery-g1';c.save(lane)
         with patch.object(c,'publish_pr',side_effect=published):
             with f.runtime('developer',native):
-                c.workspace('PIT-1',native);c.plan('PIT-1',pp);c.stage('PIT-1','developer',rp,native)
+                c.workspace('PIT-1',native);c.plan('PIT-1',pp);c.stage('PIT-1','developer',core.bound_report(native,rp),native)
         artifact=c.lanes()['PIT-1']['artifact']
         c.observation={'deadline_monotonic':time.monotonic()+120,'issues':{'PIT-1':{'prs':[{'number':1,'head':artifact['commit'],'state':'DRAFT','base':'main','ci':{'state':'success'}}]}}}
         self.assertEqual(c.drain(True)[0]['waiting'],'preceding runtime not successfully terminal')
@@ -281,7 +281,7 @@ class FullSerialChain(SerialBehavior):
             if role=='reviewer':current['complete_contract_review']=True
             rp.write_text(json.dumps(current))
             with f.runtime(role,work):
-                c.checkout('PIT-1',role,work);c.stage('PIT-1',role,rp,work)
+                c.checkout('PIT-1',role,work);c.stage('PIT-1',role,core.bound_report(work,rp),work)
             f.fake.runs['id-1'][0]['status']='completed';c.drain(True)
             self.assertEqual(f.fake.rows[0]['status'],status)
         self.assertEqual(c.lanes()['PIT-1']['phase'],'awaiting_merge')
@@ -581,10 +581,10 @@ class DeveloperRecovery(unittest.TestCase):
         self.f.g('remote','add','origin',str(remote))
         native=(self.f.root/'fresh-native').resolve();self.f.g('worktree','add','--detach',str(native),'agent/native')
         report=self.f.root/'report.json';report.write_text(json.dumps({'outcome':'pass','criterion_results':[{'id':x['id'],'status':'pass'} for x in self.lane['requirements']],'gaps':[],'decisions':[]}))
-        with self.assertRaises(serial.Hold):self.c.stage('PIT-1','developer',report,native)
+        with self.assertRaises(serial.Hold):self.c.stage('PIT-1','developer',core.bound_report(native,report),native)
         with self.f.runtime('developer',native,run='fresh-dev'):
             self.c.workspace('PIT-1',native)
-            self.c.stage('PIT-1','developer',report,native)
+            self.c.stage('PIT-1','developer',core.bound_report(native,report),native)
         lane=self.c.lanes()['PIT-1'];self.assertEqual(lane['phase'],'awaiting_role_exit')
         self.assertEqual(lane['artifact']['commit'],result['recovered_source'])
         self.assertNotIn('rework_expected_pr_head',lane)
@@ -830,3 +830,27 @@ class DeveloperRecovery(unittest.TestCase):
         with self.assertRaisesRegex(serial.Hold,'Parking'):self.recover()
         self.assertEqual(len(self.requests),1)
         self.assertEqual(self.c.inspect_recovery('PIT-1')['state'],'not_enqueued_or_unknown')
+
+    def test_prior_runtime_provenance_changes_hold_before_enqueue_and_in_reconciliation(self):
+        self.no_run=True;self.recover()
+        valid={'id':'new','issue_id':'id-1','agent_id':'dev','status':'queued','created_at':serial.datetime.now(serial.timezone.utc).isoformat()}
+        original=copy.deepcopy(self.f.fake.runs['id-1'])
+        for key,value in [('agent_id','qa'),('issue_id','other'),('work_dir','another-worktree'),
+                          ('branch_name','agent/other'),('created_at','2000-01-01T00:00:00Z'),
+                          ('result',{'branch_name':'agent/other'})]:
+            self.f.fake.runs['id-1']=[{**original[0],key:value},valid]
+            with self.subTest(key=key):
+                self.assertEqual(self.c.inspect_recovery('PIT-1')['state'],'conflict_or_unavailable')
+                with self.assertRaises(serial.Hold):self.c.confirm_recovery('PIT-1','new')
+        self.f.fake.runs['id-1']=original+[valid]
+        self.assertEqual(self.c.inspect_recovery('PIT-1')['state'],'unique_run_observed')
+        self.assertEqual(len(self.requests),2)
+
+    def test_prior_runtime_owner_change_after_mapping_prevents_parking(self):
+        original=serial.write_json
+        def write(path,data):
+            original(path,data)
+            if Path(path).name=='mapping.json':self.f.fake.runs['id-1'][0]['agent_id']='qa'
+        with patch.object(serial,'write_json',side_effect=write):
+            with self.assertRaisesRegex(serial.Hold,'runtime history changed'):self.recover()
+        self.assertEqual(self.requests,[])

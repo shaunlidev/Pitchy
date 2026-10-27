@@ -36,6 +36,16 @@ def configured(root):
     return value
 
 
+def runtime_identity(run):
+    # Freeze provenance too: an unchanged ID/status cannot hide reassignment.
+    result=run.get('result')
+    if result is not None and not isinstance(result,dict):raise Hold('Unknown runtime result')
+    fields=('id','status','agent_id','issue_id','created_at','work_dir','branch_name')
+    value={key:run.get(key) for key in fields}
+    value['result_branch']=(result or {}).get('branch_name')
+    return value
+
+
 class Serial(Controller):
     def __init__(self, config, call, state, github, policy, execute=cli):
         self.raw_call=call
@@ -166,8 +176,6 @@ class Serial(Controller):
 
     def return_to_owner(self, key, role, report, rework=False):
         lane, issue = self.current(key, role)
-        note=json.loads(Path(report).read_text())
-        if not note.get('gaps') and not note.get('decisions'):raise Hold('Concrete gap/decision required')
         actor,run=self.actor(role)
         manifest=self.retain_role_evidence(lane,role,report,Path.cwd(),actor,run)
         note=json.loads((Path(manifest).parent/'report.json').read_text())
@@ -320,7 +328,7 @@ class Serial(Controller):
                 histories[row['id']]=runs
             return histories
         def inventory_identity(histories):
-            return {key:[(r.get('id'),r.get('status')) for r in runs] for key,runs in histories.items()}
+            return {key:{r['id']:runtime_identity(r) for r in runs} for key,runs in histories.items()}
         histories=idle_inventory()
         initial_inventory=inventory_identity(histories)
         matches=[r for r in histories.get(lane['id'],[]) if r.get('id')==run_id and r.get('agent_id')==self.c['developer'] and r['status']=='completed']
@@ -499,7 +507,8 @@ class Serial(Controller):
             if set(histories)!=set(start['inventory']):raise Hold('Project inventory changed')
             added=[]
             for issue_id,runs in histories.items():
-                before=dict(start['inventory'][issue_id]);current={r['id']:r['status'] for r in runs}
+                before=start['inventory'][issue_id];current={r['id']:runtime_identity(r) for r in runs}
+                if not isinstance(before,dict):raise Hold('Legacy inventory lacks provenance; explicit reconciliation required')
                 if any(current.get(r)!=v for r,v in before.items()):raise Hold('Prior run history changed')
                 new=[r for r in runs if r['id'] not in before]
                 if issue_id!=start['id'] and new:raise Hold('Other issue runtime changed')
