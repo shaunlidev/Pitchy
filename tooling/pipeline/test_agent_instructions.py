@@ -33,6 +33,37 @@ class InstructionCleanupTests(unittest.TestCase):
             clean("qa", self.note, hashlib.sha256(b"Old snapshot").hexdigest(), True, call)
         self.assertFalse(any("update" in args for args in calls))
 
+    def test_inline_hash_continuation_refuses_without_write(self):
+        note = "## Temporary QA\nOwned instruction."
+        for continuation in ["## inline continuation\n", " ## inline continuation\n",
+                             "\t## inline continuation\n"]:
+            with self.subTest(continuation=continuation):
+                current = note + continuation + self.persistent
+                calls = []
+                def call(args):
+                    nonlocal current
+                    calls.append(args)
+                    if "update" in args:
+                        current = args[-1]
+                    return {"instructions": current, "status": "idle"}
+                with self.assertRaises(ValueError):
+                    clean("qa", note, hashlib.sha256(current.encode()).hexdigest(), True, call)
+                self.assertFalse(any("update" in args for args in calls))
+
+    def test_real_line_boundaries_preserve_following_policy(self):
+        note = "## Temporary QA\nOwned instruction."
+        for ending, separator in [("", "\n"), ("\n", ""), ("", "\r\n"),
+                                  ("\r\n", ""), ("", " \n\t\n")]:
+            with self.subTest(ending=ending, separator=separator):
+                owned = note + ending
+                self.assertEqual(remove_note(owned + separator + self.persistent, owned),
+                                 separator + self.persistent)
+
+    def test_indented_hashes_are_not_a_following_section(self):
+        current = self.note + "    ## code or continuation\n" + self.persistent
+        with self.assertRaises(ValueError):
+            remove_note(current, self.note)
+
     def test_change_between_reads_or_active_agent_refuses_without_write(self):
         for later in [{"instructions": self.current + "New policy", "status": "idle"},
                       {"instructions": self.current, "status": "working"}]:

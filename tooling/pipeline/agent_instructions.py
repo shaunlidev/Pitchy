@@ -15,9 +15,15 @@ def remove_note(current, note):
     start = current.index(note)
     if start and current[start - 1] != "\n" and not note.startswith("\n"):
         raise ValueError("Note must start at a section boundary")
-    tail = current[start + len(note):]
-    if tail.strip() and not tail.lstrip().startswith("## "):
-        raise ValueError("Note does not include the complete owned section")
+    end = start + len(note)
+    tail = current[end:]
+    if tail.strip():
+        lines = tail.split("\n")
+        if not current[:end].endswith("\n") and lines.pop(0).strip():
+            raise ValueError("Note ends inside a changed or partial section")
+        next_line = next((line for line in lines if line.strip()), "")
+        if not next_line.startswith("## "):
+            raise ValueError("Note does not include the complete owned section")
     return current[:start] + tail
 
 
