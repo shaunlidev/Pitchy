@@ -151,3 +151,102 @@ it("requires an explicit current question before reassessing a saved stale answe
  expect(screen.getByRole("button",{name:"Reassess against current understanding"}).hasAttribute("disabled")).toBe(true);
  await user.click(screen.getByRole("button",{name:"Reassess against current understanding"})); expect(onAction).not.toHaveBeenCalled();
 });
+
+it("shows saved applied Before/Now without substituting an unsent edit", async () => {
+ resetFixtureState();
+ addFixtureMaterial({name:"brief.md",mediaType:"text/markdown",text:"The pilot audience remains unknown."});
+ const initial=runFixtureAgent();
+ const saved=submitFixtureClarification({text:"Procurement approves the pilot.",commandId:"before-now",expectedRevision:initial.project.revision});
+ const taskId=saved.clarifications!.at(-1)!.id;
+ await runFixtureClarification(taskId);
+ const original=readFixtureState().clarifications!.at(-1)!;
+ if (!original.result) throw new Error("Missing synthetic result");
+ const edited=structuredClone(original.result);
+ const operation=edited.operations.find(item=>item.type === "update_summary");
+ if (!operation) throw new Error("Missing summary change");
+ operation.text="My applied wording: procurement approves the pilot.";
+ const applied=decideFixtureClarification({taskId,action:"apply",commandId:"before-now-apply",result:edited});
+ const task=applied.clarifications!.at(-1)!;
+ const unsent=structuredClone(edited);
+ const unsentOperation=unsent.operations.find(item=>item.type === "update_summary");
+ if (!unsentOperation) throw new Error("Missing unsent summary");
+ unsentOperation.text="Unsent wording must never be shown as applied.";
+ const {ClarificationPanel}=await import("./clarification-panel");
+ const onAction=vi.fn(()=>true);
+ render(<ClarificationPanel task={task} understanding={{versionId:applied.currentVersionId,phase:"accepted"}} revision={applied.project.revision} busy={false} draft={unsent} onAction={onAction}/>);
+ const feedback=screen.getByRole("region",{name:"Applied Before and Now"});
+ expect(feedback.textContent).toContain(original.base.themes.find(theme=>theme.id===operation.themeId)!.summary);
+ expect(feedback.textContent).toContain(operation.text);
+ expect(feedback.textContent).not.toContain(unsentOperation.text);
+ expect(screen.queryByRole("button",{name:"Apply changes to understanding"})).toBeNull();
+ expect(onAction).not.toHaveBeenCalled();
+});
+
+it("recovers unsent interpretation edits after reopening without submitting or losing them on failure", async () => {
+ window.localStorage.clear();
+ resetFixtureState();
+ addFixtureMaterial({name:"brief.md",mediaType:"text/markdown",text:"The pilot audience remains unknown."});
+ const initial=runFixtureAgent();
+ const saved=submitFixtureClarification({text:"Procurement approves the pilot.",commandId:"recover-edit",expectedRevision:initial.project.revision});
+ await runFixtureClarification(saved.clarifications!.at(-1)!.id);
+ const state=readFixtureState();
+ const onAction=vi.fn(()=>false);
+ const props={state,busy:false,text:"",answer:"",correction:"",onTextChange:vi.fn(),onAnswerChange:vi.fn(),onCorrectionChange:vi.fn(),onChooseFile:()=>true,onCancelRun:vi.fn(),onAction,rememberPosition:true,initialDestination:"clarify" as const};
+ const user=userEvent.setup();
+ const view=render(<WorkspaceView {...props}/>);
+ await user.click(screen.getByRole("button",{name:/^Clarify$/}));
+ const field=screen.getByLabelText("Proposed interpretation 1");
+ await user.clear(field);await user.type(field,"My unsubmitted interpretation.");
+ await user.click(screen.getByRole("button",{name:"Apply changes to understanding"}));
+ expect(onAction).toHaveBeenCalledTimes(1);
+ view.unmount();onAction.mockClear();
+ render(<WorkspaceView {...props}/>);
+ expect(screen.getByLabelText("Proposed interpretation 1")).toHaveProperty("value","My unsubmitted interpretation.");
+ expect(onAction).not.toHaveBeenCalled();
+ expect(readFixtureState().currentVersionId).toBe(initial.currentVersionId);
+ window.localStorage.clear();
+});
+
+it("leaves an accepted question open without creating a version, submitting, or losing the answer draft", async () => {
+ window.localStorage.clear();resetFixtureState();
+ addFixtureMaterial({name:"brief.md",mediaType:"text/markdown",text:"The pilot audience remains unknown."});
+ const initial=runFixtureAgent();const state=acceptFixture(initial.project.revision);
+ const onAction=vi.fn(()=>true);
+ const props={state,busy:false,text:"",answer:"",correction:"",onTextChange:vi.fn(),onAnswerChange:vi.fn(),onCorrectionChange:vi.fn(),onChooseFile:()=>true,onCancelRun:vi.fn(),onAction,initialDestination:"clarify" as const};
+ render(<WorkspaceView {...props}/>);
+ const user=userEvent.setup();await user.type(screen.getByLabelText("Answer the agent’s question"),"Unsent context to keep.");
+ await user.click(screen.getByRole("button",{name:"Keep unknown"}));
+ expect(screen.getByText(/This question remains open/)).toBeTruthy();
+ expect(screen.getByLabelText("Answer the agent’s question")).toHaveProperty("value","Unsent context to keep.");
+ expect(screen.getByRole("button",{name:/Continue to Positioning/}).hasAttribute("disabled")).toBe(false);
+ expect(onAction).not.toHaveBeenCalled();expect(readFixtureState().currentVersionId).toBe(initial.currentVersionId);expect(readFixtureState().project.phase).toBe("accepted");
+});
+
+it.each(["", "x".repeat(4001)])("retains temporary invalid interpretation text after reopening (%#)", async text => {
+ window.localStorage.clear();resetFixtureState();
+ addFixtureMaterial({name:"brief.md",mediaType:"text/markdown",text:"The pilot audience remains unknown."});
+ const initial=runFixtureAgent();const saved=submitFixtureClarification({text:"Procurement approves the pilot.",commandId:"loose-edit",expectedRevision:initial.project.revision});
+ await runFixtureClarification(saved.clarifications!.at(-1)!.id);
+ const onAction=vi.fn(()=>false);const props={state:readFixtureState(),busy:false,text:"",answer:"",correction:"",onTextChange:vi.fn(),onAnswerChange:vi.fn(),onCorrectionChange:vi.fn(),onChooseFile:()=>true,onCancelRun:vi.fn(),onAction,rememberPosition:true};
+ const user=userEvent.setup();const view=render(<WorkspaceView {...props}/>);await user.click(screen.getByRole("button",{name:/^Clarify$/}));
+ const {fireEvent}=await import("@testing-library/react");fireEvent.change(screen.getByLabelText("Proposed interpretation 1"),{target:{value:text}});
+ view.unmount();render(<WorkspaceView {...props}/>);
+ expect(screen.getByLabelText("Proposed interpretation 1")).toHaveProperty("value",text);
+ expect(onAction).not.toHaveBeenCalled();window.localStorage.clear();
+});
+
+it("keeps cancelled interpretation edits visibly recoverable across reopening", async () => {
+ window.localStorage.clear();resetFixtureState();
+ addFixtureMaterial({name:"brief.md",mediaType:"text/markdown",text:"The pilot audience remains unknown."});
+ const initial=runFixtureAgent();const saved=submitFixtureClarification({text:"Procurement approves the pilot.",commandId:"cancel-edit",expectedRevision:initial.project.revision});
+ const taskId=saved.clarifications!.at(-1)!.id;await runFixtureClarification(taskId);
+ let state=readFixtureState();const onAction=vi.fn((body:Record<string,unknown>)=>{if(body.action==="dismiss_clarification")state=decideFixtureClarification({taskId,action:"dismiss",commandId:"cancel-edit-dismiss"});return true;});
+ const props={busy:false,text:"",answer:"",correction:"",onTextChange:vi.fn(),onAnswerChange:vi.fn(),onCorrectionChange:vi.fn(),onChooseFile:()=>true,onCancelRun:vi.fn(),onAction,rememberPosition:true};
+ const user=userEvent.setup();let view=render(<WorkspaceView {...props} state={state}/>);await user.click(screen.getByRole("button",{name:/^Clarify$/}));
+ const {fireEvent}=await import("@testing-library/react");fireEvent.change(screen.getByLabelText("Proposed interpretation 1"),{target:{value:"My cancelled unsent interpretation."}});
+ await user.click(screen.getByRole("button",{name:"Keep current understanding"}));view.rerender(<WorkspaceView {...props} state={state}/>);
+ expect(screen.getByRole("region",{name:"Unsubmitted interpretation edits",hidden:true}).textContent).toContain("My cancelled unsent interpretation.");
+ view.unmount();view=render(<WorkspaceView {...props} state={state}/>);await user.click(screen.getByText("Saved answer · Before / Now"));
+ expect(screen.getByRole("region",{name:"Unsubmitted interpretation edits"}).textContent).toContain("My cancelled unsent interpretation.");
+ expect(state.currentVersionId).toBe(initial.currentVersionId);expect(screen.queryByRole("button",{name:"Apply changes to understanding"})).toBeNull();window.localStorage.clear();
+});

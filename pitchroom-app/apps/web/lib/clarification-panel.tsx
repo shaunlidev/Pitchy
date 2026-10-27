@@ -31,7 +31,7 @@ export function ClarificationPanel({ task, understanding, busy, onAction, revisi
     return onAction({ action: "submit_clarification", text: task.answer, expectedRevision: revision, rebaseTaskId: task.id,
       selection: { understandingId: understanding.versionId, taskId: selectedQuestion.current.id, themeIndex: selectedQuestion.current.themeIndex } });
   };
-  const result = draft ?? (task.status === "applied" ? task.appliedResult ?? task.result : task.result);
+  const result = task.status === "applied" ? task.appliedResult ?? task.result : draft ?? task.result;
   const appliedHeading = task.resultVersionId && task.resultVersionId === understanding.versionId
     ? understanding.phase === "accepted" ? "Changes applied · understanding accepted"
       : understanding.phase === "review_required" ? "Changes applied · understanding awaits acceptance" : "Changes applied"
@@ -57,6 +57,15 @@ export function ClarificationPanel({ task, understanding, busy, onAction, revisi
     {editedInterpretation && <p role="status">You edited this interpretation. The original Agent basis has not been reassessed for your wording.</p>}
     {result?.schemaVersion === 4 && <details><summary>Basis for this proposal</summary><BasisV4 bases={result.bases} refs={result.reasonBasisRefs} task={task}/></details>}
     {result?.schemaVersion === 3 && <details><summary>Basis for this proposal</summary><Basis items={result.reasonBasis} task={task}/></details>}
+    {task.status === "applied" && result && <section aria-label="Applied Before and Now">
+      <p>Saved change from {task.baseUnderstandingId} to {task.resultVersionId ?? "the applied version"}. Later revisions do not change this record.</p>
+      {result.operations.map((operation, index) => operation.type === "update_summary" ? <div key={index}>
+        <h3>{task.base.themes.find(theme => theme.id === operation.themeId)?.title ?? "Topic"}</h3>
+        <p><strong>Before</strong>: {task.base.themes.find(theme => theme.id === operation.themeId)?.summary}</p>
+        <p><strong>Now</strong>: {operation.text}</p>
+        <small>Applied interpretation · not a verified source fact.</small>
+      </div> : operation.type === "add_answer" ? <p key={index}><strong>Saved user context</strong>: {task.answer} <small>User report · unverified.</small></p> : null)}
+    </section>}
     {task.status === "proposal_ready" && result && <>
       {result.operations.map((op,index) => <div className="clarificationChange" key={`${task.id}:${index}`}>
         {op.type === "update_summary" ? <><p><strong>Before</strong>: {task.base.themes.find(t=>t.id===op.themeId)?.summary}</p><label htmlFor={`clarify-change-${index}`}>Proposed interpretation {index+1}</label><textarea id={`clarify-change-${index}`} value={op.text} onChange={event=>editSummary(index,event.target.value)}/><small>Agent interpretation based on your answer. Applying it does not verify it as a source fact.</small>
