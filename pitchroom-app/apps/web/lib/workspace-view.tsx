@@ -303,6 +303,7 @@ function LegacyPositioningView({ state, busy, runningAction, onAction, onDeck, p
 }
 
 function PositioningView(props: WorkspaceViewProps & { onDeck: () => void }) {
+  if(props.state.project.phase!=="accepted")return <section className="positioningPage"><header className="workspaceHeading"><div><span className="eyebrow">Positioning history · read only</span><h1>Your earlier wording stays available.</h1></div></header><p>Current inputs changed. Review and accept the current understanding before creating or applying positioning. Saved wording and source snapshots below remain historical references.</p><FramingChoiceHistory state={props.state}/></section>;
   if (props.state.story && props.state.positioning) return <StoryPanel state={props.state} busy={props.busy} onAction={props.onAction} onDeck={props.onDeck} draft={props.storyDraft ?? {judgment:"",edit:null}} onDraft={props.onStoryDraft ?? (()=>undefined)}/>;
   const proposal = props.state.positioning?.proposal;
   const recommendation = proposal?.recommendation;

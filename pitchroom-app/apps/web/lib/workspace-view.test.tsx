@@ -1,7 +1,9 @@
+import {readPositioning} from "@pitchroom/domain";
+import {deriveWorkspaceUXState} from "./workspace-ux-state";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it } from "vitest";
-import { acceptFixture, addFixtureMaterial, applyFixturePositioning, generateFixtureDeck, generateFixturePositioning, readFixtureState, resetFixtureState, runFixtureAgent, type FixtureState } from "./fixture-store";
+import { saveFixturePositioningWording, removeFixtureMaterial, acceptFixture, addFixtureMaterial, applyFixturePositioning, generateFixtureDeck, generateFixturePositioning, readFixtureState, resetFixtureState, runFixtureAgent, type FixtureState } from "./fixture-store";
 import { WorkspaceView } from "./workspace-view";
 
 const sample = "Atelier helps design teams prepare client presentations.";
@@ -184,4 +186,15 @@ it("labels the current question from its associated themes and displays supersed
  proposal.nextQuestion={question:"Which data can be used?",whyItMatters:"Safety boundary",relatedThemeIndexes:[1]};
  const html=render(state,{initialDestination:"clarify"});
  expect(html).toContain('<div class="questionMeta"><span>Safety topic</span>');expect(html).toContain("Superseded by saved user input");expect(html).toContain("Earlier user assumption");expect(html).toContain("Corrected safety boundary");expect(html).toContain('disabled="" value="1:0"');
+});
+
+it("keeps historical wording accessible and read-only after removing current inputs",()=>{
+ resetFixtureState();addFixtureMaterial({name:"client.md",mediaType:"text/markdown",text:"Exact historic client words."});let state=runFixtureAgent();acceptFixture(state.project.revision);state=generateFixturePositioning();
+ const source=state.sources[0]!,chunk=source.chunks[0]!;
+ state=saveFixturePositioningWording({wording:{kind:"source_quote",sourceId:source.sourceId,chunkId:chunk.id,start:0,end:chunk.text.length,text:chunk.text},expectedRevision:state.project.revision,expectedPositioning:readPositioning(state.positioning!).head,commandId:"history-quote"});
+ const historical=structuredClone(state.positioning!);state=removeFixtureMaterial(source.sourceId);
+ expect(state.positioning).toBeUndefined();expect(deriveWorkspaceUXState(state,undefined,{destination:"positioning"}).primary).toBe("none");
+ const html=render(state,{initialDestination:"positioning"});
+ expect(html).toContain("Positioning history · read only");expect(html).toContain("Core message decisions");expect(html).toContain(historical.proposal.originalFraming.coreMessage);
+ expect(html).toContain("Exact historic client words.");expect(html).toContain("client.md");expect(html).toContain("Historical source");expect(html).not.toContain("Create positioning directions");expect(html).not.toContain("Choose this direction");
 });

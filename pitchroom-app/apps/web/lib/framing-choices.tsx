@@ -61,7 +61,7 @@ export function FramingWordingEditor({state,busy,onAction}:{state:FixtureState;b
 }
 
 export function FramingChoiceHistory({ state }: { state: FixtureState }) {
-  if (!state.positioning || state.positioningVersions.length === 0) return null;
+  if (state.positioningVersions.length === 0) return null;
   return <section className="coreMessageHistory" aria-labelledby="core-message-history-title">
     <header>
       <div><span className="eyebrow">Version history</span><h2 id="core-message-history-title">Core message decisions</h2></div>
