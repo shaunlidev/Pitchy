@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run isolated CI commands; expose stage/exit only, keep raw output local."""
+"""Run isolated CI commands; expose bounded metadata, keep raw output local."""
 import argparse
 import hashlib
 import json
@@ -74,26 +74,50 @@ def diagnostic_context(env):
     return result
 
 
-def tracked_tests(env):
-    result = subprocess.run(['git', 'ls-files', '-z', '--', 'pitchroom-app'], cwd=ROOT, env=env, capture_output=True, timeout=5)
+def safe_name(title):
+    return isinstance(title, str) and 0 < len(title) <= 240 and not re.search(
+        r'''(?:[\x00-\x1f]|://|sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[A-Z0-9]{16}|-----BEGIN|(?i:bearer\s|(?:api[_-]?key|secret|password|access[_-]?token|authorization)["']?\s*[=:]))''', title)
+
+
+def static_test_metadata(source, suffix):
+    """Recognize only an unambiguous subset; never interpret comments/templates/JSX."""
+    titles = {}
+    ambiguous = suffix in ('.tsx', '.jsx') or '/*' in source or '`' in source or re.search(r'\\(?:\r\n|\r|\n)', source)
+    if not ambiguous:
+        for match in re.finditer(r'''^[ \t]*(?:it|test)[ \t]*\([ \t]*(["'])([^\\\r\n]*?)\1[ \t]*,''', source, re.MULTILINE):
+            if safe_name(match.group(2)):
+                titles.setdefault(match.group(2), []).append(source[:match.start()].count('\n') + 1)
+    return {'line_count': source.count('\n') + 1, 'titles': titles}
+
+
+def tracked_tests(env, head):
+    if not isinstance(head, str) or not re.fullmatch(r'[a-f0-9]{40}', head):
+        raise ValueError('unknown_source_head')
+    result = subprocess.run(['git', 'ls-tree', '-r', '-z', '--name-only', head, '--', 'pitchroom-app'], cwd=ROOT, env=env, capture_output=True, timeout=5)
     if result.returncode:
         raise ValueError('source_inventory')
-    return {name.decode() for name in result.stdout.split(b'\0') if re.search(rb'\.(?:test|spec)\.[cm]?[jt]sx?$', name)}
+    catalogue = {}
+    for name in result.stdout.split(b'\0'):
+        if re.search(rb'\.(?:test|spec)\.[cm]?[jt]sx?$', name):
+            relative = name.decode()
+            blob = subprocess.run(['git', 'show', f'{head}:{relative}'], cwd=ROOT, env=env, capture_output=True, timeout=5)
+            if blob.returncode or len(blob.stdout) > REPORT_LIMIT:
+                raise ValueError('source_snapshot_unavailable')
+            catalogue[relative] = static_test_metadata(blob.stdout.decode(), Path(relative).suffix)
+    return catalogue
 
 
 def failure_record(file, assertion, tracked):
-    path = Path(file).resolve()
+    path = Path(os.path.normpath(file))
     relative = path.relative_to(ROOT).as_posix()
-    if relative not in tracked or path.is_symlink() or path.stat().st_size > REPORT_LIMIT:
+    if relative not in tracked:
         raise ValueError('unknown_test_source')
-    source = path.read_text()
+    metadata = tracked[relative]
     title = assertion.get('title', '')
     if not isinstance(title, str):
         raise ValueError('invalid_title')
-    declarations = {}
-    for match in re.finditer(r'''\b(?:it|test)\s*\(\s*(["'])([^\n]*?)\1''', source):
-        declarations.setdefault(match.group(2), []).append(match.start())
-    safe_title = title if title in declarations and len(title) <= 240 and not re.search(r'(?:[\x00-\x1f]|://|sk-[A-Za-z0-9_-]{16,}|github_pat_|-----BEGIN|(?i:bearer\s|(?:password|token|api_key)\s*[:=]))', title) else None
+    declarations = metadata['titles']
+    safe_title = title if title in declarations and safe_name(title) else None
     messages = assertion.get('failureMessages', [])
     if not isinstance(messages, list) or any(not isinstance(item, str) for item in messages):
         raise ValueError('invalid_failure_messages')
@@ -105,13 +129,13 @@ def failure_record(file, assertion, tracked):
     location = None
     for match in re.finditer(re.escape(str(path)) + r':([0-9]+):([0-9]+)', raw):
         line, column = int(match.group(1)), int(match.group(2))
-        if 0 < line <= source.count('\n') + 1 and 0 < column <= 10000:
+        if 0 < line <= metadata['line_count'] and 0 < column <= 10000:
             location = {'line': line, 'column': column}
             break
     return {
         'file': relative, 'test': safe_title,
         'case_id': hashlib.sha256((relative + '\0' + full_name).encode()).hexdigest(),
-        'declaration_line': source[:declarations[title][0]].count('\n') + 1 if safe_title and len(declarations[title]) == 1 else None,
+        'declaration_line': declarations[title][0] if safe_title and len(declarations[title]) == 1 else None,
         'category': category, 'failure_location': location, 'failure_hash': hashlib.sha256(raw.encode()).hexdigest(),
     }
 
@@ -179,12 +203,12 @@ def run_stage(stage):
     directory = Path(tempfile.mkdtemp(prefix='pitchroom-ci-', dir=os.environ.get('RUNNER_TEMP')))
     log = directory / (stage + '.log')
     env = environment(stage, os.environ)
-    command, workspaces, tracked, context = STAGES[stage], [], set(), {}
+    command, workspaces, tracked, context = STAGES[stage], [], {}, {}
     if stage == 'unit':
         context = diagnostic_context(env)
         try:
             command, workspaces = unit_reports(directory)
-            tracked = tracked_tests(env)
+            tracked = tracked_tests(env, context['head'])
         except (OSError, ValueError, TypeError, AttributeError, RuntimeError, subprocess.TimeoutExpired):
             command, workspaces = STAGES[stage], []
     try:

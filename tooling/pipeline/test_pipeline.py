@@ -63,7 +63,7 @@ class PipelineBehavior(unittest.TestCase):
             report = workspace / 'unit.json'
             report.write_text(json.dumps(self.diagnostic_report(source)))
             with patch.object(ci, 'ROOT', root), patch.object(ci, 'APP', root / 'pitchroom-app'):
-                summary = ci.summarize_unit([(workspace, report)], {source.relative_to(root).as_posix()}, 7, {'node': 'v24.10.0'})
+                summary = ci.summarize_unit([(workspace, report)], {source.relative_to(root).as_posix(): ci.static_test_metadata(source.read_text(), source.suffix)}, 7, {'node': 'v24.10.0'})
                 self.assertEqual(summary['exit'], 7)
                 self.assertEqual(summary['failures'][0]['test'], 'keeps the declared boundary')
                 self.assertEqual(summary['failures'][0]['declaration_line'], 1)
@@ -77,7 +77,7 @@ class PipelineBehavior(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
             _, source = self.diagnostic_workspace(root)
-            tracked = {source.relative_to(root).as_posix()}
+            tracked = {source.relative_to(root).as_posix(): ci.static_test_metadata(source.read_text(), source.suffix)}
             with patch.object(ci, 'ROOT', root):
                 record = ci.failure_record(str(source), {'title': 'keeps the declared boundary', 'failureMessages': [f'AssertionError: synthetic-private\n at {source}:1:4']}, tracked)
                 self.assertEqual(record['failure_location'], {'line': 1, 'column': 4})
@@ -89,7 +89,7 @@ class PipelineBehavior(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
             _, source = self.diagnostic_workspace(root)
-            tracked = {source.relative_to(root).as_posix()}
+            tracked = {source.relative_to(root).as_posix(): ci.static_test_metadata(source.read_text(), source.suffix)}
             sensitive = 'sk-' + 'a' * 24
             source.write_text(source.read_text() + 'it("' + sensitive + '",()=>{});\n')
             with patch.object(ci, 'ROOT', root):
@@ -98,13 +98,56 @@ class PipelineBehavior(unittest.TestCase):
                     self.assertIsNone(record['test'])
                     self.assertNotIn(title, json.dumps(record))
 
+    def test_static_catalogue_rejects_comments_strings_and_ambiguous_syntax(self):
+        sources = [
+            '// it("private-comment",()=>{});',
+            'const example = \'it("private-string",()=>{});\';',
+            '/*\nit("private-block",()=>{});\n*/',
+            'const example = `\nit("private-template",()=>{});\n`;',
+            'const example = `outer ${`it("private-nested",()=>{})`}`;',
+            'const example = "continued\\\nit(\'private-continued\',()=>{})";',
+        ]
+        for source in sources:
+            self.assertEqual(ci.static_test_metadata(source, '.ts')['titles'], {})
+        self.assertEqual(ci.static_test_metadata('it("jsx-text",()=>{});', '.tsx')['titles'], {})
+
+    def test_static_catalogue_filters_every_source_guard_credential_family(self):
+        samples = ['sk-' + 'a' * 24, 'github_pat_' + 'a' * 24, 'AKIA' + 'A' * 16]
+        samples += ['gh' + family + '_' + 'a' * 24 for family in 'pousr']
+        samples += ['authorization=' + 'private-value', 'access_token=' + 'private-value']
+        for sample in samples:
+            self.assertEqual(ci.static_test_metadata('it("' + sample + '",()=>{});', '.ts')['titles'], {})
+
+    def test_catalogue_is_pinned_to_head_and_never_rereads_mutable_source(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            _, source = self.diagnostic_workspace(root)
+            git_env = ci.environment('unit', os.environ)
+            git_env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM='1', GIT_TERMINAL_PROMPT='0')
+            git = ['git', '-c', 'core.hooksPath=/dev/null', '-c', 'init.templateDir=']
+            subprocess.run([*git, 'init', '-q'], cwd=root, env=git_env, check=True, capture_output=True)
+            subprocess.run([*git, 'add', '.'], cwd=root, env=git_env, check=True, capture_output=True)
+            subprocess.run([*git, '-c', 'user.name=SyntheticHarness', '-c', 'user.email=harness@example.invalid', 'commit', '-qm', 'synthetic baseline'], cwd=root, env=git_env, check=True, capture_output=True)
+            head = subprocess.check_output([*git, 'rev-parse', 'HEAD'], cwd=root, env=git_env, text=True).strip()
+            with patch.object(ci, 'ROOT', root):
+                catalogue = ci.tracked_tests(git_env, head)
+                source.write_text(source.read_text() + '// it("SYNTHETIC_PRIVATE_DYNAMIC_TITLE",()=>{});\n')
+                with patch.object(Path, 'read_text') as read:
+                    record = ci.failure_record(str(source), {'title': 'SYNTHETIC_PRIVATE_DYNAMIC_TITLE', 'failureMessages': []}, catalogue)
+                    read.assert_not_called()
+                self.assertIsNone(record['test'])
+                self.assertIsNone(record['declaration_line'])
+                self.assertNotIn('SYNTHETIC_PRIVATE_DYNAMIC_TITLE', json.dumps(record))
+                safe = ci.failure_record(str(source), {'title': 'keeps the declared boundary', 'failureMessages': []}, catalogue)
+                self.assertEqual(safe['test'], 'keeps the declared boundary')
+
     def test_duplicate_titles_have_distinct_hashed_suite_identity(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
             _, source = self.diagnostic_workspace(root)
             source.write_text(source.read_text() * 2)
             with patch.object(ci, 'ROOT', root):
-                records = [ci.failure_record(str(source), {'title': 'keeps the declared boundary', 'fullName': name, 'failureMessages': []}, {source.relative_to(root).as_posix()}) for name in ('suite A keeps the declared boundary', 'suite B keeps the declared boundary')]
+                records = [ci.failure_record(str(source), {'title': 'keeps the declared boundary', 'fullName': name, 'failureMessages': []}, {source.relative_to(root).as_posix(): ci.static_test_metadata(source.read_text(), source.suffix)}) for name in ('suite A keeps the declared boundary', 'suite B keeps the declared boundary')]
             self.assertNotEqual(records[0]['case_id'], records[1]['case_id'])
             self.assertIsNone(records[0]['declaration_line'])
 
@@ -146,7 +189,7 @@ class PipelineBehavior(unittest.TestCase):
             report = workspace / 'unit.json'
             report.write_text(json.dumps(packet))
             with patch.object(ci, 'ROOT', root), patch.object(ci, 'APP', root / 'pitchroom-app'):
-                summary = ci.summarize_unit([(workspace, report)], {source.relative_to(root).as_posix()}, 1, {})
+                summary = ci.summarize_unit([(workspace, report)], {source.relative_to(root).as_posix(): ci.static_test_metadata(source.read_text(), source.suffix)}, 1, {})
             self.assertIsNone(summary['failures'][0]['test'])
             self.assertEqual(summary['failures'][0]['file'], source.relative_to(root).as_posix())
             self.assertNotIn('synthetic-private-import-failure', json.dumps(summary))
@@ -160,7 +203,7 @@ class PipelineBehavior(unittest.TestCase):
             report = workspace / 'unit.json'
             report.write_text(json.dumps(packet))
             with patch.object(ci, 'ROOT', root), patch.object(ci, 'APP', root / 'pitchroom-app'):
-                summary = ci.summarize_unit([(workspace, report)], {source.relative_to(root).as_posix()}, 1, {})
+                summary = ci.summarize_unit([(workspace, report)], {source.relative_to(root).as_posix(): ci.static_test_metadata(source.read_text(), source.suffix)}, 1, {})
             self.assertEqual(len(summary['failures']), ci.FAILURE_LIMIT)
             self.assertEqual(summary['omitted_failures'], 40 - ci.FAILURE_LIMIT)
             with patch('builtins.print') as output:
@@ -180,7 +223,7 @@ class PipelineBehavior(unittest.TestCase):
                 options['stdout'].write(b'synthetic-private-stdout')
                 return subprocess.CompletedProcess(argv, 7)
 
-            with patch.object(ci, 'ROOT', root), patch.object(ci, 'APP', root / 'pitchroom-app'), patch.dict(os.environ, {'RUNNER_TEMP': directory}), patch.object(ci, 'tracked_tests', return_value={source.relative_to(root).as_posix()}), patch.object(ci, 'diagnostic_context', return_value={}), patch.object(ci.subprocess, 'run', side_effect=child), patch('builtins.print') as output:
+            with patch.object(ci, 'ROOT', root), patch.object(ci, 'APP', root / 'pitchroom-app'), patch.dict(os.environ, {'RUNNER_TEMP': directory}), patch.object(ci, 'tracked_tests', return_value={source.relative_to(root).as_posix(): ci.static_test_metadata(source.read_text(), source.suffix)}), patch.object(ci, 'diagnostic_context', return_value={'head': 'a' * 40}), patch.object(ci.subprocess, 'run', side_effect=child), patch('builtins.print') as output:
                 self.assertEqual(ci.run_stage('unit'), 7)
                 printed = '\n'.join(call.args[0] for call in output.call_args_list)
                 self.assertIn('keeps the declared boundary', printed)
