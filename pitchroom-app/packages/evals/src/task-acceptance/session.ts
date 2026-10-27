@@ -24,6 +24,14 @@ const buildIdentitySchema = z.discriminatedUnion("kind", [
 export const taskRuntimeIdentitySchema = z.object({ web: buildIdentitySchema, worker: buildIdentitySchema }).strict();
 const identitySchema = z.object({ source: sourceIdentitySchema, runtime: taskRuntimeIdentitySchema }).strict();
 const bundleInputSchema = z.object({ taskCase: z.unknown(), oracle: z.unknown(), materialPackageText: z.string() }).strict();
+// Persist transport status/identifiers, never raw provider envelopes. Product bodies belong in result.
+export const taskTransportSummarySchema = z.object({
+  kind: z.literal("transport_summary"),
+  status: z.enum(["not_dispatched", "received", "error", "outcome_unknown"]),
+  httpStatus: z.number().int().min(100).max(599).nullable(),
+  providerStatus: z.string().regex(/^[A-Za-z0-9_.-]{1,200}$/).nullable(),
+  observedModel: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,199}$/).nullable(),
+}).strict();
 export const checkpointInputSchema = z.object({
   stage: taskStageSchema, attemptId: text, commandId: text, projectId: text, revision: z.number().int().nonnegative(),
   startedAt: timestamp, endedAt: timestamp, parentCheckpointHashes: z.array(sha256Schema),
@@ -33,7 +41,7 @@ export const checkpointInputSchema = z.object({
     z.object({ kind: z.literal("known"), inputTokens: z.number().int().nonnegative(), outputTokens: z.number().int().nonnegative() }).strict(),
     z.object({ kind: z.literal("unknown"), reason: text }).strict(),
   ]),
-  request: json, response: json,
+  request: json, response: taskTransportSummarySchema,
   result: z.discriminatedUnion("kind", [
     z.object({ kind: z.literal("product_output"), data: productCheckpointPayloadSchema }).strict(),
     z.object({ kind: z.literal("unverified_record"), data: json }).strict(),
@@ -72,9 +80,12 @@ function rejectSensitive(value: unknown, secrets: readonly string[]) {
   const parsed = json.parse(value);
   const visit = (item: z.infer<typeof json>): void => {
     if (Array.isArray(item)) { item.forEach(visit); return; }
-    if (item !== null && typeof item === "object") for (const [key, nested] of Object.entries(item)) {
+    if (item !== null && typeof item === "object") {
+      if (typeof item.type === "string" && /^(?:reasoning(?:_.*)?|thinking|redacted_thinking)$/i.test(item.type)) failEvidence("INTERNAL_REASONING_RECORD");
+      for (const [key, nested] of Object.entries(item)) {
       if (/^(authorization|headers|api_?key|password|access_?token|encrypted_content|reasoning|reasoning_content|chain_of_thought)$/i.test(key)) failEvidence("SENSITIVE_RECORD_FIELD");
       visit(key); visit(nested);
+      }
     }
     if (typeof item === "string" && (/\b(?:sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})/.test(item) || /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/.test(item) || /(?:postgres(?:ql)?|mongodb(?:\+srv)?):\/\/[^\s]+:[^\s]+@/.test(item) || secrets.some(secret => secret.length > 0 && item.includes(secret)))) failEvidence("SENSITIVE_RECORD_VALUE");
   };

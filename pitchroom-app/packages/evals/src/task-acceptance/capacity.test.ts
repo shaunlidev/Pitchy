@@ -89,7 +89,7 @@ describe("PIT-51 metadata capacity and cross-process lock contract", () => {
     const f = fixture();
     const result = withEvidenceLock(f.policy, () => {
       expect(() => withEvidenceLock(f.policy, () => 2)).toThrow("EVIDENCE_LOCKED");
-      const owner = JSON.parse(readFileSync(join(f.policy.recordRoot, ".write-lock/owner.json"), "utf8"));
+      const owner = JSON.parse(readFileSync(join(f.policy.controlRoot, ".write-lock/owner.json"), "utf8"));
       expect(() => recoverEvidenceLock(f.policy, owner.token)).toThrow("LOCK_OWNER_ALIVE");
       return 1;
     });
@@ -101,9 +101,34 @@ describe("PIT-51 metadata capacity and cross-process lock contract", () => {
     }
   });
 
+  it("uses one accounting-domain lock across different output directories, preventing double reservation", () => {
+    const f = fixture(20_000), other = loadEvidencePolicy({ ...f.input, recordDirectory: "pitchroom-app/.artifacts/other-session-root" });
+    expect(other.controlRoot).toBe(f.policy.controlRoot);
+    withEvidenceLock(f.policy, () => {
+      reserveEvidenceWrite(f.policy, { sessionRoot: f.policy.recordRoot, maximumSessionBytes: 20_000, additionalBytes: 12_000 });
+      expect(() => withEvidenceLock(other, () => {
+        reserveEvidenceWrite(other, { sessionRoot: other.recordRoot, maximumSessionBytes: 20_000, additionalBytes: 12_000 });
+        writeFileSync(join(other.recordRoot, "second.json"), "x".repeat(12_000), { mode: 0o600 });
+      })).toThrow("EVIDENCE_LOCKED");
+      writeFileSync(join(f.policy.recordRoot, "first.json"), "x".repeat(12_000), { mode: 0o600 });
+    });
+    expect(inspectEvidenceCapacity(f.policy).usedBytes).toBe(12_000);
+    expect(inspectEvidenceCapacity(other).remainingBytes).toBe(8_000);
+    expect(() => loadEvidencePolicy({ ...f.input, recordDirectory: "pitchroom-app/.artifacts/.task-evidence-control/session" })).toThrow("RECORD_ROOT_OUTSIDE_ACCOUNTED_ARTIFACTS");
+  });
+
+  it("keeps the validated cap, shared lock root and reference receipts immutable", () => {
+    const f = fixture();
+    expect(Object.isFrozen(f.policy)).toBe(true);
+    expect(Object.isFrozen(f.policy.referenceLinks)).toBe(true);
+    expect(Object.isFrozen(f.policy.declaredRoots)).toBe(true);
+    expect(() => Object.assign(f.policy, { capBytes: 999_999_999, controlRoot: join(f.root, "other-lock") })).toThrow(TypeError);
+    expect(f.policy.capBytes).toBe(1_000_000);
+  });
+
   it("requires an exact local owner token for crash recovery; incomplete ownership stops", () => {
-    const f = fixture(); mkdirSync(f.policy.recordRoot, { mode: 0o700 });
-    const lock = join(f.policy.recordRoot, ".write-lock"); mkdirSync(lock, { mode: 0o700 });
+    const f = fixture(); mkdirSync(f.policy.controlRoot, { mode: 0o700 });
+    const lock = join(f.policy.controlRoot, ".write-lock"); mkdirSync(lock, { mode: 0o700 });
     expect(() => recoverEvidenceLock(f.policy, randomUUID())).toThrow("LOCK_OWNER_UNKNOWN_REQUIRES_EXPLICIT_RECOVERY");
     const owner = { pid: process.pid, host: hostname(), token: randomUUID() };
     writeFileSync(join(lock, "owner.json"), JSON.stringify(owner), { mode: 0o600 });

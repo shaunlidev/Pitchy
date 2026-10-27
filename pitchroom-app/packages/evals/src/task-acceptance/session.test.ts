@@ -31,7 +31,7 @@ const checkpoint = (attemptId = "synthetic-first") => ({
   startedAt: "2026-10-27T00:00:00Z", endedAt: "2026-10-27T00:00:01Z", parentCheckpointHashes: [],
   versionIds: { understanding: null, positioning: null, story: null, deck: null },
   model: "synthetic-no-provider", promptVersion: "offline-control-v1", runtime,
-  usage: { kind: "unknown", reason: "No provider was called" }, request: { action: "synthetic-import" }, response: { saved: true },
+  usage: { kind: "unknown", reason: "No provider was called" }, request: { action: "synthetic-import" }, response: { kind: "transport_summary", status: "not_dispatched", httpStatus: null, providerStatus: null, observedModel: null },
   result: { kind: "unverified_record", data: { text: "Synthetic imported material; not a real R1 run" } },
 });
 afterEach(async () => {
@@ -66,7 +66,7 @@ describe("PIT-51 append-only session integrity and recovery", () => {
     const state = verifyTaskSession(f.policy, first.reference);
     expect(state.committed.size).toBe(1);
     expect(state.checkpoints.get(input.attemptId)?.value.input.usage).toEqual(input.usage);
-    expect(() => appendTaskCheckpoint(f.policy, first.reference, { ...input, response: { saved: false } })).toThrow("ATTEMPT_ID_CONFLICT");
+    expect(() => appendTaskCheckpoint(f.policy, first.reference, { ...input, response: { ...input.response, status: "outcome_unknown" } })).toThrow("ATTEMPT_ID_CONFLICT");
   });
 
   it("requires a current journal head for a new attempt and existing parent checkpoint references", () => {
@@ -80,7 +80,7 @@ describe("PIT-51 append-only session integrity and recovery", () => {
   it("rejects output, input and manifest tampering instead of silently rehashing it", () => {
     const f = fixture(), first = appendTaskCheckpoint(f.policy, f.ref, checkpoint());
     const path = join(f.sessionRoot, "checkpoints", `${first.checkpointHash}.json`), original = readFileSync(path, "utf8");
-    const edited = JSON.parse(original); edited.input.response.saved = false; writeFileSync(path, JSON.stringify(edited));
+    const edited = JSON.parse(original); edited.input.response.status = "outcome_unknown"; writeFileSync(path, JSON.stringify(edited));
     expect(() => verifyTaskSession(f.policy, first.reference)).toThrow("CHECKPOINT_TAMPERED");
     writeFileSync(path, original);
     const inputPath = join(f.sessionRoot, "inputs/bundle.json"), input = readFileSync(inputPath, "utf8");
@@ -133,6 +133,18 @@ describe("PIT-51 append-only session integrity and recovery", () => {
     expect(readdirSync(join(f.sessionRoot, "checkpoints"))).toEqual([]);
   });
 
+  it("refuses provider envelopes and typed reasoning items before storage", () => {
+    const f = fixture(), marker = "SYNTHETIC_PRIVATE_REASONING";
+    const envelope = { output: [{ type: "reasoning", summary: [{ type: "summary_text", text: marker }] }] };
+    expect(() => appendTaskCheckpoint(f.policy, f.ref, { ...checkpoint(), response: envelope })).toThrow();
+    for (const type of ["reasoning", "reasoning_text", "thinking", "redacted_thinking"]) {
+      expect(() => appendTaskCheckpoint(f.policy, f.ref, { ...checkpoint(), request: { type, summary: marker } })).toThrow("INTERNAL_REASONING_RECORD");
+      expect(() => appendTaskObservation(f.policy, f.ref, { id: "private", at: "2026-10-27T00:00:00Z", stage: "understanding", attemptId: null, commandId: null, checkpointHash: null, kind: "observation", data: { type, text: marker } })).toThrow("INTERNAL_REASONING_RECORD");
+    }
+    expect(readdirSync(join(f.sessionRoot, "checkpoints"))).toEqual([]);
+    expect(verifyTaskSession(f.policy, f.ref).events).toHaveLength(1);
+  });
+
   it("does not commit or erase old evidence when the per-session budget is exhausted", () => {
     const f = fixture(), before = readdirSync(join(f.sessionRoot, "events"));
     expect(() => appendTaskCheckpoint(f.policy, f.ref, { ...checkpoint(), request: { text: "x".repeat(600_000) } })).toThrow("EVIDENCE_CAPACITY");
@@ -176,7 +188,7 @@ describe("PIT-51 append-only session integrity and recovery", () => {
     const child = spawn(process.execPath, ["--import", import.meta.resolve("tsx"), "--input-type=module", "-e", script], { stdio: ["ignore", "ignore", "pipe", "ipc"], env: { PATH: process.env.PATH ?? "", NODE_NO_WARNINGS: "1" } }); children.push(child);
     await new Promise<void>((done, reject) => { child.once("message", () => done()); child.once("error", reject); child.once("exit", code => reject(new Error(`Child exited before lock: ${code}`))); });
     expect(() => withEvidenceLock(f.policy, () => 1)).toThrow("EVIDENCE_LOCKED");
-    const owner = JSON.parse(readFileSync(join(f.policy.recordRoot, ".write-lock/owner.json"), "utf8"));
+    const owner = JSON.parse(readFileSync(join(f.policy.controlRoot, ".write-lock/owner.json"), "utf8"));
     child.kill("SIGKILL"); await new Promise<void>(done => child.once("exit", () => done()));
     expect(recoverEvidenceLock(f.policy, owner.token)).toMatchObject({ recoveredToken: owner.token });
     expect(withEvidenceLock(f.policy, () => 7)).toBe(7);
@@ -191,7 +203,7 @@ describe("PIT-51 append-only session integrity and recovery", () => {
     child.kill("SIGKILL"); await new Promise<void>(done => child.once("exit", () => done()));
     const root = join(f.policy.recordRoot, input.sessionId), originalManifest = readFileSync(join(root, "manifest.json"), "utf8");
     expect(existsSync(join(root, "inputs/bundle.json"))).toBe(false);
-    const owner = JSON.parse(readFileSync(join(f.policy.recordRoot, ".write-lock/owner.json"), "utf8")); recoverEvidenceLock(f.policy, owner.token);
+    const owner = JSON.parse(readFileSync(join(f.policy.controlRoot, ".write-lock/owner.json"), "utf8")); recoverEvidenceLock(f.policy, owner.token);
     const ref = createTaskSession(f.policy, input), verified = verifyTaskSession(f.policy, ref);
     expect(readFileSync(join(root, "manifest.json"), "utf8")).toBe(originalManifest);
     expect(verified.events).toHaveLength(1);
@@ -209,7 +221,7 @@ describe("PIT-51 append-only session integrity and recovery", () => {
     expect(interrupted.committed.size).toBe(1);
     expect(interrupted.checkpoints.get(next.attemptId)).toBeDefined();
     expect(interrupted.uncommittedFiles.length).toBeGreaterThan(0);
-    const owner = JSON.parse(readFileSync(join(f.policy.recordRoot, ".write-lock/owner.json"), "utf8")); recoverEvidenceLock(f.policy, owner.token);
+    const owner = JSON.parse(readFileSync(join(f.policy.controlRoot, ".write-lock/owner.json"), "utf8")); recoverEvidenceLock(f.policy, owner.token);
     const resumed = appendTaskCheckpoint(f.policy, first.reference, next), verified = verifyTaskSession(f.policy, resumed.reference);
     expect(verified.committed.size).toBe(2);
     expect(verified.uncommittedFiles.some(path => path.startsWith("events/.pending-"))).toBe(true);

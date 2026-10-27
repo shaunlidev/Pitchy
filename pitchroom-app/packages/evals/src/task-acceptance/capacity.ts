@@ -43,7 +43,8 @@ export function loadEvidencePolicy(raw: unknown) {
   const repositoryRoot = realpathSync(input.repositoryRoot);
   const recordRoot = resolve(repositoryRoot, input.recordDirectory);
   const appArtifacts = join(repositoryRoot, "pitchroom-app/.artifacts");
-  if (!inside(recordRoot, appArtifacts) || recordRoot === appArtifacts) failEvidence("RECORD_ROOT_OUTSIDE_ACCOUNTED_ARTIFACTS");
+  const controlRoot = join(appArtifacts, ".task-evidence-control");
+  if (!inside(recordRoot, appArtifacts) || recordRoot === appArtifacts || inside(recordRoot, controlRoot)) failEvidence("RECORD_ROOT_OUTSIDE_ACCOUNTED_ARTIFACTS");
   assertUnlinkedPath(recordRoot);
   const manifestPath = join(repositoryRoot, "pitchroom-v6/manifest.json");
   assertUnlinkedPath(manifestPath);
@@ -61,12 +62,12 @@ export function loadEvidencePolicy(raw: unknown) {
   const roots = [...new Set(declared.filter(item => existsSync(item.path)).map(item => realpathSync(item.path)))].sort();
   const uniqueRoots = roots.filter(path => !roots.some(other => path !== other && inside(path, other)));
   if (new Set(input.referenceLinks.map(item => item.path)).size !== input.referenceLinks.length) failEvidence("DUPLICATE_REFERENCE_RECEIPT");
-  return {
-    ...input, repositoryRoot, recordRoot, roots: uniqueRoots, declaredRoots: declared,
+  return Object.freeze({
+    ...input, referenceLinks: Object.freeze(input.referenceLinks.map(item => Object.freeze(item))), repositoryRoot, recordRoot, controlRoot, roots: Object.freeze(uniqueRoots), declaredRoots: Object.freeze(declared.map(item => Object.freeze(item))),
     manifestPath, manifestHash: hashTaskBytes(manifestBytes),
     capBytes: manifest.evidencePolicy.approvedCapBytes,
     policyHash: hashTaskValue({ repositoryRoot, recordRoot, manifestHash: hashTaskBytes(manifestBytes), references: input.referenceLinks }),
-  };
+  });
 }
 export type EvidencePolicy = ReturnType<typeof loadEvidencePolicy>;
 
@@ -114,7 +115,9 @@ export function evidenceTreeBytes(root: string): number {
 }
 export function ensurePrivateDirectory(path: string) {
   assertUnlinkedPath(path);
-  if (!existsSync(path)) mkdirSync(path, { mode: 0o700 });
+  if (!existsSync(path)) {
+    try { mkdirSync(path, { mode: 0o700 }); } catch (error) { if (errorCode(error) !== "EEXIST") throw error; }
+  }
   const st = lstatSync(path);
   if (!st.isDirectory() || (st.mode & 0o077) !== 0) failEvidence("INSECURE_EVIDENCE_DIRECTORY");
 }
@@ -123,7 +126,8 @@ export function withEvidenceLock<T>(policy: EvidencePolicy, action: () => T & (T
   const before = inspectEvidenceCapacity(policy);
   if (before.remainingBytes < CONTROL_RESERVE) failEvidence("EVIDENCE_CAPACITY");
   ensurePrivateDirectory(policy.recordRoot);
-  const lock = join(policy.recordRoot, ".write-lock"), recovery = join(policy.recordRoot, ".recovery-lock");
+  ensurePrivateDirectory(policy.controlRoot);
+  const lock = join(policy.controlRoot, ".write-lock"), recovery = join(policy.controlRoot, ".recovery-lock");
   if (existsSync(recovery)) failEvidence("RECOVERY_IN_PROGRESS");
   try { mkdirSync(lock, { mode: 0o700 }); }
   catch (error) { if (errorCode(error) === "EEXIST") failEvidence("EVIDENCE_LOCKED"); throw error; }
@@ -150,8 +154,8 @@ export function reserveEvidenceWrite(policy: EvidencePolicy, input: { additional
   return capacity;
 }
 export function recoverEvidenceLock(policy: EvidencePolicy, expectedToken: string) {
-  const recovery = join(policy.recordRoot, ".recovery-lock"), lock = join(policy.recordRoot, ".write-lock");
-  assertUnlinkedPath(policy.recordRoot);
+  const recovery = join(policy.controlRoot, ".recovery-lock"), lock = join(policy.controlRoot, ".write-lock");
+  assertUnlinkedPath(policy.controlRoot);
   try { mkdirSync(recovery, { mode: 0o700 }); }
   catch (error) { if (errorCode(error) === "EEXIST") failEvidence("RECOVERY_IN_PROGRESS_REQUIRES_OWNER_REVIEW"); throw error; }
   try {
