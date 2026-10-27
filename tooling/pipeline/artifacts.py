@@ -210,6 +210,27 @@ def verify_clean_tree(workdir, expected_tree):
     return True
 
 
+def verify_squash_merge(repository, approved_head, merged_commit, integration_base):
+    """Prove a single-parent integration has exactly the approved three-way tree."""
+    repo = Path(repository).resolve(strict=True)
+    head, merged = _commit(repo, approved_head), _commit(repo, merged_commit)
+    captured_base = _commit(repo, integration_base)
+    parents = _text(repo, "rev-list", "--parents", "-n", "1", merged).split()
+    if len(parents) != 2:
+        raise ArtifactError("Squash and merge requires one integration parent")
+    if parents[1] != captured_base:
+        raise ArtifactError("integration parent differs from the recorded pre-merge main")
+    result = _git(repo, "merge-tree", "--write-tree", captured_base, head, check=False)
+    if result.returncode:
+        raise ArtifactError("approved source cannot merge cleanly; explicit integration review required")
+    expected = result.stdout.decode().splitlines()[0]
+    _oid(expected)
+    actual = _text(repo, "rev-parse", merged + "^{tree}")
+    if expected != actual:
+        raise ArtifactError("squash result differs from the approved source integration")
+    return {"method":"squash", "head":head, "commit":merged, "parent":parents[1], "tree":actual}
+
+
 def has_ancestor(repository, commit, base):
     """Whether the accepted prerequisite commit is actually in the start base."""
     repo = Path(repository).resolve(strict=True)

@@ -6,7 +6,7 @@
   "task_lanes": 1,
   "machine_cap": 5,
   "default_base": "main",
-  "merge_policy": "human_approved_merge_commit",
+  "merge_policy": "human_approved_squash",
   "engineering_done_requires": [
     "merged",
     "post_merge_checks_passed"
