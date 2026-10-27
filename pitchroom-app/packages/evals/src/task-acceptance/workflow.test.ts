@@ -269,6 +269,34 @@ it("uses the actual Clarify output for explicit Apply and stops before a separat
   expect(await recordDecision({ run, decision: apply })).toMatchObject({ kind: "decision_completed" }); expect(f.commands).toHaveLength(count);
 }, 45000);
 
+it("retains a stale Clarify rejection as replayable evidence and holds without Apply", async () => {
+  const f = await httpFixture(), run = prepare(f.input), initial = humanViewSchema.parse(await advance(run));
+  await recordDecision({ run, decision: decision(initial, { kind: "answer_clarification", taskKey: initial.choices[0]?.key, originalWords: "Synthetic consultant input: the discussion should seek a limited pilot, not an annual procurement commitment." }) });
+  let result: unknown;
+  for (let index = 0; index < 10; index++) {
+    result = await advance(run);
+    if (z.object({ kind: z.literal("awaiting_human") }).safeParse(result).success) break;
+    expect(result).toMatchObject({ kind: "awaiting_product" }); await new Promise(done => setTimeout(done, 20));
+  }
+  const candidate = humanViewSchema.parse(result); expect(candidate.step).toBe("clarification_wait");
+  const choice = candidate.choices[0]; if (!choice) throw new Error("Missing actual Clarify candidate");
+  expect(candidate.workspace.clarifications?.find(item => item.id === choice.key)?.status).toBe("proposal_ready");
+  const stale = decision(candidate, { kind: "apply_clarification", candidateKey: choice.key });
+  addFixtureMaterial({ name: "external.md", mediaType: "text/markdown", text: "Synthetic external material changes the displayed Clarify inputs." });
+  const beforeDecision = readFixtureState();
+  const count = f.commands.length;
+  await expect(recordDecision({ run, decision: stale })).rejects.toThrow("WORKFLOW_STALE_DECISION");
+  expect(f.commands).toHaveLength(count); expect(readFixtureState()).toEqual(beforeDecision);
+  expect(audit(run).integrity).toBe("valid");
+  expect(await advance(run)).toMatchObject({ kind: "held", reason: "WORKFLOW_CLARIFICATION_BASE_CHANGED" });
+  expect(report(run)).toMatchObject({ integrity: "valid", execution: "held", semantic: "not_evaluated", userTask: "not_observed" });
+  const locator = JSON.parse(readFileSync(run.referenceFile, "utf8"));
+  const state = verifyTaskSession(loadEvidencePolicy(locator.policyInput), locator.initialReference);
+  expect(state.observations.some(item => z.object({ kind: z.literal("workflow_decision_rejected"), reason: z.literal("WORKFLOW_PRODUCT_CHANGED") }).safeParse(item.data).success)).toBe(true);
+  await expect(recordDecision({ run, decision: stale })).rejects.toThrow("WORKFLOW_DECISION_REJECTED");
+  expect(await advance(run)).toMatchObject({ kind: "held", reason: "WORKFLOW_CLARIFICATION_BASE_CHANGED" }); expect(f.commands).toHaveLength(count);
+}, 45000);
+
 it("a changed product makes the displayed checkpoint stale and cannot execute its decision", async () => {
   const f = await httpFixture(), run = prepare(f.input), view = humanViewSchema.parse(await advance(run));
   const binding = JSON.parse(readFileSync(f.input.launchReceiptFile, "utf8"));

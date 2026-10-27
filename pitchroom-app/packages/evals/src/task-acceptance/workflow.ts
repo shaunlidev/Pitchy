@@ -489,7 +489,7 @@ function replay(context: Context) {
           const at = context.state.observations.findIndex(item => hashTaskValue(item.data) === hashTaskValue(fact));
           const receiptAt = context.state.observations.findIndex(item => item.id === `workspace:${pendingCommandId}:outcome`);
           if (receiptAt < 0 || at <= receiptAt) failEvidence("WORKFLOW_SNAPSHOT_RECEIPT_ORDER");
-        } else if (lastCheckpoint && step === "clarification_wait") {
+        } else if (lastCheckpoint && !gate && step === "clarification_wait") {
           const submitted = [...completed.values()].filter(item => item.operation.command.action === "submit_clarification").at(-1);
           if (!submitted || hashTaskValue(withoutAsyncFields(snapshot(context, submitted.checkpointHash).workspace)) !== hashTaskValue(withoutAsyncFields(observed.workspace))) failEvidence("WORKFLOW_CLARIFICATION_BASE_CHANGED");
         } else if (lastCheckpoint && !gate && snapshot(context, lastCheckpoint).workspaceHash !== observed.workspaceHash) {
