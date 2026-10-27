@@ -1,10 +1,11 @@
+import {positioningProposalV1Schema} from "./positioning";
 import { describe, expect, it } from "vitest";
 import { appliedCoreMessage, deriveDownstreamSyncStatus } from "./core-message-sync";
 
 describe("applied core message single source of truth", () => {
   it("resolves only the explicitly applied direction", () => {
-    expect(appliedCoreMessage({ versionId: "positioning-v2", original: "Original", appliedDirectionId: "human", directions: [{ id: "human", coreMessage: "Shared before awkward." }] })).toEqual({ versionId: "positioning-v2", directionId: "human", text: "Shared before awkward." });
-    expect(appliedCoreMessage({ versionId: "positioning-v2", original: "Original", directions: [] })).toBeUndefined();
+    expect(appliedCoreMessage({id:"positioning-v2",appliedDirectionId:"human",proposal:proposal()})).toEqual({ versionId: "positioning-v2", directionId: "human", text: "Shared before awkward.",decisionId:"legacy:positioning-v2:human" });
+    expect(appliedCoreMessage({id:"positioning-v2",proposal:proposal()})).toBeUndefined();
   });
 
   it("routes downstream changes by ownership instead of overwriting everything", () => {
@@ -14,3 +15,5 @@ describe("applied core message single source of truth", () => {
     expect(deriveDownstreamSyncStatus({ artifactKind: "human_edited", artifactCoreMessageVersionId: "v2", currentCoreMessageVersionId: "v2" })).toBe("synced");
   });
 });
+
+function proposal(){return positioningProposalV1Schema.parse({schemaVersion:1,understandingVersionId:"u",originalFraming:{title:"Original framing",coreMessage:"Original"},directions:["human","other"].map(id=>({id,title:id,coreMessage:"Shared before awkward.",from:"before",to:"after",tradeoff:"choice",excludes:[],evidence:[{sourceId:"s",chunkId:"c",quote:"source"}],userInputIds:[]}))});}

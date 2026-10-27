@@ -1,12 +1,12 @@
 import { z } from "zod";
 import { PitchroomError } from "./errors";
 import { understandingProposalV1Schema } from "./understanding";
-import { positioningProposalV1Schema } from "./positioning";
+import { positioningChoiceSchema, readPositioning, positioningHumanWording, samePositioningChoice, resolvePositioningChoice, positioningProposalV1Schema } from "./positioning";
 import { sourceFingerprint } from "./clarification";
 
 const text = z.string().min(1);
 export const storyHeadSchema = z.object({ generation: z.number().int().nonnegative(), storyId: text.nullable() });
-export const storyOriginSchema = z.object({ understandingVersionId: text, positioningVersionId: text, sourceFingerprint: z.string(), directionId: text });
+export const storyOriginSchema = z.object({ understandingVersionId: text, positioningVersionId: text, positioningDecisionId:text.optional(), sourceFingerprint: z.string(), directionId: text });
 export const storyBasisSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("understanding_basis"), id: text, understandingBasisId: text }).strict(),
   z.object({ kind: z.literal("source_excerpt"), id: text, sourceId: text, chunkId: text, quote: text, statement: text, nature: z.enum(["record", "suggestion", "uncertain"]) }).strict(),
@@ -32,7 +32,7 @@ export const storyRequestSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("restore"), storyId: text }).strict(),
 ]);
 const sourceSchema = z.object({ id: text, projectId: text, name: text, mediaType: text, contentHash: text, chunks: z.array(z.object({ id: text, sourceId: text, text: z.string(), startOffset: z.number(), endOffset: z.number() })) });
-export const storySnapshotSchema = z.object({ origin: storyOriginSchema, understanding: understandingProposalV1Schema, positioning: positioningProposalV1Schema, sources: z.array(sourceSchema), before: storySchema.nullable(), request: storyRequestSchema, userInput: z.object({ id: text, text }).nullable(), model: text, promptVersion: text });
+export const storySnapshotSchema = z.object({ origin: storyOriginSchema, understanding: understandingProposalV1Schema, positioning: positioningProposalV1Schema, selectedChoice:positioningChoiceSchema.optional(), sources: z.array(sourceSchema), before: storySchema.nullable(), request: storyRequestSchema, userInput: z.object({ id: text, text }).nullable(), model: text, promptVersion: text });
 export const storyDiffSchema = z.object({ fields: z.array(z.object({ field: text, before: z.string(), after: z.string() })), blocks: z.array(z.object({ id: text, kind: z.enum(["added", "removed", "changed", "moved"]), before: storyBlockSchema.nullable(), after: storyBlockSchema.nullable(), from: z.number().nullable(), to: z.number().nullable() })) });
 const readySchema = z.object({ kind: z.literal("ready"), candidateId: text, candidate: storySchema, diff: storyDiffSchema, responseToJudgment: text });
 const storyOutcomeSchema = z.discriminatedUnion("kind", [
@@ -76,10 +76,16 @@ export function compareStories(before: Story | null, after: Story): z.infer<type
   before?.blocks.forEach((block, from) => { if (!after.blocks.some(b => b.id === block.id)) blocks.push({ id: block.id, kind: "removed", before: block, after: null, from, to: null }); });
   return { fields, blocks };
 }
-export function storyIsFresh(origin: Story["origin"], current: { phase: string; understandingId: string | null; positioningId: string | null; directionId: string | null; sources: StorySnapshot["sources"] }) {
-  return current.phase === "accepted" && origin.understandingVersionId === current.understandingId && origin.positioningVersionId === current.positioningId && origin.directionId === current.directionId && origin.sourceFingerprint === sourceFingerprint(current.sources);
+type PositioningOrigin = { positioningVersionId:string|null; positioningDecisionId?:string|null };
+function samePositioningOrigin(a:PositioningOrigin,b:PositioningOrigin) {
+  if(a.positioningDecisionId&&b.positioningDecisionId)return a.positioningDecisionId===b.positioningDecisionId;
+  if([a.positioningDecisionId,b.positioningDecisionId].some(id=>id&&!id.startsWith("legacy:")))return false;
+  return a.positioningVersionId===b.positioningVersionId;
 }
-export function sameStoryOrigin(a: Story["origin"], b: Story["origin"]) { return a.understandingVersionId === b.understandingVersionId && a.positioningVersionId === b.positioningVersionId && a.directionId === b.directionId && a.sourceFingerprint === b.sourceFingerprint; }
+export function storyIsFresh(origin: Story["origin"], current: { phase: string; understandingId: string | null; positioningId: string | null; directionId: string | null; positioningDecisionId?:string|null; sources: StorySnapshot["sources"] }) {
+  return current.phase === "accepted" && origin.understandingVersionId === current.understandingId && samePositioningOrigin(origin,{positioningVersionId:current.positioningId,positioningDecisionId:current.positioningDecisionId}) && origin.directionId === current.directionId && origin.sourceFingerprint === sourceFingerprint(current.sources);
+}
+export function sameStoryOrigin(a: Story["origin"], b: Story["origin"]) { return a.understandingVersionId === b.understandingVersionId && samePositioningOrigin(a,b) && a.directionId === b.directionId && a.sourceFingerprint === b.sourceFingerprint; }
 export function assertStoryHead(expected: StoryHead, actual: StoryHead) {
   if (expected.generation !== actual.generation || expected.storyId !== actual.storyId) throw new PitchroomError("CONFLICT", "The adopted story changed. Review the current story before continuing.");
 }
@@ -110,7 +116,9 @@ export function validateStory(raw: unknown, snapshot: StorySnapshot): Story {
   if (bases.size !== story.bases.length || unknowns.size !== story.unknowns.length || new Set(story.blocks.map(b => b.id)).size !== story.blocks.length) fail("Story IDs must be unique.");
   const refs = (ids: string[]) => { if (new Set(ids).size !== ids.length || ids.some(id => !bases.has(id))) fail("Story has an unknown or duplicate basis reference."); };
   const understandingBases = snapshot.understanding.themes.flatMap(t => t.summaryInterpretation?.groundingV4?.bases ?? []);
-  const inputs = new Set([...(snapshot.userInput ? [snapshot.userInput.id] : []), ...snapshot.understanding.themes.flatMap(t => t.claims.filter(c => !c.supersededBy).flatMap(c => c.userInputIds)), ...(snapshot.before?.bases.flatMap(b => b.kind === "consultant_judgment" ? [b.userInputId] : []) ?? [])]);
+  const selectedChoice=storySelectedChoice(snapshot);
+  const humanWording=positioningHumanWording(selectedChoice);
+  const inputs = new Set([...(humanWording?[humanWording.userInputId]:[]), ...(selectedChoice.kind==="source_quote"?[selectedChoice.userInputId]:[]), ...(snapshot.userInput ? [snapshot.userInput.id] : []), ...snapshot.understanding.themes.flatMap(t => t.claims.filter(c => !c.supersededBy).flatMap(c => c.userInputIds)), ...(snapshot.before?.bases.flatMap(b => b.kind === "consultant_judgment" ? [b.userInputId] : []) ?? [])]);
   for (const b of story.bases) {
     if (b.kind === "agent_interpretation" && b.supportingBasisRefs.length === 0) fail("Agent interpretations require attributed support.");
     if (b.kind === "source_excerpt") {
@@ -132,8 +140,13 @@ export function validateStory(raw: unknown, snapshot: StorySnapshot): Story {
   if (story.unknowns.some(u => !story.blocks.some(b => b.unknownIds.includes(u.id)))) fail("Each open question must remain attached to the narrative.");
   for (const block of story.blocks) { refs(block.basisRefs); if (block.unknownIds.some(id => !unknowns.has(id))) fail("Story references an unknown open question."); }
   if (story.blocks[0]?.title !== story.coreMessage) fail("The story opening must be the exact core message.");
-  const core = snapshot.origin.directionId === "original" ? snapshot.positioning.originalFraming.coreMessage : snapshot.positioning.directions.find(d => d.id === snapshot.origin.directionId)?.coreMessage;
+  const core = selectedChoice.text;
   if (snapshot.request.kind === "develop_direction" && story.coreMessage !== core) fail("Initial story must preserve the selected core message.");
+  if(snapshot.request.kind==="develop_direction" && (Boolean(humanWording)||selectedChoice.kind==="source_quote")) {
+    const basis=story.bases.find(b=>humanWording ? b.kind==="consultant_judgment"&&b.userInputId===humanWording.userInputId&&b.statement===humanWording.text : selectedChoice.kind==="source_quote"&&b.kind==="source_excerpt"&&b.sourceId===selectedChoice.sourceId&&b.chunkId===selectedChoice.chunkId&&b.quote===selectedChoice.text);
+    if(!basis||!story.blocks[0]!.basisRefs.includes(basis.id))fail("The retained opening wording must preserve its exact human or source attribution.");
+  }
+
   const english = !/\p{Script=Han}/u.test(snapshot.understanding.nextQuestion.question);
   for (const [index, block] of story.blocks.entries()) {
     const unchanged = snapshot.before?.blocks.find(b => b.id === block.id);
@@ -155,4 +168,10 @@ export function exactStoryEdit(snapshot: StorySnapshot): Story {
   block.basisRefs = [id];
   if (story.blocks[0]?.id === block.id) story.coreMessage = block.title;
   return storySchema.parse(story);
+}
+
+export function storySelectedChoice(snapshot:StorySnapshot) {
+  const applied=readPositioning({id:snapshot.origin.positioningVersionId,proposal:snapshot.positioning,appliedDirectionId:snapshot.origin.directionId}).applied;
+  if(!applied || applied.choice.id!==snapshot.origin.directionId || applied.positioningId!==snapshot.origin.positioningVersionId || snapshot.origin.positioningDecisionId && applied.decisionId!==snapshot.origin.positioningDecisionId || snapshot.selectedChoice && !samePositioningChoice(snapshot.selectedChoice,applied.choice)) throw new PitchroomError("PROPOSAL_REJECTED","The story selection does not match its frozen positioning decision.");
+  return snapshot.selectedChoice ?? applied.choice;
 }

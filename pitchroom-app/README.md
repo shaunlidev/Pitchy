@@ -506,3 +506,14 @@ been established by those tests.
 ### 2026-10-25 calibration acceptance (current scoped round)
 
 Five user-requested repairs and real DeepSeek synthetic-material browser chain completed, without commits. PDF/assistive technology deferred by user. 385 tests, 17 PostgreSQL checks, 7 browser journeys; standalone build passed, aggregate command security-notice interruption retained. Original eight criteria unchanged; case 7 legacy keyword false-negative remains explicitly recorded. See [scoped report](docs/verification/2026-10-25-calibration-dod.md). This is engineering/assistant acceptance, not customer acceptance.
+
+
+## Attributable positioning wording and concurrency
+
+Positioning keeps accepted interpretation, exact source quotes, exact human wording and AI directions distinct. `original` remains the legacy wire ID; newly generated records label it as accepted interpretation. Older records without provenance display as saved wording with unrecorded origin. They are never upgraded into client quotations.
+
+`save_positioning_wording` saves a candidate in a new positioning version. It does not Apply it or rewrite an existing Story/Deck. Source choices store their project, source hash, full passage snapshot and exact range; manual strings preserve spaces and line breaks. The existing seven-day browser draft recovery also retains unsent wording. Saving one wording type preserves the other unsent editor.
+
+Positioning mutations (`generate_positioning`, `save_positioning_wording`, `apply_positioning`, `undo_positioning`, `adjust_positioning`, legacy `generate_deck`) require `expectedPositioning` alongside `expectedRevision`. Use the returned `positioning.head`, or `{positioningId:null, decisionId:null}` before the first positioning. Every new decision changes the token, including A→B→A. A stale token fails closed; retry keeps the original command ID. `readPositioning` owns legacy decoding, choices, applied snapshots and head calculation; callers must not substitute the first AI direction when a choice is missing.
+
+Apply/Undo append decision snapshots in existing JSON and maintain legacy projection columns. Wording content and older Story/Deck snapshots stay intact; this is not a SQL migration or a new multi-step Undo system. A source selected for generation is rechecked against its complete owning passage and the existing Agent isolation rules. Unselected retained wording and decision history are excluded from provider context. Exact retained openings must keep their source or human attribution in Story trace.

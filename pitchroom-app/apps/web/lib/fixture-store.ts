@@ -1,3 +1,4 @@
+import {positioningSelectionKey,positioningProposalV1Schema,assertPositioningHead,changePositioningChoice,positioningProposalForCandidate,readPositioning,resolvePositioningChoice,validateRetainedPositioningChoice,type PositioningHead,type PositioningWordingInput,type RetainedPositioningChoice} from "@pitchroom/domain";
 import { topicRefSchema, topicLabel, sameTopic, type TopicMaterial, type TopicRef } from "@pitchroom/domain";
 import { ingestBrief, briefText, saveBriefSchema, stableHash, normalizeMaterialText, type BriefWorkspace } from "@pitchroom/domain";
 import { SyntheticStoryRunner } from "@pitchroom/agent";
@@ -10,7 +11,7 @@ import { PitchroomError, defaultProjectCharacterLimit, ingestMaterial, type Deck
 import { buildDeterministicDeck, buildDeterministicPositioning, buildDeterministicUnderstanding, isInstructionLikeSourceText } from "@pitchroom/agent";
 
 type Version = { parentUnderstandingId?: string; clarificationTaskId?: string; id: string; number: number; proposal: UnderstandingProposalV1; createdBy: "agent" | "user"; createdAt: string };
-type PositioningVersion = { id: string; number: number; proposal: PositioningProposalV1; appliedDirectionId?: string; previousAppliedDirectionId?: string; createdAt: string };
+type PositioningVersion = { head?: PositioningHead; id: string; number: number; proposal: PositioningProposalV1; appliedDirectionId?: string; previousAppliedDirectionId?: string; createdAt: string };
 type DeckVersion = { id: string; number: number; proposal: DeckProposal; createdBy: "agent" | "user"; createdAt: string };
 type WorkflowRun = { id: string; kind: "positioning" | "deck" | "story"; status: "running" | "completed" | "failed"; failureMessage?: string; events: Array<{ type: string; detail: string; at: string }> };
 export type AgentReview = { status: "quarantined"; affectedChunks: number; message: string };
@@ -48,6 +49,10 @@ export function agentReviewForChunks(chunks: Array<{ text: string }>): AgentRevi
   } : undefined;
 }
 export const readFixtureState = (): FixtureState => {
+  if(state.deck?.proposal.schemaVersion===1) {
+    const applied=state.positioning ? readPositioning(state.positioning).applied : null;
+    state.deck.stale=state.deck.proposal.understandingVersionId!==state.currentVersionId || !applied || positioningSelectionKey({positioningId:state.deck.proposal.positioningVersionId,decisionId:state.deck.proposal.positioningDecisionId,directionId:state.deck.proposal.appliedDirectionId})!==positioningSelectionKey(applied);
+  }
   for (const task of state.clarifications ?? []) if (clarificationPending(task)) {
     try { assertClarificationFresh(task, clarificationCurrent()); } catch { task.status = "stale"; }
   }
@@ -57,9 +62,12 @@ export const readFixtureState = (): FixtureState => {
     for (const p of state.story.proposals) if (["ready","running","failed","no_change"].includes(p.state.kind) && (JSON.stringify(p.baseHead)!==JSON.stringify(state.story.head)||!storyIsFresh(p.snapshot.origin,storyContext()))) p.state={kind:"stale",explanation:"Inputs changed.",savedCandidate:p.state.kind==="ready"?p.state.candidate:null};
     if (state.deck?.proposal.schemaVersion === 2) state.deck.stale = state.story.stale || state.deck.proposal.storyVersionId !== state.story.head.storyId || state.deck.proposal.storyGeneration !== state.story.head.generation;
   }
-  return structuredClone(state);
+  const result=structuredClone(state);
+  result.positioningVersions=result.positioningVersions.map(version=>({...version,head:readPositioning(version).head}));
+  if(result.positioning)result.positioning={...result.positioning,head:readPositioning(result.positioning).head};
+  return result;
 };
-export function resetFixtureState() { delete state.story; storyReceipts.clear(); briefReceipts.clear(); topicReceipts.clear(); Object.assign(state, makeState()); return readFixtureState(); }
+export function resetFixtureState() { delete state.story; storyReceipts.clear(); positioningReceipts.clear(); briefReceipts.clear(); topicReceipts.clear(); Object.assign(state, makeState()); return readFixtureState(); }
 
 const briefReceipts = new Map<string, string>();
 function fixtureStoredCharacters() {
@@ -180,55 +188,92 @@ export function acceptFixture(expectedRevision: number) {
   state.project.phase = "accepted"; addEvent("Understanding accepted", `${state.currentVersionId} accepted by synthetic-local-user`); return readFixtureState();
 }
 
-export function generateFixturePositioning(expectedRevision: number = state.project.revision) {
+export function generateFixturePositioning(expectedRevision: number = state.project.revision, expectedPositioning:PositioningHead = state.positioning ? readPositioning(state.positioning).head : {positioningId:null,decisionId:null}, commandId=crypto.randomUUID()) {
+  const replay=replayPositioningCommand(commandId,{kind:"generate_positioning",expectedRevision,expectedPositioning});if(replay.replayed)return readFixtureState();
+  assertPositioningHead(state.positioning,expectedPositioning);
   if (state.project.phase !== "accepted" || state.project.revision !== expectedRevision || !state.currentVersionId) throw new PitchroomError("CONFLICT", "Accept the current understanding before creating positioning directions.");
   const current = state.versions.find((version) => version.id === state.currentVersionId);
   if (!current) throw new PitchroomError("NOT_FOUND", "The accepted understanding was not found.");
   const proposal = buildDeterministicPositioning({ understandingVersionId: current.id, understanding: current.proposal, chunks: state.sources.flatMap((source) => source.chunks) });
-  state.positioning = { id: `positioning-${Date.now()}`, number: (state.positioningVersions.at(-1)?.number ?? 0) + 1, proposal, createdAt: new Date().toISOString() };
+  const prior=state.positioning;
+  proposal.retainedChoices=structuredClone(prior?.proposal.retainedChoices ?? []);
+  const carry=prior?.proposal.understandingVersionId===current.id ? positioningProposalForCandidate(prior) : undefined;
+  if(carry?.decisionJournal)proposal.decisionJournal=carry.decisionJournal;
+  state.positioning = { id: crypto.randomUUID(), number: (state.positioningVersions.at(-1)?.number ?? 0) + 1, proposal:positioningProposalV1Schema.parse(proposal),appliedDirectionId:carry ? prior?.appliedDirectionId : undefined,previousAppliedDirectionId:carry ? prior?.previousAppliedDirectionId : undefined, createdAt: new Date().toISOString() };
+  positioningReceipts.set(commandId,replay.hash);
   state.positioningVersions.push(state.positioning);
   if (state.deck) state.deck.stale = true;
   addEvent("Positioning proposed", `${proposal.directions.length} source-grounded directions ready for review`);
   return readFixtureState();
 }
 
-export function applyFixturePositioning(directionId: string, expectedRevision: number) {
-  if (state.project.phase !== "accepted" || state.project.revision !== expectedRevision || !state.positioning) throw new PitchroomError("CONFLICT", "This positioning view is stale or not ready.");
-  if (directionId !== "original" && !state.positioning.proposal.directions.some((direction) => direction.id === directionId)) throw new PitchroomError("INVALID_INPUT", "The selected direction does not exist.");
-  state.positioning.previousAppliedDirectionId = state.positioning.appliedDirectionId;
-  state.positioning.appliedDirectionId = directionId;
-  if (state.deck && state.deck.proposal.appliedDirectionId !== directionId) state.deck.stale = true;
-  addEvent("Positioning applied", directionId === "original" ? "Original framing retained" : `${directionId} applied by user`);
-  return readFixtureState();
+const positioningReceipts = new Map<string,string>();
+function replayPositioningCommand(commandId:string, body:unknown) {
+  const hash=JSON.stringify(body), prior=positioningReceipts.get(commandId);
+  if (prior && prior!==hash) throw new PitchroomError("CONFLICT","Positioning command ID was reused for different input.");
+  return {hash,replayed:prior!==undefined};
+}
+export function applyFixturePositioning(directionId: string, expectedRevision: number, expectedPositioning: PositioningHead = state.positioning ? readPositioning(state.positioning).head : {positioningId:null,decisionId:null}, commandId=crypto.randomUUID()) {
+  return changeFixturePositioning({kind:"apply",choiceId:directionId},expectedRevision,expectedPositioning,commandId);
+}
+export function undoFixturePositioning(expectedRevision: number, expectedPositioning: PositioningHead = state.positioning ? readPositioning(state.positioning).head : {positioningId:null,decisionId:null}, commandId=crypto.randomUUID()) {
+  return changeFixturePositioning({kind:"undo"},expectedRevision,expectedPositioning,commandId);
+}
+function changeFixturePositioning(operation:{kind:"apply";choiceId:string}|{kind:"undo"}, expectedRevision:number, expectedPositioning:PositioningHead, commandId:string) {
+  const replay=replayPositioningCommand(commandId,{operation,expectedRevision,expectedPositioning});if(replay.replayed)return readFixtureState();
+  if(state.project.phase!=="accepted"||state.project.revision!==expectedRevision||!state.positioning)throw new PitchroomError("CONFLICT","This positioning view is stale or not ready.");
+  if(state.positioning && state.positioning.proposal.understandingVersionId!==state.currentVersionId)throw new PitchroomError("CONFLICT","This positioning belongs to an earlier understanding.");
+  assertPositioningHead(state.positioning,expectedPositioning);
+  const change=changePositioningChoice(state.positioning,operation,commandId,crypto.randomUUID());
+  const choice=readPositioning({...state.positioning,...change}).applied?.choice;
+  if(choice?.kind==="source_quote")validateRetainedPositioningChoice(choice,state.project.id,state.sources.map(source=>({id:source.sourceId,name:source.name,contentHash:source.contentHash,chunks:source.chunks})));
+  state.positioning.proposal=change.proposal;state.positioning.appliedDirectionId=change.appliedDirectionId ?? undefined;state.positioning.previousAppliedDirectionId=change.previousAppliedDirectionId ?? undefined;
+  if(state.deck)state.deck.stale=true;
+  positioningReceipts.set(commandId,replay.hash);addEvent("Positioning choice saved",operation.kind==="apply"?"Explicit choice applied":"Previous choice restored");return readFixtureState();
+}
+export function saveFixturePositioningWording(input:{wording:PositioningWordingInput;expectedRevision:number;expectedPositioning:PositioningHead;commandId:string}) {
+  const replay=replayPositioningCommand(input.commandId,input);if(replay.replayed)return readFixtureState();
+  if(state.project.phase!=="accepted"||state.project.revision!==input.expectedRevision||!state.positioning)throw new PitchroomError("CONFLICT","This wording view is stale or not ready.");
+  if(state.positioning.proposal.understandingVersionId!==state.currentVersionId)throw new PitchroomError("CONFLICT","This positioning belongs to an earlier understanding.");
+  assertPositioningHead(state.positioning,input.expectedPositioning);
+  let choice:RetainedPositioningChoice;
+  if(input.wording.kind==="manual_exact")choice={...input.wording,id:crypto.randomUUID(),understandingId:state.positioning.proposal.understandingVersionId,userInputId:crypto.randomUUID()};
+  else {
+    const wording=input.wording;
+    const source=state.sources.find(source=>source.sourceId===wording.sourceId);
+    if(!source)throw new PitchroomError("CONFLICT","The selected source is unavailable.");
+    choice={...input.wording,id:crypto.randomUUID(),understandingId:state.positioning.proposal.understandingVersionId,userInputId:crypto.randomUUID(),projectId:state.project.id,sourceName:source.name,sourceHash:source.contentHash,passage:source.chunks.find(chunk=>chunk.id===wording.chunkId)?.text ?? ""};
+    validateRetainedPositioningChoice(choice,state.project.id,[{id:source.sourceId,name:source.name,contentHash:source.contentHash,chunks:source.chunks}]);
+  }
+  const proposal=positioningProposalForCandidate(state.positioning);proposal.retainedChoices=[...(proposal.retainedChoices ?? []),choice];
+  const version:PositioningVersion={...state.positioning,id:crypto.randomUUID(),number:state.positioningVersions.length+1,proposal:positioningProposalV1Schema.parse(proposal),createdAt:new Date().toISOString()};
+  state.positioningVersions.push(version);state.positioning=version;positioningReceipts.set(input.commandId,replay.hash);addEvent("Wording candidate saved","Not applied; the active choice and existing Story/Deck are retained.");return readFixtureState();
 }
 
-export function undoFixturePositioning(expectedRevision: number) {
-  if (state.project.phase !== "accepted" || state.project.revision !== expectedRevision || !state.positioning?.appliedDirectionId) throw new PitchroomError("CONFLICT", "There is no current positioning change to undo.");
-  state.positioning.appliedDirectionId = state.positioning.previousAppliedDirectionId;
-  state.positioning.previousAppliedDirectionId = undefined;
-  if (state.deck && state.deck.proposal.appliedDirectionId !== state.positioning.appliedDirectionId) state.deck.stale = true;
-  addEvent("Positioning undone", "The latest applied direction was reversed");
-  return readFixtureState();
-}
-
-export function adjustFixturePositioning(directionId: string, mode: "headline" | "judgment_note", text: string, expectedRevision: number) {
+export function adjustFixturePositioning(directionId: string, mode: "headline" | "judgment_note", text: string, expectedRevision: number, expectedPositioning: PositioningHead = state.positioning ? readPositioning(state.positioning).head : {positioningId:null,decisionId:null}, commandId=crypto.randomUUID()) {
+  const replay=replayPositioningCommand(commandId,{kind:"adjust_positioning",directionId,mode,text,expectedRevision,expectedPositioning});if(replay.replayed)return readFixtureState();
   if (state.project.phase !== "accepted" || state.project.revision !== expectedRevision || !state.positioning) throw new PitchroomError("CONFLICT", "This positioning view is stale or not ready.");
-  const proposal = structuredClone(state.positioning.proposal); const direction = proposal.directions.find((candidate) => candidate.id === directionId);
+  if(state.positioning && state.positioning.proposal.understandingVersionId!==state.currentVersionId)throw new PitchroomError("CONFLICT","This positioning belongs to an earlier understanding.");
+  assertPositioningHead(state.positioning,expectedPositioning);
+  const proposal = structuredClone(state.positioning.proposal); delete proposal.decisionJournal; const direction = proposal.directions.find((candidate) => candidate.id === directionId);
   if (!direction) throw new PitchroomError("INVALID_INPUT", "Only a proposed direction can be adjusted.");
-  if (mode === "headline") direction.coreMessage = text.trim(); else direction.judgmentNote = text.trim(); direction.userInputIds = [...direction.userInputIds, `positioning-input-${Date.now()}`];
-  state.positioning = { id: `positioning-${Date.now()}`, number: (state.positioningVersions.at(-1)?.number ?? state.positioning.number) + 1, proposal, createdAt: new Date().toISOString() };
+  const wordingInputId=crypto.randomUUID();
+  if (mode === "headline") {direction.coreMessage = text;direction.coreMessageOrigin={kind:"manual_exact",userInputId:wordingInputId};} else direction.judgmentNote = text; direction.userInputIds = [...direction.userInputIds, wordingInputId];
+  state.positioning = { id: crypto.randomUUID(), number: (state.positioningVersions.at(-1)?.number ?? state.positioning.number) + 1, proposal, createdAt: new Date().toISOString() };
   state.positioningVersions.push(state.positioning);
   if (state.deck) state.deck.stale = true; addEvent("Positioning adjusted", `${mode === "headline" ? "Exact headline" : "Judgment note"} saved as user input`); return readFixtureState();
 }
 
-export function generateFixtureDeck(expectedRevision: number) {
+export function generateFixtureDeck(expectedRevision: number, expectedPositioning:PositioningHead = state.positioning ? readPositioning(state.positioning).head : {positioningId:null,decisionId:null}) {
+  if(state.positioning && state.positioning.proposal.understandingVersionId!==state.currentVersionId)throw new PitchroomError("CONFLICT","This positioning belongs to an earlier understanding.");
+  assertPositioningHead(state.positioning,expectedPositioning);
   if (state.project.phase !== "accepted" || state.project.revision !== expectedRevision || !state.positioning?.appliedDirectionId || !state.currentVersionId) throw new PitchroomError("CONFLICT", "Apply a current positioning direction before creating a deck.");
   const understanding = state.versions.find((version) => version.id === state.currentVersionId);
   if (!understanding) throw new PitchroomError("NOT_FOUND", "The accepted understanding was not found.");
   const run: WorkflowRun = { id: `deck-run-${Date.now()}`, kind: "deck", status: "running", events: [{ type: "run_started", detail: "deck generation started", at: new Date().toISOString() }] };
   state.workflowRuns.push(run);
   try {
-    const proposal = buildDeterministicDeck({ understandingVersionId: understanding.id, understanding: understanding.proposal, positioningVersionId: state.positioning.id, positioning: state.positioning.proposal, appliedDirectionId: state.positioning.appliedDirectionId, chunks: state.sources.flatMap((source) => source.chunks) });
+    const proposal = buildDeterministicDeck({ understandingVersionId: understanding.id, understanding: understanding.proposal, positioningVersionId: state.positioning.id, positioning: state.positioning.proposal, appliedDirectionId: state.positioning.appliedDirectionId, positioningDecisionId:readPositioning(state.positioning).applied?.decisionId ?? undefined, chunks: state.sources.flatMap((source) => source.chunks) });
     const version: DeckVersion = { id: `deck-${state.deckVersions.length + 1}`, number: state.deckVersions.length + 1, proposal, createdBy: "agent", createdAt: new Date().toISOString() };
     state.deckVersions.push(version); state.deck = { ...version, stale: false }; run.status = "completed"; run.events.push({ type: "run_completed", detail: "five-page deck persisted", at: new Date().toISOString() });
     addEvent("Deck created", `Draft ${version.number} · five pages`);
@@ -308,7 +353,7 @@ export function decideFixtureClarification(input: { taskId: string; action: "app
 
 const storyReceipts = new Map<string,string>();
 function fixtureStory() { return state.story ??= {head:{generation:0,storyId:null},versions:[],proposals:[],stale:false}; }
-function storyContext() { return { phase:state.project.phase,understandingId:state.currentVersionId??null,positioningId:state.positioning?.id??null,directionId:state.positioning?.appliedDirectionId??null,sources:clarificationSources() }; }
+function storyContext() { const applied=state.positioning ? readPositioning(state.positioning).applied : null;return { phase:state.project.phase,understandingId:state.currentVersionId??null,positioningId:applied?.positioningId??null,positioningDecisionId:applied?.decisionId,directionId:applied?.choice.id??null,sources:clarificationSources() }; }
 export async function proposeFixtureStory(input:{expected:StoryHead;commandId:string;request:StoryRequest;retryOf?:string}) {
   const work=fixtureStory(), hash=JSON.stringify(input), existing=work.proposals.find(p=>p.commandId===input.commandId);
   if(existing){if(storyReceipts.get(input.commandId)!==hash)throw new PitchroomError("CONFLICT","Command ID was reused.");return readFixtureState();}
@@ -322,7 +367,8 @@ export async function proposeFixtureStory(input:{expected:StoryHead;commandId:st
   const before=work.versions.find(v=>v.id===work.head.storyId)?.story??null;
   if(!["develop_direction","restore"].includes(input.request.kind)&&(!before||!storyIsFresh(before.origin,storyContext())))throw new PitchroomError("CONFLICT","Develop a current story first.");
   const text=input.request.kind==="revise_story"?input.request.judgment:input.request.kind==="exact_edit"?`${input.request.title}\n${input.request.body}`:null;
-  const snapshot:StorySnapshot=prior?.snapshot??{origin:{understandingVersionId:understanding.id,positioningVersionId:positioning.id,directionId:positioning.appliedDirectionId,sourceFingerprint:sourceFingerprint(clarificationSources())},understanding:understanding.proposal,positioning:positioning.proposal,sources:clarificationSources(),before,request:input.request,userInput:text?{id:crypto.randomUUID(),text}:null,model:"synthetic-story",promptVersion:"story-v1"};
+  const applied=readPositioning(positioning).applied!;
+  const snapshot:StorySnapshot=prior?.snapshot??{origin:{understandingVersionId:understanding.id,positioningVersionId:applied.positioningId,positioningDecisionId:applied.decisionId ?? undefined,directionId:applied.choice.id,sourceFingerprint:sourceFingerprint(clarificationSources())},understanding:understanding.proposal,positioning:positioning.proposal,selectedChoice:structuredClone(applied.choice),sources:clarificationSources(),before,request:input.request,userInput:text?{id:crypto.randomUUID(),text}:null,model:"synthetic-story",promptVersion:"story-v1"};
   const p:StoryProposal={id:crypto.randomUUID(),projectId:state.project.id,commandId:input.commandId,createdAt:new Date().toISOString(),baseHead:structuredClone(work.head),snapshot,state:{kind:"running",attemptId:crypto.randomUUID(),deadline:new Date(Date.now()+120000).toISOString()}};
   work.proposals.push(p);storyReceipts.set(input.commandId,hash);
   try {

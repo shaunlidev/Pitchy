@@ -31,7 +31,7 @@ describe("workspace API", () => {
     vi.spyOn(fixtureStore, "generateFixturePositioning").mockImplementation(() => {
       throw new PitchroomError("PROVIDER_TIMEOUT", "The positioning provider timed out.", { stage: "positioning", phase: "response_headers", timeoutMs: 60_000 });
     });
-    const response = await POST(request({ action: "generate_positioning", commandId: "timeout-1", expectedRevision: 0 }));
+    const response = await POST(request({ action: "generate_positioning", commandId: "timeout-1", expectedPositioning:{positioningId:null,decisionId:null}, expectedRevision: 0 }));
     expect(response.status).toBe(504);
     expect(await response.json()).toMatchObject({ code: "PROVIDER_TIMEOUT", details: { stage: "positioning", phase: "response_headers" } });
     expect(await (await GET()).json()).toEqual(before);

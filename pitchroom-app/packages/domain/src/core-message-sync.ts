@@ -1,3 +1,4 @@
+import {readPositioning,type PositioningRecord} from "./positioning";
 export type DownstreamArtifactKind = "generated" | "human_edited" | "external";
 export type DownstreamSyncStatus = "synced" | "auto_update_available" | "needs_review" | "drift_only";
 
@@ -12,16 +13,7 @@ export function deriveDownstreamSyncStatus(input: {
   return "drift_only";
 }
 
-export function appliedCoreMessage(input: {
-  versionId: string;
-  original: string;
-  appliedDirectionId?: string | null;
-  directions: Array<{ id: string; coreMessage: string }>;
-}) {
-  if (!input.appliedDirectionId) return undefined;
-  return {
-    versionId: input.versionId,
-    directionId: input.appliedDirectionId,
-    text: input.appliedDirectionId === "original" ? input.original : input.directions.find((direction) => direction.id === input.appliedDirectionId)?.coreMessage,
-  };
+export function appliedCoreMessage(record:PositioningRecord) {
+  const applied=readPositioning(record).applied;
+  return applied ? {versionId:applied.positioningId,directionId:applied.choice.id,text:applied.choice.text,decisionId:applied.decisionId} : undefined;
 }

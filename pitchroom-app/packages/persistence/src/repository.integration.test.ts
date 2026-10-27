@@ -1,3 +1,4 @@
+import {readPositioning} from "@pitchroom/domain";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
 import type { DeckProposalV1, PositioningProposalV1, UnderstandingProposalV1 } from "@pitchroom/domain";
@@ -185,14 +186,14 @@ describe("PostgreSQL repository contract", () => {
     const proposal: PositioningProposalV1 = { schemaVersion: 1, understandingVersionId: accepted.id, originalFraming: { title: "Original framing", coreMessage: "Teams move faster." }, directions: ["proof", "decision"].map((id) => ({ id, title: id, coreMessage: `${id} message`, from: "Teams move faster.", to: `${id} framing`, tradeoff: `${id} tradeoff`, excludes: ["unsupported claims"], evidence: [{ sourceId: source.id, chunkId: chunk.id, quote: "Teams recover two days." }], userInputIds: [] })) };
     const created = await repository.createPositioning({ projectId: project.id, understandingId: accepted.id, expectedRevision: 1, proposal, idempotencyKey: "positioning-create" });
     expect((await repository.getCurrentPositioning(project.id))?.id).toBe(created.id);
-    expect((await repository.applyPositioning({ projectId: project.id, directionId: "proof", expectedRevision: 1, idempotencyKey: "positioning-apply" })).appliedDirectionId).toBe("proof");
-    expect((await repository.undoPositioning({ projectId: project.id, expectedRevision: 1, idempotencyKey: "positioning-undo" })).appliedDirectionId).toBeNull();
-    await repository.applyPositioning({ projectId: project.id, directionId: "proof", expectedRevision: 1, idempotencyKey: "positioning-reapply" });
-    const adjusted = await repository.adjustPositioning({ projectId: project.id, directionId: "proof", mode: "headline", text: "Use the buyer's exact words.", expectedRevision: 1, idempotencyKey: "positioning-adjust" });
+    expect((await repository.applyPositioning({ expectedPositioning:readPositioning((await repository.getCurrentPositioning(project.id))!).head, projectId: project.id, directionId: "proof", expectedRevision: 1, idempotencyKey: "positioning-apply" })).appliedDirectionId).toBe("proof");
+    expect((await repository.undoPositioning({ expectedPositioning:readPositioning((await repository.getCurrentPositioning(project.id))!).head, projectId: project.id, expectedRevision: 1, idempotencyKey: "positioning-undo" })).appliedDirectionId).toBeNull();
+    await repository.applyPositioning({ expectedPositioning:readPositioning((await repository.getCurrentPositioning(project.id))!).head, projectId: project.id, directionId: "proof", expectedRevision: 1, idempotencyKey: "positioning-reapply" });
+    const adjusted = await repository.adjustPositioning({ expectedPositioning:readPositioning((await repository.getCurrentPositioning(project.id))!).head, projectId: project.id, directionId: "proof", mode: "headline", text: "Use the buyer's exact words.", expectedRevision: 1, idempotencyKey: "positioning-adjust" });
     expect(adjusted?.proposal.directions[0]?.coreMessage).toBe("Use the buyer's exact words.");
     expect((await repository.listPositioningVersions(project.id)).map((version) => version.version)).toEqual([1, 2]);
     expect(adjusted?.appliedDirectionId).toBeNull();
-    await repository.applyPositioning({ projectId: project.id, directionId: "proof", expectedRevision: 1, idempotencyKey: "positioning-adjusted-apply" });
+    await repository.applyPositioning({ expectedPositioning:readPositioning((await repository.getCurrentPositioning(project.id))!).head, projectId: project.id, directionId: "proof", expectedRevision: 1, idempotencyKey: "positioning-adjusted-apply" });
     const page = (id: string, kind: DeckProposalV1["pages"][number]["kind"], title: string) => ({ id, kind, title, body: title, evidence: kind === "open_questions" ? [] : [{ sourceId: source.id, chunkId: chunk.id, quote: "Teams recover two days." }], userInputIds: [], openQuestions: kind === "open_questions" ? ["Who decides?"] : [] });
     const deckProposal: DeckProposalV1 = { schemaVersion: 1, understandingVersionId: accepted.id, positioningVersionId: adjusted!.id, appliedDirectionId: "proof", pages: [page("one", "positioning", "Positioning"), page("two", "shift", "Shift"), page("three", "rationale", "Rationale"), page("four", "evidence", "Evidence"), page("five", "open_questions", "Open questions")] };
     const deck = await repository.createDeck({ projectId: project.id, understandingId: accepted.id, positioningId: adjusted!.id, appliedDirectionId: "proof", expectedRevision: 1, proposal: deckProposal, idempotencyKey: "deck-create" });

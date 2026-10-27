@@ -19,6 +19,7 @@ export const deckProposalV1Schema = z.object({
   schemaVersion: z.literal(1),
   understandingVersionId: z.string().min(1),
   positioningVersionId: z.string().min(1),
+  positioningDecisionId:z.string().min(1).optional(),
   appliedDirectionId: z.string().min(1),
   pages: z.array(deckPageSchema).length(5),
 }).superRefine((proposal, context) => {
@@ -35,7 +36,7 @@ export const deckPageV2Schema = deckPageSchema.extend({
   storyBlockId: z.string().min(1), emphasis: z.array(z.string()), basisRefs: z.array(z.string()), unknownIds: z.array(z.string()),
   wording: z.enum(["agent_proposed", "user_edited_unreviewed"]),
 });
-export const deckProposalV2Schema = z.object({ schemaVersion: z.literal(2), understandingVersionId: z.string().min(1), positioningVersionId: z.string().min(1), appliedDirectionId: z.string().min(1), storyVersionId: z.string().min(1), storyGeneration: z.number().int(), pages: z.array(deckPageV2Schema).min(3).max(8) });
+export const deckProposalV2Schema = z.object({ schemaVersion: z.literal(2), understandingVersionId: z.string().min(1), positioningVersionId: z.string().min(1), positioningDecisionId:z.string().min(1).optional(), appliedDirectionId: z.string().min(1), storyVersionId: z.string().min(1), storyGeneration: z.number().int(), pages: z.array(deckPageV2Schema).min(3).max(8) });
 export const deckProposalSchema = z.union([deckProposalV1Schema, deckProposalV2Schema]);
 export type DeckProposal = z.infer<typeof deckProposalSchema>;
 export function storyToDeck(input: { storyId: string; generation: number; story: import("./story").Story }): z.infer<typeof deckProposalV2Schema> {

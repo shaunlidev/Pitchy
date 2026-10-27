@@ -141,7 +141,7 @@ export function deriveWorkspaceUXState(state: FixtureState, request?: ActiveAgen
   const access = {
     materials: { allowed: true, reason: "", target: "materials" as Destination },
     clarify: { allowed: state.sources.length > 0, reason: "Add material before inspecting the understanding.", target: "materials" as Destination },
-    positioning: { allowed: state.project.phase === "accepted", reason: "Review and accept the current understanding first.", target: (state.sources.length ? "clarify" : "materials") as Destination },
+    positioning: { allowed: state.project.phase === "accepted" || state.positioningVersions.length > 0, reason: "Review and accept the current understanding first.", target: (state.sources.length ? "clarify" : "materials") as Destination },
     deck: { allowed: Boolean(state.deck), reason: "Apply a positioning direction, then create a deck draft.", target: (state.project.phase === "accepted" ? "positioning" : state.sources.length ? "clarify" : "materials") as Destination },
   };
   const checkpoints: Record<AgentActionKind, string> = {
@@ -158,7 +158,7 @@ export function deriveWorkspaceUXState(state: FixtureState, request?: ActiveAgen
     if (destination === "clarify") primary = state.project.phase === "review_required"
       ? context.correction?.trim() ? "correct" : context.answer?.trim() ? "answer" : "accept"
       : state.project.phase === "accepted" ? "positioning" : ["materials_ready", "failed", "cancelled"].includes(state.project.phase) ? "run" : "none";
-    if (destination === "positioning" && access.positioning.allowed) primary = !state.positioning ? "generate_positioning"
+    if (destination === "positioning" && state.project.phase === "accepted") primary = !state.positioning ? "generate_positioning"
       : context.adjustment?.trim() ? "adjust_positioning"
       : state.positioning.appliedDirectionId !== (context.selectedDirectionId ?? state.positioning.appliedDirectionId ?? "original") ? "apply_positioning" : "generate_deck";
     if (destination === "deck") primary = state.deck?.stale ? "positioning" : "review_deck";
