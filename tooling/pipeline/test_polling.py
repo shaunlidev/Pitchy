@@ -530,9 +530,12 @@ class DeveloperRecovery(unittest.TestCase):
         self.c.save(self.lane);self.requests=[];old_call=self.c.call
         def call(args):
             if args[:2]==['issue','rerun']:
+                self.requests.append(args);return {'id':'unbound-current-assignment-run'}
+            if args[:2]==['issue','update'] and '--assignee-id' in args:
                 self.requests.append(args)
+                result=old_call(args)
                 if getattr(self,'lost_enqueue',False):raise TimeoutError('acknowledgement lost')
-                return {'id':'new-dev'}
+                return result
             return old_call(args)
         self.c.call=call
         outer=self
@@ -585,6 +588,9 @@ class DeveloperRecovery(unittest.TestCase):
         for override in ({'generation':4},{'head':'f'*40},{'source':self.prior},{'source':'HEAD'},{'main':'f'*40}):
             with self.subTest(override=override):
                 with self.assertRaises(serial.Hold):self.recover(**override)
+        self.f.fake.rows[0]['revision']=None
+        with self.assertRaises(serial.Hold):self.recover()
+        self.f.fake.rows[0]['revision']=7
         self.f.fake.rows[0]['description']+='changed'
         with self.assertRaises(serial.Hold):self.recover()
         self.assertEqual(self.c.lanes()['PIT-1'],self.lane);self.assertEqual(self.requests,[])
@@ -657,3 +663,71 @@ class DeveloperRecovery(unittest.TestCase):
             self.c.publish_checkpoint(self.lane,native,'PIT-1')
         self.assertEqual(self.c.lanes()['PIT-1'],self.lane)
         self.assertEqual(self.requests,[])
+
+    def test_another_project_runtime_started_before_ref_commit_holds(self):
+        self.f.fake.rows.append(issue(2))
+        original=self.c.github.api
+        def api(path):
+            if path=='pulls/7':
+                self.f.fake.runs['id-2']=[{'id':'other','status':'running'}]
+            return original(path)
+        self.c.github.api=api
+        with self.assertRaisesRegex(serial.Hold,'Live runtime'):self.recover()
+        self.assertEqual(self.requests,[])
+        self.assertEqual(self.f.g('rev-parse','agent/native'),self.source)
+        self.assertTrue(self.c.db.execute("select 1 from operations where state='uncertain'").fetchone())
+
+    def test_changed_owner_after_mapping_is_preserved_without_enqueue(self):
+        original=serial.write_json
+        def write(path,data):
+            original(path,data)
+            if Path(path).name=='mapping.json':
+                self.f.fake.rows[0].update(status='started_3',assignee_id='qa',revision=8)
+        with patch.object(serial,'write_json',side_effect=write):
+            with self.assertRaisesRegex(serial.Hold,'assignment changed'):self.recover()
+        self.assertEqual(self.requests,[])
+        self.assertEqual(self.f.fake.rows[0]['assignee_id'],'qa')
+        lane=self.c.lanes()['PIT-1'];self.assertTrue(Path(lane['developer_recovery']).exists())
+        self.assertTrue(self.c.db.execute("select 1 from operations where state='uncertain'").fetchone())
+
+    def test_live_runtime_after_mapping_is_not_enqueued_again(self):
+        original=serial.write_json
+        def write(path,data):
+            original(path,data)
+            if Path(path).name=='mapping.json':
+                self.f.fake.runs['id-1'].append({'id':'intervening','status':'queued'})
+        with patch.object(serial,'write_json',side_effect=write):
+            with self.assertRaisesRegex(serial.Hold,'Live runtime'):self.recover()
+        self.assertEqual(self.requests,[])
+        self.assertTrue(self.c.db.execute("select 1 from operations where state='uncertain'").fetchone())
+
+    def test_explicit_transition_binds_developer_from_both_permitted_statuses(self):
+        self.f.fake.rows[0]['status']='todo'
+        self.recover()
+        args=self.requests[0]
+        self.assertEqual(args[:2],['issue','update'])
+        self.assertEqual(args[args.index('--assignee-id')+1],'dev')
+        self.assertEqual(args[args.index('--status')+1],'in_progress')
+
+    def test_other_issue_becomes_live_after_local_mapping_holds(self):
+        self.f.fake.rows.append(issue(2))
+        original=serial.write_json
+        def write(path,data):
+            original(path,data)
+            if Path(path).name=='mapping.json':
+                self.f.fake.runs['id-2']=[{'id':'late-other','status':'running'}]
+        with patch.object(serial,'write_json',side_effect=write):
+            with self.assertRaisesRegex(serial.Hold,'Live runtime'):self.recover()
+        self.assertEqual(self.requests,[])
+        self.assertTrue(self.c.db.execute("select 1 from operations where state='uncertain'").fetchone())
+
+    def test_completed_target_history_change_after_mapping_also_holds(self):
+        original=serial.write_json
+        def write(path,data):
+            original(path,data)
+            if Path(path).name=='mapping.json':
+                self.f.fake.runs['id-1'].append({'id':'intervening-finished','status':'completed'})
+        with patch.object(serial,'write_json',side_effect=write):
+            with self.assertRaisesRegex(serial.Hold,'runtime history changed'):self.recover()
+        self.assertEqual(self.requests,[])
+        self.assertTrue(self.c.db.execute("select 1 from operations where state='uncertain'").fetchone())

@@ -299,16 +299,22 @@ class Serial(Controller):
         if head!=lane.get('rework_public_commit') or not lane.get('contract') or not lane.get('developer_workspace'):
             raise Hold('Preserved original rework and frozen contract required')
         issue=self.issue(key)
-        if (issue['status'] not in ('todo','in_progress') or issue.get('assignee_id')!=self.c['developer']
+        if (type(issue.get('revision')) is not int or issue['status'] not in ('todo','in_progress') or issue.get('assignee_id')!=self.c['developer']
                 or digest(issue.get('description') or '')!=lane['description_sha256']):
             raise Hold('Developer ownership or original contract changed')
-        histories={}
-        for row in self.issues():
-            runs=self.call(['issue','runs',row['id'],'--output','json'])
-            if not isinstance(runs,list) or any(not isinstance(r,dict) or r.get('status') not in RUNNING | {'completed','failed','cancelled'} for r in runs):
-                raise Hold('Unknown runtime history')
-            if any(r['status'] in RUNNING for r in runs):raise Hold('Live runtime prevents recovery')
-            histories[row['id']]=runs
+        def idle_inventory():
+            histories={}
+            for row in self.issues():
+                runs=self.call(['issue','runs',row['id'],'--output','json'])
+                if not isinstance(runs,list) or any(not isinstance(r,dict) or r.get('status') not in RUNNING | {'completed','failed','cancelled'} for r in runs):
+                    raise Hold('Unknown runtime history')
+                if any(r['status'] in RUNNING for r in runs):raise Hold('Live runtime prevents recovery')
+                histories[row['id']]=runs
+            return histories
+        def inventory_identity(histories):
+            return {key:[(r.get('id'),r.get('status')) for r in runs] for key,runs in histories.items()}
+        histories=idle_inventory()
+        initial_inventory=inventory_identity(histories)
         matches=[r for r in histories.get(lane['id'],[]) if r.get('id')==run_id and r.get('agent_id')==self.c['developer'] and r['status']=='completed']
         if len(matches)!=1 or matches[0].get('work_dir')!=lane['developer_workspace']:
             raise Hold('Completed bound Developer runtime required')
@@ -374,9 +380,8 @@ class Serial(Controller):
         pr=self.github.api('pulls/'+str(lane['rework_pr_number']))
         if pr['state']!='open' or pr['base']['ref']!='main' or pr['head']['sha']!=head or pr['head']['ref']!=lane['rework_branch']:
             raise Hold('Original PR changed during recovery')
-        latest=self.call(['issue','runs',lane['id'],'--output','json'])
-        if not isinstance(latest,list) or [(r.get('id'),r.get('status')) for r in latest]!=[(r.get('id'),r.get('status')) for r in histories[lane['id']]]:
-            raise Hold('Target runtime history changed during recovery')
+        if inventory_identity(idle_inventory())!=initial_inventory:
+            raise Hold('Project runtime history changed during recovery')
         if 'branch refs/heads/'+branch+'\n' in git(repo,'worktree','list','--porcelain')+'\n':
             raise Hold('Native branch acquired a live checkout during recovery')
         self.require_fresh()
@@ -388,7 +393,19 @@ class Serial(Controller):
         self.save(updated)
         write_json(folder/'mapping.json',{'native_source':source,'native_head':native_head,'public_head':head,'public_recovered':recovered,'main':main})
         self.require_fresh()
-        self.call(['issue','rerun',lane['id'],'--output','json'])
+        if self.github.api('commits/main')['sha']!=main:raise Hold('Main changed before recovery enqueue')
+        pr=self.github.api('pulls/'+str(lane['rework_pr_number']))
+        if pr['state']!='open' or pr['base']['ref']!='main' or pr['head']['sha']!=head or pr['head']['ref']!=lane['rework_branch']:
+            raise Hold('Original PR changed before recovery enqueue')
+        if inventory_identity(idle_inventory())!=initial_inventory:
+            raise Hold('Project runtime history changed before recovery enqueue')
+        fresh=self.issue(key)
+        if (fresh.get('revision')!=issue.get('revision') or fresh['status']!=issue['status']
+                or fresh.get('assignee_id')!=self.c['developer'] or fresh.get('description')!=issue.get('description')):
+            raise Hold('Developer assignment changed before recovery enqueue')
+        self.require_fresh()
+        target='in_progress' if issue['status']=='todo' else 'todo'
+        self.call(['issue','update',lane['id'],'--status',target,'--assignee-id',self.c['developer'],'--output','json'])
         self.finish(token)
         return {'issue':key,'generation':generation,'repairs':lane['repairs'],'recovered_source':recovered,'status':'developer_retry_requested','archive':str(archive)}
 
