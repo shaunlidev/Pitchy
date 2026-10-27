@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from controller import Controller, Hold, requirements, lock
+from controller import Controller, Hold, requirements, lock, digest
 
 
 DESCRIPTION = "### 7. Observable acceptance\n- [ ] normal / deterministic. source must return its issue-specific value.\n### 8. Verification\n"
@@ -130,6 +130,54 @@ class Tests(unittest.TestCase):
     def test_chinese_contract_freezes_all_four_original_scenarios(self):
         rows = requirements("## 7. 验收草案\n正常：observable outcome\n拒绝：preserve state\n失败：retain failure\n恢复：restore version\n## 8. 验证与未决\nNot an extra criterion")
         self.assertEqual([x["text"] for x in rows], ["正常：observable outcome", "拒绝：preserve state", "失败：retain failure", "恢复：restore version"])
+
+    def test_rework_checks_native_and_public_ancestry_separately(self):
+        baseline = self.g("rev-parse", "HEAD")
+        self.g("checkout", "-qb", "native-history")
+        (self.repo / "native-only.txt").write_text("private runtime history")
+        self.g("add", "native-only.txt"); self.g("commit", "-qm", "native prior")
+        native_prior = self.g("rev-parse", "HEAD")
+        (self.repo / "source.txt").write_text("native repaired")
+        self.g("commit", "-qam", "native repair")
+        native_fixed = self.g("rev-parse", "HEAD")
+        self.g("checkout", "-qb", "public-history", baseline)
+        (self.repo / "source.txt").write_text("public prior")
+        self.g("commit", "-qam", "public prior")
+        public_prior = self.g("rev-parse", "HEAD")
+        (self.repo / "source.txt").write_text("public repaired")
+        self.g("commit", "-qam", "public repair")
+        public_fixed = self.g("rev-parse", "HEAD")
+        row = self.fake.rows[0]
+        original = {"issue": "PIT-1", "id": "id-1", "generation": 2,
+                    "description_sha256": digest(row["description"]),
+                    "rework_base_commit": native_prior,
+                    "rework_public_commit": public_prior}
+        for role in ("reviewer", "qa"):
+            row.update(status=self.c["review_status" if role == "reviewer" else "qa_status"],
+                       assignee_id=self.c[role])
+            lane = {**original, "phase": role, "artifact": {"commit": public_fixed}}
+            self.ctl.save(lane)
+            with self.runtime(role, self.repo):
+                self.ctl.current("PIT-1", role)
+                lane["artifact"] = {"commit": native_fixed}
+                self.ctl.save(lane)
+                with self.assertRaisesRegex(Hold, "prior delivery"):
+                    self.ctl.current("PIT-1", role)
+                lane.pop("rework_public_commit")
+                self.ctl.save(lane)
+                self.ctl.current("PIT-1", role)
+                lane["artifact"] = {"commit": public_fixed}
+                self.ctl.save(lane)
+                with self.assertRaisesRegex(Hold, "prior delivery"):
+                    self.ctl.current("PIT-1", role)
+        row.update(status="in_progress", assignee_id=self.c["developer"])
+        self.ctl.save({**original, "phase": "developer"})
+        self.g("checkout", "native-history")
+        with self.runtime("developer", self.repo):
+            self.ctl.current("PIT-1", "developer")
+            self.g("checkout", "public-history")
+            with self.assertRaisesRegex(Hold, "prior delivery"):
+                self.ctl.current("PIT-1", "developer")
 
     def test_runtime_identity_required(self):
         self.ctl.dispatch(True)
