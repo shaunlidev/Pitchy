@@ -14,7 +14,7 @@ import sys
 import time
 
 from acceptance import AcceptanceError, contract_digest, evaluate_proof, validate_contract, validate_completion
-from artifacts import checkpoint, has_ancestor, materialize, prepare_dependencies, verify_clean_tree, verify_dependencies, checkpoint_runtime_metadata
+from artifacts import ArtifactError, verify_squash_merge, checkpoint, has_ancestor, materialize, prepare_dependencies, verify_clean_tree, verify_dependencies, checkpoint_runtime_metadata
 
 CONTROL = Path(__file__).resolve().parent
 STATE = CONTROL / ".state" / "v2"
@@ -135,7 +135,17 @@ class Controller:
                     raise Hold("accepted prerequisite artifact unavailable: " + key)
                 required = self.c["legacy_dependencies"][key]
             else:
-                required = artifact["commit"]
+                integration = lanes[key].get("integration")
+                if integration:
+                    if integration.get("head") != artifact["commit"] or integration.get("method") != "squash":
+                        raise Hold("prerequisite integration identity differs: " + key)
+                    try:
+                        verify_squash_merge(self.c["repository"], artifact["commit"], integration["commit"], integration["parent"])
+                    except (ArtifactError, KeyError) as error:
+                        raise Hold("prerequisite squash proof unavailable: " + key) from error
+                    required = integration["commit"]
+                else:
+                    required = artifact["commit"]
             base_commit = base or git(self.c["repository"], "rev-parse", "HEAD")
             if not has_ancestor(self.c["repository"], required, base_commit):
                 raise Hold("prerequisite not integrated in base; no auto merge: " + key)

@@ -11,7 +11,7 @@ import serial
 import test_controller as core
 
 SHA='a'*40
-POLICY={'repository':'owner/repo','project_id':'project'}
+POLICY={'repository':'owner/repo','project_id':'project','merge_policy':'human_approved_squash'}
 
 
 def issue(n=1):
@@ -150,6 +150,37 @@ class SerialBehavior(unittest.TestCase):
         self.c.observation={'deadline_monotonic':time.monotonic()+120,'issues':{'PIT-1':{'prs':[{'number':1,'head':SHA,'state':'DRAFT','base':'main','ci':{'state':ci}}]}}}
         self.c.save(lane);return lane
 
+    def test_merge_approval_requires_operator_exact_head_ready_ci_and_stable_captured_base(self):
+        lane=self.lane();lane['phase']='awaiting_merge';self.c.save(lane)
+        row=self.c.observation['issues']['PIT-1']['prs'][0];row['state']='OPEN'
+        class Remote:
+            base='b'*40
+            state='success'
+            def api(self,path):return {'sha':self.base}
+            def ci(self,sha,event):return {'state':self.state}
+        remote=Remote();self.c.github=remote
+        with self.assertRaisesRegex(serial.Hold,'approved head differs'):
+            self.c.record_merge_approval('PIT-1','wrong-head')
+        with patch.dict(serial.os.environ,{'MULTICA_TASK_ID':'synthetic-native'}):
+            with self.assertRaisesRegex(serial.Hold,'human operator'):
+                self.c.record_merge_approval('PIT-1',SHA)
+        for key,value in [('state','DRAFT'),('base','other'),('ci',{'state':'pending'})]:
+            previous=row[key];row[key]=value
+            with self.assertRaises(serial.Hold):self.c.record_merge_approval('PIT-1',SHA)
+            row[key]=previous
+        remote.state='pending'
+        with self.assertRaisesRegex(serial.Hold,'pre-merge main CI'):
+            self.c.record_merge_approval('PIT-1',SHA)
+        self.assertNotIn('merge_approval',self.c.lanes()['PIT-1'])
+        remote.state='success';intent=self.c.record_merge_approval('PIT-1',SHA)
+        self.assertEqual(intent['base'],'b'*40)
+        self.assertEqual(self.c.record_merge_approval('PIT-1',SHA),intent)
+        remote.base='c'*40
+        with self.assertRaisesRegex(serial.Hold,'reconciliation'):
+            self.c.record_merge_approval('PIT-1',SHA)
+        self.assertEqual(self.c.lanes()['PIT-1']['merge_approval'],intent)
+        self.assertFalse(self.f.fake.writes)
+
     def test_waiting_merge_and_ci_occupy_single_lane(self):
         for phase in ['awaiting_merge','awaiting_role_exit','reviewer','qa']:
             self.c.save({'issue':'PIT-1','phase':phase});self.assertEqual(self.c.dispatch(True)['started'],[])
@@ -254,11 +285,13 @@ class FullSerialChain(SerialBehavior):
             self.assertEqual(f.fake.rows[0]['status'],status)
         self.assertEqual(c.lanes()['PIT-1']['phase'],'awaiting_merge')
         self.assertEqual(c.dispatch(True)['started'],[])
-        f.g('merge','--no-ff',artifact['commit'],'-m','Explicit synthetic human-approved integration')
+        pr=c.observation['issues']['PIT-1']['prs'][0];pr['state']='OPEN'
+        c.record_merge_approval('PIT-1',artifact['commit'])
+        f.g('merge','--squash',artifact['commit']);f.g('commit','-qm','Explicit synthetic human-approved squash')
         merged=f.g('rev-parse','HEAD');remote=f.root/'remote.git';subprocess.run(['git','clone','--bare',str(f.repo),str(remote)],check=True,capture_output=True)
         f.g('remote','add','origin',str(remote))
         pr=c.observation['issues']['PIT-1']['prs'][0];pr.update(state='MERGED',merge_sha=merged,integration_ci={'state':'success'})
-        c.drain(True);self.assertEqual(f.fake.rows[0]['status'],'done');self.assertEqual(c.lanes()['PIT-1']['phase'],'done')
+        c.drain(True);self.assertEqual(f.fake.rows[0]['status'],'done');self.assertEqual(c.lanes()['PIT-1']['phase'],'done');self.assertEqual(c.lanes()['PIT-1']['integration']['commit'],merged)
         updates=len(f.fake.writes);c.drain(True);self.assertEqual(len(f.fake.writes),updates)
 
 class ReworkPublication(SerialBehavior):

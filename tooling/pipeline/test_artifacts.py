@@ -1,10 +1,13 @@
+import json
+from controller import Controller, Hold
+from serial import activate
 import concurrent.futures
 from pathlib import Path
 import subprocess
 import tempfile
 import unittest
 
-from artifacts import ArtifactError, checkpoint, common_dir, has_ancestor, materialize, prepare_dependencies, verify_clean_tree, verify_dependencies
+from artifacts import verify_squash_merge, ArtifactError, checkpoint, common_dir, has_ancestor, materialize, prepare_dependencies, verify_clean_tree, verify_dependencies
 
 
 def git(repo, *args):
@@ -312,6 +315,165 @@ class ArtifactTests(unittest.TestCase):
         with self.assertRaises(ArtifactError):
             prepare_dependencies(self.repo, work)
         self.assertFalse((work / "pitchroom-app").exists())
+
+
+class SquashMergeTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix='pitchroom-squash-')
+        self.root = Path(self.temp.name).resolve()
+        self.repo = self.root / 'repo'
+        self.repo.mkdir()
+        self.git('init', '-q', '-b', 'main')
+        self.git('config', 'user.email', 'synthetic@example.invalid')
+        self.git('config', 'user.name', 'Synthetic QA')
+        control = self.repo / 'tooling/pipeline'
+        control.mkdir(parents=True)
+        for name in ('serial.py','controller.py','artifacts.py','acceptance.py','github_sync.py','runtime.json','policy.json'):
+            (control/name).write_text('{}' if name.endswith('.json') else '# synthetic controller identity\n')
+        self.git('add', 'tooling')
+        self.write_commit('base.txt', 'base', 'base')
+        self.base = self.git('rev-parse', 'HEAD')
+        self.git('checkout', '-qb', 'candidate')
+        self.write_commit('feature.txt', 'first', 'first')
+        self.write_commit('feature.txt', 'approved', 'second')
+        self.approved = self.git('rev-parse', 'HEAD')
+        self.git('checkout', '-q', 'main')
+        self.write_commit('independent.txt', 'other main work', 'main advances')
+        self.pre_merge_main = self.git('rev-parse', 'HEAD')
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def git(self, *args):
+        return subprocess.run(['git', '-C', str(self.repo), *args], check=True, capture_output=True, text=True).stdout.strip()
+
+    def write_commit(self, name, text, message):
+        (self.repo / name).write_text(text)
+        self.git('add', name)
+        self.git('commit', '-qm', message)
+
+    def squash(self):
+        self.git('merge', '--squash', self.approved)
+        self.git('commit', '-qm', 'One approved PR')
+        return self.git('rev-parse', 'HEAD')
+
+    def test_multiple_source_commits_become_one_exact_integration_with_advanced_main(self):
+        parent = self.git('rev-parse', 'HEAD')
+        merged = self.squash()
+        self.assertFalse(has_ancestor(self.repo, self.approved, merged))
+        proof = verify_squash_merge(self.repo, self.approved, merged, self.pre_merge_main)
+        self.assertEqual(proof['parent'], parent)
+        self.assertEqual(proof['commit'], merged)
+        self.assertEqual(proof['head'], self.approved)
+        self.assertEqual(self.git('show', merged + ':independent.txt'), 'other main work')
+        self.assertEqual(self.git('show', merged + ':feature.txt'), 'approved')
+        self.assertEqual(self.git('rev-list', '--count', parent + '..' + merged), '1')
+
+    def test_two_rebased_commits_cannot_be_mislabeled_as_one_squash(self):
+        self.git('checkout','-q','candidate')
+        self.git('rebase','main')
+        self.git('checkout','-q','main')
+        self.git('merge','--ff-only','candidate')
+        merged=self.git('rev-parse','HEAD')
+        self.assertEqual(self.git('rev-list','--count',self.pre_merge_main+'..'+merged),'2')
+        with self.assertRaisesRegex(ArtifactError,'recorded pre-merge main'):
+            verify_squash_merge(self.repo,self.approved,merged,self.pre_merge_main)
+
+    def test_extra_or_missing_changes_and_wrong_head_cannot_pass(self):
+        self.git('merge', '--squash', self.approved)
+        self.write_commit('feature.txt', 'unapproved modification', 'wrong squash')
+        merged = self.git('rev-parse', 'HEAD')
+        with self.assertRaisesRegex(ArtifactError, 'differs'):
+            verify_squash_merge(self.repo, self.approved, merged, self.pre_merge_main)
+        with self.assertRaisesRegex(ArtifactError, 'differs'):
+            verify_squash_merge(self.repo, self.base, merged, self.pre_merge_main)
+
+    def test_merge_commit_and_conflicting_integration_are_rejected(self):
+        self.git('merge', '--no-ff', self.approved, '-m', 'old merge method')
+        with self.assertRaisesRegex(ArtifactError, 'one integration parent'):
+            verify_squash_merge(self.repo, self.approved, self.git('rev-parse', 'HEAD'), self.git('rev-parse', 'HEAD^'))
+        self.git('checkout', '-qb', 'conflict', self.base)
+        self.write_commit('feature.txt', 'conflicting words', 'conflicting integration parent')
+        self.write_commit('extra.txt', 'not a reviewed resolution', 'unreviewed resolution')
+        with self.assertRaisesRegex(ArtifactError, 'cannot merge cleanly'):
+            verify_squash_merge(self.repo, self.approved, self.git('rev-parse', 'HEAD'), self.git('rev-parse', 'HEAD^'))
+
+    def test_dependencies_use_verified_squash_commit_and_still_require_actual_integration(self):
+        merged = self.squash()
+        controller = Controller({'repository': str(self.repo)}, lambda args: None, self.root / 'state')
+        try:
+            proof = verify_squash_merge(self.repo, self.approved, merged, self.pre_merge_main)
+            controller.save({'issue': 'PIT-1', 'artifact': {'commit': self.approved}, 'integration': proof})
+            required = {'identifier':'PIT-2', 'metadata': {'depends_on':'["PIT-1"]'}}
+            issues = [{'identifier':'PIT-1','status':'done'}]
+            controller.dependencies(required, issues, base=merged)
+            with self.assertRaises(Hold):
+                controller.dependencies(required, issues, base=self.base)
+            controller.save({'issue':'PIT-1','artifact':{'commit':self.approved},'integration':{**proof,'head':self.base}})
+            with self.assertRaisesRegex(Hold, 'identity differs'):
+                controller.dependencies(required, issues, base=merged)
+        finally:
+            controller.close()
+
+    def activation_case(self, ci_state='success', duplicate=False):
+        merged = self.squash()
+        state = self.root/'activation-state'
+        state.mkdir()
+        config = {'reviewer':'reviewer-id','qa':'qa-id','max_lanes':1}
+        receipt = {'authority':'direct_human_domain_free_serial_2026-10-27','issue':'PIT-99','reviewed_integration_base':self.pre_merge_main}
+        for role in ('reviewer','qa'):
+            report = state/(role+'.json')
+            report.write_text(json.dumps({'verdict':'pass','role':role,'head_sha':self.approved,'identity':{'run_id':role+'-run'}}))
+            receipt[role+'_report'] = str(report)
+        receipt_path = state/'receipt.json'
+        receipt_path.write_text(json.dumps(receipt))
+        legacy = self.root/'tooling/multica-pipeline'
+        legacy.mkdir(parents=True)
+        for name in ('config.json','config-v2.json'):
+            (legacy/name).write_text('{"enabled":false}')
+        approved = self.approved
+        class Remote:
+            def api(self, path):
+                if path == 'commits/main':return {'sha':merged}
+                if path == 'commits/'+approved+'/pulls':
+                    pr = {'merged_at':'synthetic','head':{'sha':approved},'base':{'ref':'main'},'merge_commit_sha':merged}
+                    return [pr,pr] if duplicate else [pr]
+                raise AssertionError(path)
+            def ci(self, sha, event):
+                return {'state':ci_state,'sha':sha}
+        def call(args):
+            self.assertEqual(args,['issue','runs','PIT-99','--output','json'])
+            return [{'id':role+'-run','agent_id':config[role],'status':'completed'} for role in ('reviewer','qa')]
+        return state, lambda: activate(self.repo,config,state,Remote(),call,receipt_path)
+
+    def test_squashed_controller_can_activate_only_with_exact_reviewed_source_and_terminal_roles(self):
+        state, run = self.activation_case()
+        proof = run()
+        self.assertTrue(proof['verified'])
+        self.assertEqual(proof['integrated_commit'],self.git('rev-parse','HEAD'))
+        self.assertTrue((state/'activation.json').exists())
+
+    def test_activation_rejects_ambiguous_squash_mapping(self):
+        state, run = self.activation_case(duplicate=True)
+        with self.assertRaisesRegex(Hold,'unique merged PR mapping'):
+            run()
+        self.assertFalse((state/'activation.json').exists())
+
+    def test_activation_keeps_actual_integration_ci_gate(self):
+        state, run = self.activation_case(ci_state='pending')
+        with self.assertRaisesRegex(Hold,'integration CI must pass'):
+            run()
+        self.assertFalse((state/'activation.json').exists())
+
+    def test_policy_and_agent_rule_require_squash_without_rewriting_historical_migration(self):
+        root = Path(__file__).resolve().parents[2]
+        self.assertEqual(json.loads((root/'tooling/pipeline/policy.json').read_text())['merge_policy'], 'human_approved_squash')
+        self.assertIn('--squash --match-head-commit', (root/'AGENTS.md').read_text())
+        migration = json.loads((root/'docs/development/migration-plan.json').read_text())
+        self.assertEqual(migration['merge_method'], 'merge_commit')
+        self.assertEqual(migration['future_merge_method'], 'squash')
+
+
 
 
 if __name__ == "__main__":

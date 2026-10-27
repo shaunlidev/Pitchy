@@ -47,5 +47,6 @@
     "native Multica PR event integration is replaced by explicit CLI polling in PIT-48; no native card claim"
   ],
   "integrated_main": "6e255e8a6a563b6e1a614bb57943ebf1bd96dafb",
-  "main_ci_run_id": 40325975444
+  "main_ci_run_id": 40325975444,
+  "future_merge_method": "squash"
 }

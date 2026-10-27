@@ -11,7 +11,7 @@ import sys
 import time
 
 from controller import Controller, Hold, RUNNING, ACTIVE, digest, git, lock, write_json
-from artifacts import _path, checkpoint, has_ancestor, materialize, prepare_dependencies, verify_clean_tree
+from artifacts import ArtifactError, verify_squash_merge, _path, checkpoint, has_ancestor, materialize, prepare_dependencies, verify_clean_tree
 from github_sync import GitHub, SyncError, all_issues, cli, sync, invalidate
 
 SOURCE = Path(__file__).resolve().parents[2]
@@ -217,6 +217,20 @@ class Serial(Controller):
             raise Hold('Exact artifact PR missing or head changed')
         return matches[0]
 
+    def record_merge_approval(self, key, approved_head):
+        if os.environ.get('MULTICA_TASK_ID'):raise Hold('Merge approval recording is an explicit human operator action')
+        lane=self.lanes().get(key)
+        if not lane or lane['phase']!='awaiting_merge':raise Hold('Task is not waiting for an approved merge')
+        if lane['artifact']['commit']!=approved_head:raise Hold('Human-approved head differs from the reviewed artifact')
+        pr=self.pr_for(lane)
+        if pr['state']!='OPEN' or pr.get('base')!='main' or pr.get('ci',{}).get('state')!='success':raise Hold('Approved PR must target main, be ready and current-head CI successful')
+        base=self.github.api('commits/main')['sha']
+        if self.github.ci(base,'push')['state']!='success':raise Hold('Current pre-merge main CI must pass')
+        intent={'method':'squash','head':approved_head,'base':base,'pr_number':pr['number']}
+        if lane.get('merge_approval') and lane['merge_approval']!=intent:raise Hold('Merge intent changed; explicit operator reconciliation required')
+        lane['merge_approval']=intent;self.save(lane)
+        return intent
+
     def drain(self, apply):
         results=[]
         for lane in self.lanes().values():
@@ -229,17 +243,22 @@ class Serial(Controller):
                 # Post-merge result belongs to actual merge commit; no obsolete main acceptance.
                 if remote!=pr['merge_sha']:
                     raise Hold('Main moved after delivery merge; explicit integration verification required')
-                if not apply:results.append({'issue':lane['issue'],'would_complete':True});continue
                 repo=self.c['repository']
-                subprocess.run(['git','-C',repo,'fetch','origin','main'],check=True,capture_output=True,timeout=90)
+                if self.policy.get('merge_policy') != 'human_approved_squash':raise Hold('Explicit squash merge policy required')
+                if apply:
+                    subprocess.run(['git','-C',repo,'fetch','origin','main'],check=True,capture_output=True,timeout=90)
+                intent=lane.get('merge_approval')
+                if not intent or intent.get('method')!='squash' or intent.get('head')!=lane['artifact']['commit'] or intent.get('pr_number')!=pr['number']:
+                    raise Hold('Recorded human-approved pre-merge base is missing or differs')
+                integration=verify_squash_merge(repo,lane['artifact']['commit'],remote,intent['base'])
+                if not apply:results.append({'issue':lane['issue'],'would_complete':True,'integration':integration});continue
                 if git(repo,'status','--porcelain') or git(repo,'branch','--show-current')!='main':raise Hold('Canonical checkout not clean main')
                 subprocess.run(['git','-C',repo,'merge','--ff-only','origin/main'],check=True,capture_output=True,timeout=45)
-                if not has_ancestor(repo,lane['artifact']['commit'],remote):raise Hold('Delivery ancestor absent; squash mapping not approved')
                 self.reserve('complete:'+lane['issue']+':'+str(lane['generation']))
                 issue=self.issue(lane['issue'])
                 if digest(issue.get('description') or '')!=lane['description_sha256'] or issue['status']!='in_review':raise Hold('Contract/status changed before completion')
                 self.call(['issue','update',lane['id'],'--status','done','--no-start','--output','json'])
-                self.finish('complete:'+lane['issue']+':'+str(lane['generation']));lane['phase']='done';self.save(lane)
+                self.finish('complete:'+lane['issue']+':'+str(lane['generation']));lane['integration']=integration;lane['phase']='done';self.save(lane)
                 results.append({'issue':lane['issue'],'status':'done'});continue
             pending=lane.get('pending')
             if not pending:continue
@@ -311,7 +330,13 @@ def activate(root, config, state, github, call, receipt_path):
         if not path.is_relative_to(root.parent/'.pitchroom-worktrees') and not path.is_relative_to(state):raise Hold('Report outside controlled local evidence roots')
         report=json.loads(path.read_text());sha=report.get('head_sha')
         if report.get('verdict')!='pass' or report.get('role')!=role or not sha:raise Hold('Independent role pass missing')
-        if not has_ancestor(root,sha,head):raise Hold('Reviewed source is not integrated')
+        if not has_ancestor(root,sha,head):
+            matches=[pr for pr in github.api('commits/'+sha+'/pulls') if pr.get('merged_at') and pr.get('head',{}).get('sha')==sha and pr.get('base',{}).get('ref')=='main']
+            if len(matches)!=1:raise Hold('Reviewed source has no unique merged PR mapping')
+            merged=matches[0]['merge_commit_sha']
+            if not has_ancestor(root,merged,head):raise Hold('Reviewed squash integration is absent from main')
+            verify_squash_merge(root,sha,merged,receipt.get('reviewed_integration_base',''))
+            if github.ci(merged,'push')['state']!='success':raise Hold('Reviewed squash integration CI must pass')
         for name in ('serial.py','controller.py','artifacts.py','acceptance.py','github_sync.py','runtime.json','policy.json'):
             actual=(root/'tooling/pipeline'/name).read_bytes()
             approved=subprocess.check_output(['git','-C',str(root),'show',sha+':tooling/pipeline/'+name])
@@ -335,6 +360,7 @@ def main():
     p=argparse.ArgumentParser(description=__doc__);sub=p.add_subparsers(dest='command',required=True)
     q=sub.add_parser('tick');q.add_argument('--apply',action='store_true')
     q=sub.add_parser('activate');q.add_argument('--receipt',type=Path,required=True)
+    q=sub.add_parser('approve-merge');q.add_argument('issue');q.add_argument('--approved-head',required=True)
     for name in ('workspace','plan','checkout','stage','return'):
         q=sub.add_parser(name);q.add_argument('issue');q.add_argument('--workdir',type=Path,default=Path.cwd())
         if name in ('checkout','stage','return'):q.add_argument('--role',choices=['developer','reviewer','qa'],required=True)
@@ -344,13 +370,15 @@ def main():
     if SOURCE!=root:raise Hold('Execute the integrated canonical controller, never a task copy')
     config=configured(root);policy=json.loads((root/'tooling/pipeline/policy.json').read_text());state=root/'.state/pipeline'
     def call(a):return cli(['multica','--profile',config['profile'],'--workspace-id',config['workspace'],*a])
-    name='controller' if args.command in ('tick','activate') else 'issue-'+args.issue
+    name='controller' if args.command in ('tick','activate','approve-merge') else 'issue-'+args.issue
     if '/' in name or '..' in name:raise Hold('Invalid issue identity')
     with lock(state,name=name,wait=45):
         c=Serial(config,call,state,GitHub(policy['repository']),policy)
         try:
             if args.command=='activate':result=activate(root,config,state,c.github,call,args.receipt)
             elif args.command=='tick':result=c.tick(args.apply)
+            elif args.command=='approve-merge':
+                c.require_enabled();c.refresh(False);result=c.record_merge_approval(args.issue,args.approved_head)
             else:
                 c.require_enabled()
                 if args.command=='workspace':result=c.workspace(args.issue,args.workdir)
@@ -364,5 +392,5 @@ def main():
 
 if __name__=='__main__':
     try:main()
-    except (Hold,SyncError,OSError,ValueError,subprocess.SubprocessError) as error:
+    except (Hold,ArtifactError,SyncError,OSError,ValueError,subprocess.SubprocessError) as error:
         print(json.dumps({'held':str(error)},ensure_ascii=False));raise SystemExit(2)
