@@ -40,7 +40,9 @@ class ViewTests(unittest.TestCase):
             with self.subTest(state=state):
                 data = fixture()
                 data.update(ci=state, passed=state == 'success',
-                            blocked_reasons=[] if state == 'success' else ['ci_not_successful'])
+                            blocked_reasons=[] if state == 'success' else ['ci_not_successful'],
+                            next_action='await_human_decision' if state == 'success'
+                            else 'resolve_observation_or_task_hold')
                 text, usable = view.render(data, NOW)
                 self.assertTrue(usable)
                 self.assertIn('CI ' + label, text)
@@ -63,6 +65,47 @@ class ViewTests(unittest.TestCase):
                 self.assertIn('检查：无法判断', result.stdout)
                 self.assertNotIn('检查：CI 通过', result.stdout)
                 self.assertIn('获取新快照', result.stdout)
+
+    def test_cli_rejects_invalid_or_contradictory_action(self):
+        command = [sys.executable, '-B', str(Path(view.__file__))]
+        for action in (None, 42, 'unknown', [], {}, 'await_serial_scheduler',
+                       'resolve_observation_or_task_hold', 'request_live_snapshot'):
+            with self.subTest(action=action):
+                data = fixture()
+                data.update(observed_at=datetime.now(timezone.utc).isoformat(),
+                            next_action=action)
+                result = subprocess.run(command, input=json.dumps(data),
+                                        text=True, capture_output=True)
+                self.assertEqual(result.returncode, 2, result.stdout)
+                self.assertIn('检查：无法判断', result.stdout)
+                self.assertNotIn('检查：CI 通过', result.stdout)
+                self.assertIn('获取新快照', result.stdout)
+
+    def test_producer_stage_ci_action_matrix(self):
+        for stage in snapshot.STAGES:
+            for ci in snapshot.CI_STATES:
+                with self.subTest(stage=stage, ci=ci):
+                    issue = {'identifier': 'PIT-62', 'status': stage,
+                             'assignee_id': fixture()['owner'], 'metadata': {
+                                 'github_sync_observed_at': NOW.isoformat(),
+                                 'github_sync_state': 'fresh',
+                                 'github_prs': [{'number': 12, 'head': HEAD,
+                                     'base': 'main', 'state': 'DRAFT',
+                                     'ci': {'sha': HEAD, 'state': ci}}]}}
+                    pr = {'number': 12, 'headRefName': fixture()['branch'],
+                          'headRefOid': HEAD, 'baseRefName': 'main', 'state': 'OPEN'}
+                    data = snapshot.snapshot('PIT-62', True, reader=lambda _: issue,
+                                             now=NOW, pr_reader=lambda _: pr)
+                    text, usable = view.render(data, NOW)
+                    self.assertTrue(usable)
+                    self.assertIn(view.ACTIONS[data['next_action']], text)
+                    self.assertIn('CI ' + view.CI[ci], text)
+                    self.assertIn('工程完成：无法判断', text)
+                    for wrong in (None, not data['human_decision_required']):
+                        altered = dict(data, human_decision_required=wrong)
+                        rejected, accepted = view.render(altered, NOW)
+                        self.assertFalse(accepted)
+                        self.assertNotIn('检查：CI 通过', rejected)
 
     def test_stale_future_and_offline(self):
         for delta in (-121, 1):
@@ -108,10 +151,16 @@ class ViewTests(unittest.TestCase):
     def test_all_stages_and_scheduler_action(self):
         for stage, label in view.STAGES.items():
             data = fixture()
-            data.update(stage=stage, next_action='await_serial_scheduler')
-            text, _ = view.render(data, NOW)
+            human = stage in {'in_review', 'blocked'}
+            action = ('resolve_observation_or_task_hold' if stage == 'blocked' else
+                      'await_human_decision' if human else 'await_serial_scheduler')
+            data.update(stage=stage, human_decision_required=human, next_action=action,
+                        blocked_reasons=['task_blocked'] if stage == 'blocked' else [],
+                        passed=stage != 'blocked')
+            text, usable = view.render(data, NOW)
+            self.assertTrue(usable)
             self.assertIn(label, text)
-            self.assertIn('等待串行调度器', text)
+            self.assertIn(view.ACTIONS[action], text)
             self.assertIn('工程完成：无法判断', text)
 
     def test_cli_stdin_file_and_errors_are_read_only(self):

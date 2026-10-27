@@ -61,6 +61,16 @@ def render(data, now=None):
         reasons = data['blocked_reasons']
         if not isinstance(reasons, list) or any(not isinstance(r, str) for r in reasons):
             raise ValueError()
+        human_required = stage in {'in_review', 'blocked'}
+        expected_action = ('resolve_observation_or_task_hold' if reasons else
+                           'await_human_decision' if human_required else
+                           'await_serial_scheduler')
+        if (type(data['human_decision_required']) is not bool
+                or data['human_decision_required'] != human_required
+                or (stage == 'blocked') != ('task_blocked' in reasons)
+                or not isinstance(data['next_action'], str)
+                or data['next_action'] != expected_action):
+            raise ValueError()
         stamp = datetime.fromisoformat(data['observed_at'].replace('Z', '+00:00'))
         if stamp.tzinfo is None:
             raise ValueError()
@@ -86,7 +96,7 @@ def render(data, now=None):
         if not usable:
             blocks.append('观测无法判断')
         lines.append('阻塞：' + ('；'.join(blocks) if blocks else '未观测到CI阻塞；其他门禁仍需核验'))
-        action = ACTIONS.get(data['next_action'], '核实快照格式与门禁') if usable else ACTIONS['request_live_snapshot']
+        action = ACTIONS[data['next_action']] if usable else ACTIONS['request_live_snapshot']
         lines.extend(['下一动作：' + action, BOUNDARIES])
         return '\n'.join(lines), usable
     except (ValueError, TypeError, KeyError, AttributeError):
