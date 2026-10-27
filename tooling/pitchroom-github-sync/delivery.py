@@ -41,6 +41,10 @@ def allowed_path(path, reviewed=()):
     infrastructure = {
         '.github/workflows/pr-ci.yml',
         'docs/development/PIPELINE.md',
+        'docs/development/QA_SKILLS.md',
+        'tooling/pipeline/agent_instructions.py',
+        'tooling/pipeline/test_agent_instructions.py',
+        'tooling/pipeline/skills/pitchroom-qa-pstack/SKILL.md',
         'docs/development/migration-plan.json',
         'tooling/pipeline/policy.json',
         'tooling/pipeline/status.py',
