@@ -183,7 +183,7 @@ class Serial(Controller):
         return super().workspace(key,workdir)
 
     def _transition(self, lane, issue, target, report):
-        token='transition:'+lane['issue']+':'+str(lane['generation'])+':'+lane['phase']
+        token='transition:'+lane['issue']+':'+str(lane['generation'])+':'+lane['phase']+':'+lane['pending']['run']
         self.reserve(token)
         fresh=self.issue(lane['issue'])
         if fresh['status']!=issue['status'] or fresh.get('assignee_id')!=issue.get('assignee_id') or digest(fresh.get('description') or '')!=lane['description_sha256']:

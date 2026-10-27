@@ -391,6 +391,31 @@ class QAResubmission(unittest.TestCase):
 
     def tearDown(self):self.f.tearDown()
 
+    def test_reassessment_exit_has_own_transition_and_repeated_tick_is_safe(self):
+        lane=self.c.lanes()['PIT-1'];row=self.f.old_call.rows[0]
+        row.update(status='started_3',assignee_id='qa')
+        def pending(run, verified):
+            return {'target':'in_review','role':'qa','run':run,'actor':'qa',
+                'issue_status':'started_3','assignee':'qa','report':'local-report',
+                'source_description':lane['description_sha256'],'engineering_verified':verified}
+        lane.update(phase='awaiting_role_exit',pending=pending('qa-old',False))
+        self.c.save(lane);self.c.drain(True)
+        self.assertEqual(self.c.lanes()['PIT-1']['phase'],'held')
+        old_operations=self.c.db.execute('SELECT token,state FROM operations').fetchall()
+        self.c.retry_qa('PIT-1',SHA,'Scoped report reassessment')
+        self.f.old_call.runs['id-1'].append({'id':'qa-new','agent_id':'qa','status':'completed'})
+        next_lane=self.c.lanes()['PIT-1'];next_lane.update(phase='awaiting_role_exit',pending=pending('qa-new',True))
+        next_lane['receipts']['qa']={'outcome':'pass','gaps':[],'commit':SHA,'run_id':'qa-new'}
+        self.c.save(next_lane);self.c.drain(True)
+        self.assertEqual(self.c.lanes()['PIT-1']['phase'],'awaiting_merge')
+        self.assertEqual(row['status'],'in_review')
+        current=self.c.db.execute('SELECT token,state FROM operations').fetchall()
+        self.assertTrue(all(operation in current for operation in old_operations))
+        count=len(self.f.old_call.writes);self.c.drain(True)
+        self.assertEqual(len(self.f.old_call.writes),count)
+        archive=json.loads((self.c.root/'qa-retries/PIT-1-g1.json').read_text())
+        self.assertEqual(archive['original_lane']['receipts']['qa']['run_id'],'qa-old')
+
     def test_archives_failure_and_persists_next_state_before_enqueue(self):
         before=copy.deepcopy(self.c.lanes()['PIT-1']);original=self.c.call;observed=[]
         def call(args):
