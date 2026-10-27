@@ -10,7 +10,7 @@ import subprocess
 import sys
 import time
 
-from controller import Controller, Hold, RUNNING, digest, git, lock, write_json
+from controller import Controller, Hold, RUNNING, ACTIVE, digest, git, lock, write_json
 from artifacts import _path, checkpoint, has_ancestor, materialize, prepare_dependencies, verify_clean_tree
 from github_sync import GitHub, SyncError, all_issues, cli, sync, invalidate
 
@@ -262,6 +262,22 @@ class Serial(Controller):
             self._transition(lane,issue,pending['target'],pending['report'])
             results.append({'issue':lane['issue'],'status':pending['target']})
         return results
+
+    def active_issues(self, issues):
+        actors = {self.c[role] for role in ('developer', 'reviewer', 'qa')}
+        active = {lane['issue'] for lane in self.lanes().values()
+                  if lane['phase'] not in ('done', 'held')}
+        for issue in issues:
+            if issue.get('assignee_id') in actors and issue['status'] in ACTIVE:
+                active.add(issue['identifier'])
+            # Runtime ownership may outlive assignment/status. Inspect every
+            # issue, including human-owned and unassigned legacy records.
+            runs = self.call(['issue', 'runs', issue['id'], '--output', 'json'])
+            if not isinstance(runs, list) or any(not isinstance(run, dict) or run.get('status') not in RUNNING | {'completed', 'failed', 'cancelled'} for run in runs):
+                raise Hold('Unknown runtime history; no scheduling')
+            if any(run['status'] in RUNNING for run in runs):
+                active.add(issue['identifier'])
+        return active
 
     def dispatch(self, apply=False):
         active=[x['issue'] for x in self.lanes().values() if x['phase'] not in ('done','held')]

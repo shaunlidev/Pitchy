@@ -59,6 +59,10 @@ def allowed_path(path, reviewed=()):
         'tooling/pipeline/test_acceptance.py',
         'tooling/pipeline/test_resolutions.py',
         'tooling/pipeline/test_polling.py',
+        'tooling/pipeline-status/snapshot.py',
+        'tooling/pipeline-status/test_snapshot.py',
+        'tooling/pipeline-status/view.py',
+        'tooling/pipeline-status/test_view.py',
 
     }
     if path in infrastructure:
