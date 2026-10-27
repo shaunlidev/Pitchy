@@ -17,3 +17,5 @@ export * from "./story";
 export * from "./brief";
 
 export * from "./topic-material";
+
+export * from "./workspace";
