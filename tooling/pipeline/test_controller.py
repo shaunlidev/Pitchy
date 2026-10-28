@@ -58,7 +58,7 @@ class Fake:
 class Tests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.root = Path(self.tmp.name)
+        self.root = Path(self.tmp.name).resolve()
         self.repo = self.root / "repo"
         self.repo.mkdir()
         self.g("init", "-q")
@@ -446,7 +446,7 @@ class DurableRoleEvidence(unittest.TestCase):
         lane={**self.lane,'repairs':0,'phase':'reviewer'}
         ctl=serial.Serial.__new__(serial.Serial);ctl.c=self.c;ctl.root=self.ctl.root
         ctl.current=lambda key,role:(lane,{'status':'started_2'})
-        ctl.actor=lambda role:('review','review-run')
+        ctl.actor=lambda role, lane=None:('review','review-run')
         ctl.save=Mock()
         def transition(lane,issue,target,report):lane['pending']={}
         ctl.transition=Mock(side_effect=transition)

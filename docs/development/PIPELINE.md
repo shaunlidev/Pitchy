@@ -79,6 +79,64 @@ The command archives the original lane, retains both histories through local mer
 
 A lost Git/ref/enqueue acknowledgement retains an uncertain journal entry and forbids replay. A changed public head, native branch, main, contract, live runtime, repeated recovery or overlapping task files holds; never edit the ledger or bypass the hold to resume.
 
+### Dormant optional roles (PIT-72)
+
+The implementation adds per-task developer routing and an optional supplemental
+review. Both `runtime.json.optional_roles.small_tasks_enabled` and
+`supplemental_enabled` are **false** in the delivered configuration. This change
+does not activate scheduling, enroll an issue, update live Agent instructions,
+or authorize a model run. Existing native runtimes and the canonical checkout
+must not be modified to try it out.
+
+Future operator admission, after separate approval and activation, uses explicit
+issue metadata: `developer_route=default|small` (default `default`) and
+`supplemental_review=off|on` (default `off`). Unknown selections, disabled selected
+features, missing actors and overlapping actor identities hold. Only a human
+scoped, bounded programming task should be selected as `small`; task size is not
+inferred from title or description. Existing dependency-queue and prerequisite
+gates still apply. Unassigned/manual backlog is not automatically enrolled.
+
+Admission freezes the selections and role actor IDs in the lane. Workspace,
+artifact receipts, rework and developer recovery use that developer identity.
+Metadata/configuration drift holds rather than changing a running task's owner.
+Legacy lanes cannot opt into a new route; existing artifact actors are retained.
+Do not change global developer IDs or edit saved lane records to migrate a task.
+
+The optional sequence is Developer → exact-head CI and terminal runtime →
+Supplemental → terminal runtime → existing Reviewer → existing QA → human
+exact-head squash approval → integration CI. The single lane remains occupied
+throughout. The supplemental stage reuses the review workflow status with its own
+assignee and local phase; no new workspace status is needed. Only the controller
+performs the assignment/status handoff. Uncertain writes are never replayed.
+
+The supplemental role gets an immutable local bundle containing the exact
+base/head/tree, original requirements, frozen contract, diff, developer receipt,
+and hashes/paths of existing controller check receipts and stdout/stderr.
+The developer's durable manifest and every declared retained evidence file are
+validated and included in the bundle fingerprint; a path alone is not proof. It
+executes no task check and cannot submit formal Reviewer/QA receipts. Findings
+are advisory: they do not request automatic rework, approve any criterion or
+replace full independent review. The formal Reviewer receives the advisory report
+in its checkout response and independently decides whether a defect is real.
+Only its existing return protocol can initiate bounded developer rework.
+
+Missing/incomplete reports, missing/changed evidence, changed source head and
+failed/unknown preceding runs prevent forward handoff. No missing supplemental
+step is treated as PASS. A selected supplemental run has no automatic retry;
+operator reconciliation is needed after a failure or uncertain report. Rework
+retains the prior evidence and invalidates current supplemental bindings so the
+next generation reviews its own artifact.
+
+Future activation still requires explicit human authority, independent review
+and QA, integrated main CI and a fresh activation receipt. The existing fingerprint and
+reviewed-source identity cover this implementation in `serial.py`. Do not re-sign automatically.
+Verify the configured Agent IDs/model and update their applicable role protocol
+before a separately authorized live pilot. Runtime credential/quota validity,
+OpenCode runtime behavior, OS-enforced read-only isolation, live handoffs and
+actual token/cost savings are not established by offline tests. Native Agent
+processes are not an OS security boundary; the controller limits accepted
+operations and evidence, and role instructions prohibit source changes.
+
 ## Recovery acknowledgement and evidence retention (PIT-68 closeout)
 
 This section supersedes the earlier recovery status-toggle description. `recover-developer` preserves its original source, contract, generation and repair gates, then journals two explicit transitions: park the original task in `backlog` with `--no-start`, validate the unchanged Developer/contract/revision and complete project run inventory, then request `todo` with the explicit original Developer. This matches the deployed Multica trigger behavior. Each external write has a preceding durable intent. Updating a status successfully does not finish the operation.
