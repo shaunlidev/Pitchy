@@ -181,7 +181,9 @@ def role_result(lane, role, config, head):
                  and type(lane.get('generation')) is int and lane['generation'] > 0
                  and record.get('commit') == head and record.get('tree') == artifact.get('tree')
                  and sha(artifact.get('tree')) and record.get('generation') == lane.get('generation')
-                 and record.get('contract_sha256') and record.get('contract_sha256') == artifact.get('contract_sha256')
+                 and isinstance(record.get('contract_sha256'), str)
+                 and re.fullmatch(r'[a-f0-9]{64}', record['contract_sha256'])
+                 and record['contract_sha256'] == artifact.get('contract_sha256')
                  and record.get('description_sha256') == artifact.get('description_sha256') == lane.get('description_sha256')
                  and record.get('actor_id') == config[role] and record.get('role') == role
                  and identity(record.get('run_id')) and record.get('dirty') is False)

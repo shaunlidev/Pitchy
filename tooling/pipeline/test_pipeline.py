@@ -72,13 +72,13 @@ class OperationalStatus(unittest.TestCase):
         self.lane = {'issue':'PIT-1', 'id':'00000000-0000-0000-0000-000000000003',
                      'description_sha256':description, 'phase':'awaiting_merge', 'generation':1,
                      'branch':'codex/pit-1-test', 'pr_number':1,
-                     'artifact': {'issue':'PIT-1','commit':self.head, 'tree':self.tree, 'contract_sha256':'contract', 'description_sha256':description},
+                     'artifact': {'issue':'PIT-1','commit':self.head, 'tree':self.tree, 'contract_sha256':hashlib.sha256(b'Frozen contract').hexdigest(), 'description_sha256':description},
                      'receipts':{}}
         self.runs = []
         for n, role in enumerate(('reviewer','qa'), 1):
             run = f'00000000-0000-0000-0000-{n:012d}'
             self.lane['receipts'][role] = {'issue':'PIT-1','role':role, 'actor_id':self.config[role], 'run_id':run,
-                'generation':1, 'commit':self.head, 'tree':self.tree, 'contract_sha256':'contract',
+                'generation':1, 'commit':self.head, 'tree':self.tree, 'contract_sha256':hashlib.sha256(b'Frozen contract').hexdigest(),
                 'description_sha256':description, 'outcome':'pass', 'dirty':False, 'complete_contract_review':True}
             self.runs.append({'id':run,'issue_id':self.lane['id'],'agent_id':self.config[role],'status':'completed'})
         self.issue = {'id':'00000000-0000-0000-0000-000000000003', 'identifier':'PIT-1',
@@ -186,6 +186,20 @@ class OperationalStatus(unittest.TestCase):
         self.assertEqual(result['mode'],'maintenance'); self.assertFalse(result['valid'])
         self.write('control.json', {'mode':'open','source_fingerprint':status.fingerprint(self.root)})
         self.assertEqual(status.control_state(self.root,self.state,self.policy)['mode'],'open')
+
+    def test_malformed_shared_contract_digest_revokes_role_acceptance(self):
+        self.assertTrue(self.view()['ready_to_merge'])
+        for value in (None, '', 'contract', 'g'*64, 'a'*63, 'a'*65, True, 17,
+                      {'broken': 'digest'}, ['a'*64]):
+            with self.subTest(value=value):
+                lane = copy.deepcopy(self.lane)
+                for record in (lane['artifact'], *lane['receipts'].values()):
+                    record['contract_sha256'] = value
+                row = self.view(lane=lane)
+                self.assertFalse(row['ready_to_merge'])
+                self.assertFalse(row['engineering_done'])
+                self.assertEqual(row['roles']['reviewer']['state'], 'unknown')
+                self.assertEqual(row['roles']['qa']['state'], 'unknown')
 
     def test_ready_requires_independent_current_head_receipts(self):
         self.assertTrue(self.view()['ready_to_merge'])
