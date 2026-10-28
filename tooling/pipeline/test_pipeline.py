@@ -115,6 +115,50 @@ class OperationalStatus(unittest.TestCase):
                 with self.assertRaises(ValueError): status.load_config(self.root)
         p.write_text(json.dumps(original))
 
+    def test_optional_roles_are_dormant_and_configuration_is_validated(self):
+        options = self.config['optional_roles']
+        self.assertIs(options['small_tasks_enabled'], False)
+        self.assertIs(options['supplemental_enabled'], False)
+        self.assertEqual(self.config['max_lanes'], 1)
+        path = self.root/'tooling/pipeline/runtime.json'
+        original = json.loads(path.read_text())
+        for changes in ({'small_tasks_enabled': 1}, {'unknown': False},
+                        {'supplemental_agent': self.config['reviewer']},
+                        {'small_tasks_agent': 'invalid'}):
+            with self.subTest(changes=changes):
+                path.write_text(json.dumps({**original, 'optional_roles': {**options, **changes}}))
+                with self.assertRaises(ValueError): status.load_config(self.root)
+        path.write_text(json.dumps(original))
+        self.assertTrue(self.view()['ready_to_merge'])
+
+    def test_optional_routing_displays_actual_role_and_drift_holds(self):
+        options = self.config['optional_roles']
+        options.update(small_tasks_enabled=True, supplemental_enabled=True)
+        self.issue['metadata'] = {'developer_route': 'small', 'supplemental_review': 'on'}
+        self.lane['routing'] = {**self.issue['metadata'], 'actors': {
+            'developer': options['small_tasks_agent'], 'reviewer': self.config['reviewer'],
+            'qa': self.config['qa'], 'supplemental': options['supplemental_agent']}}
+        self.assertTrue(self.view()['ready_to_merge'])
+        self.lane['phase'] = 'supplemental'
+        self.issue['status'] = 'started_2'
+        self.runs.append({'id': '00000000-0000-0000-0000-000000000099',
+                          'issue_id': self.issue['id'], 'agent_id': options['supplemental_agent'], 'status': 'running'})
+        row = self.view()
+        self.assertEqual(row['controller_phase'], 'supplemental')
+        self.assertEqual(row['active_runs'][0]['role'], 'supplemental')
+        self.assertFalse(row['ready_to_merge'])
+        self.runs.pop(); self.lane['phase'] = 'awaiting_merge'; self.issue['status'] = 'in_review'
+        options['supplemental_enabled'] = False
+        row = self.view()
+        self.assertFalse(row['ready_to_merge'])
+        self.assertIn('routing_changed_or_disabled', row['blocked_reasons'])
+        options['supplemental_enabled'] = True
+        self.issue['metadata']['developer_route'] = 'default'
+        self.assertFalse(self.view()['ready_to_merge'])
+        self.assertIn('routing_changed_or_disabled', self.view()['blocked_reasons'])
+        self.lane.pop('routing')
+        self.assertFalse(self.view()['ready_to_merge'])
+
     def test_unsupported_lane_and_completion_policy_fail_closed(self):
         p = self.root/'tooling/pipeline/policy.json'
         original = json.loads(p.read_text())

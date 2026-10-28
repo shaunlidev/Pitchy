@@ -33,5 +33,11 @@
     "PIT-41": "Candidate language rules unresolved."
   },
   "owner": "6eb8e344-e80b-41d0-80c8-68e602195912",
-  "autopilot": "dfe6af57-ba37-4516-83c8-300665517b0e"
+  "autopilot": "dfe6af57-ba37-4516-83c8-300665517b0e",
+  "optional_roles": {
+    "small_tasks_enabled": false,
+    "small_tasks_agent": "e45b040c-ec23-4a2b-8071-3fcd5efedcff",
+    "supplemental_enabled": false,
+    "supplemental_agent": "46c585e4-42db-4e93-9d63-cc10fea780b9"
+  }
 }

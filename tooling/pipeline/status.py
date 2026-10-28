@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[2]
 CONTROL_MODES = {'open', 'admission_paused', 'maintenance'}
 FINGERPRINT_FILES = ('serial.py', 'controller.py', 'acceptance.py', 'artifacts.py',
                      'github_sync.py', 'status.py', 'runtime.json', 'policy.json')
-PHASES = {'developer', 'reviewer', 'qa', 'awaiting_role_exit', 'awaiting_merge', 'done', 'held'}
+PHASES = {'developer', 'reviewer', 'qa', 'supplemental', 'awaiting_role_exit', 'awaiting_merge', 'done', 'held'}
 RUNNING = {'queued', 'dispatched', 'running', 'waiting_local_directory', 'deferred'}
 TERMINAL = {'completed', 'failed', 'cancelled'}
 TRACKER = {'backlog', 'todo', 'in_progress', 'started_2', 'started_3', 'in_review', 'blocked', 'done', 'cancelled'}
@@ -55,7 +55,7 @@ def load_config(root):
     if set(policy) != set(fixed) | {'repository', 'project_id'}:
         raise ValueError('Unknown policy field')
     allowed = {'profile', 'workspace', 'developer', 'reviewer', 'qa', 'dispatcher', 'owner',
-               'autopilot', 'review_status', 'qa_status', 'order', 'legacy_dependencies', 'decision_holds'}
+               'autopilot', 'optional_roles', 'review_status', 'qa_status', 'order', 'legacy_dependencies', 'decision_holds'}
     if set(runtime) - allowed - set(policy) - set(aliases):
         raise ValueError('Unknown runtime field')
     for key in ('workspace', 'developer', 'reviewer', 'qa', 'dispatcher', 'owner', 'autopilot'):
@@ -63,6 +63,14 @@ def load_config(root):
             raise ValueError('Invalid runtime identity: ' + key)
     if len({runtime[r] for r in ('developer', 'reviewer', 'qa')}) != 3:
         raise ValueError('Roles must be independent')
+    options = runtime.get('optional_roles')
+    if not isinstance(options, dict) or set(options) != {'small_tasks_enabled', 'small_tasks_agent', 'supplemental_enabled', 'supplemental_agent'}:
+        raise ValueError('Invalid optional role configuration')
+    if any(type(options[k]) is not bool for k in ('small_tasks_enabled', 'supplemental_enabled')):
+        raise ValueError('Invalid optional role switch')
+    optional_actors = [options.get(k) for k in ('small_tasks_agent', 'supplemental_agent')]
+    if any(identity(a) is None for a in optional_actors) or len(set(optional_actors + [runtime[r] for r in ('developer','reviewer','qa')])) != 5:
+        raise ValueError('Optional role actors must be distinct identities')
     if runtime.get('review_status') != 'started_2' or runtime.get('qa_status') != 'started_3':
         raise ValueError('Invalid role status')
     if not isinstance(runtime.get('profile'), str) or not re.fullmatch(r'[\w-]+', runtime['profile']):
@@ -198,6 +206,23 @@ def task_view(key, lane, issue, runs, pr, config, fresh):
         and r.get('status') in RUNNING | TERMINAL for r in runs)
     valid_runs = valid_runs and len({r['id'] for r in runs}) == len(runs)
     active = [{k: r.get(k) for k in ('id', 'agent_id', 'status')} for r in runs if r['status'] in RUNNING] if valid_runs else []
+    actors = {r: config[r] for r in ('developer', 'reviewer', 'qa')}
+    metadata = issue.get('metadata', {})
+    route, supplement = metadata.get('developer_route', 'default'), metadata.get('supplemental_review', 'off')
+    options = config.get('optional_roles', {})
+    routing_valid = route in {'default', 'small'} and supplement in {'off', 'on'}
+    if route == 'small':
+        routing_valid = routing_valid and options.get('small_tasks_enabled') is True
+        actors['developer'] = options.get('small_tasks_agent')
+    if supplement == 'on':
+        routing_valid = routing_valid and options.get('supplemental_enabled') is True
+        actors['supplemental'] = options.get('supplemental_agent')
+    expected_routing = {'developer_route':route, 'supplemental_review':supplement, 'actors':actors}
+    if lane:
+        routing_valid = routing_valid and (lane.get('routing') == expected_routing if 'routing' in lane else route == 'default' and supplement == 'off')
+    if not routing_valid: gaps.append('routing_changed_or_disabled')
+    for run in active:
+        run['role'] = next((r for r, actor in actors.items() if actor == run['agent_id']), 'unknown') if routing_valid else 'unknown'
     if not fresh: gaps.append('live_observation_unavailable_or_stale')
     if not valid_runs: gaps.append('runtime_unknown')
     if tracker in {'todo', 'in_progress', 'started_2', 'started_3'} and valid_runs and not active:
@@ -244,6 +269,7 @@ def task_view(key, lane, issue, runs, pr, config, fresh):
     branch = lane.get('branch')
     if not isinstance(branch, str) or not re.fullmatch(r'codex/[A-Za-z0-9_./-]+', branch): branch = None
     return {'issue': key, 'tracker_status': tracker, 'controller_phase': phase,
+            'routing': {'developer_route':route, 'supplemental_review':supplement, 'valid':routing_valid},
             'owner': identity(issue.get('assignee_id')), 'active_runs': active, 'runtime_known': valid_runs and fresh,
             'branch': branch, 'pr': pr.get('number') if pr and type(pr.get('number')) is int else lane.get('pr_number') if type(lane.get('pr_number')) is int else None,
             'head': head, 'recorded_head': recorded_head, 'ci': ci_state, 'roles': roles,
@@ -262,6 +288,7 @@ def snapshot(live=False, legacy_root=None, root=ROOT, state=None, reader=read_js
     except (OSError, ValueError, TypeError):
         return {**result, 'errors': ['configuration_invalid'], 'next_action': 'repair_configuration'}
     result['policy'] = policy
+    result['optional_roles'] = {k: config['optional_roles'][k] for k in ('small_tasks_enabled', 'supplemental_enabled')}
     if state is None:
         try:
             common = subprocess.check_output(['git', 'rev-parse', '--path-format=absolute', '--git-common-dir'], cwd=root, text=True).strip()
