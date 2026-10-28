@@ -138,6 +138,7 @@ class SerialBehavior(unittest.TestCase):
                 next(x for x in self.old_call.rows if x['id']==a[2])['assignee_id']=a[a.index('--assignee-id')+1]
             return value
         self.c=serial.Serial(self.f.c,call,self.f.root/'new-state',GH([]),POLICY);self.f.ctl=self.c
+        (self.c.root/'evidence-budget.json').write_text((self.f.root/'state/evidence-budget.json').read_text())
 
     def tearDown(self):self.f.tearDown()
 
@@ -268,7 +269,7 @@ class FullSerialChain(SerialBehavior):
         def published(lane):lane['pr_number']=1;lane['branch']='codex/pit-1-delivery-g1';c.save(lane)
         with patch.object(c,'publish_pr',side_effect=published):
             with f.runtime('developer',native):
-                c.workspace('PIT-1',native);c.plan('PIT-1',pp);c.stage('PIT-1','developer',rp,native)
+                c.workspace('PIT-1',native);c.plan('PIT-1',pp);c.stage('PIT-1','developer',core.bound_report(native,rp),native)
         artifact=c.lanes()['PIT-1']['artifact']
         c.observation={'deadline_monotonic':time.monotonic()+120,'issues':{'PIT-1':{'prs':[{'number':1,'head':artifact['commit'],'state':'DRAFT','base':'main','ci':{'state':'success'}}]}}}
         self.assertEqual(c.drain(True)[0]['waiting'],'preceding runtime not successfully terminal')
@@ -280,7 +281,7 @@ class FullSerialChain(SerialBehavior):
             if role=='reviewer':current['complete_contract_review']=True
             rp.write_text(json.dumps(current))
             with f.runtime(role,work):
-                c.checkout('PIT-1',role,work);c.stage('PIT-1',role,rp,work)
+                c.checkout('PIT-1',role,work);c.stage('PIT-1',role,core.bound_report(work,rp),work)
             f.fake.runs['id-1'][0]['status']='completed';c.drain(True)
             self.assertEqual(f.fake.rows[0]['status'],status)
         self.assertEqual(c.lanes()['PIT-1']['phase'],'awaiting_merge')
@@ -534,7 +535,13 @@ class DeveloperRecovery(unittest.TestCase):
             if args[:2]==['issue','update'] and '--assignee-id' in args:
                 self.requests.append(args)
                 result=old_call(args)
+                self.f.fake.rows[0]['revision']+=1
+                target=args[args.index('--status')+1]
+                if target=='todo' and '--no-start' not in args and not getattr(self,'no_run',False):
+                    self.f.fake.runs['id-1'].append({'id':'fresh-dev','issue_id':'id-1','agent_id':'dev',
+                        'status':'queued','created_at':serial.datetime.now(serial.timezone.utc).isoformat()})
                 if getattr(self,'lost_enqueue',False):raise TimeoutError('acknowledgement lost')
+                if target=='todo' and getattr(self,'lost_after_start',False):raise TimeoutError('start response lost')
                 return result
             return old_call(args)
         self.c.call=call
@@ -565,7 +572,7 @@ class DeveloperRecovery(unittest.TestCase):
         self.assertEqual(self.f.g('show',native+':private-native.txt'),'runtime history stays local')
         self.assertEqual(json.loads(Path(result['archive']).read_text())['original_lane'],self.lane)
         with self.assertRaises(serial.Hold):self.recover()
-        self.assertEqual(len(self.requests),1)
+        self.assertEqual(len(self.requests),2)
 
     def test_recovered_source_still_requires_real_role_then_fast_forwards_original_pr(self):
         result=self.recover();remote=self.f.root/'remote.git'
@@ -574,10 +581,10 @@ class DeveloperRecovery(unittest.TestCase):
         self.f.g('remote','add','origin',str(remote))
         native=(self.f.root/'fresh-native').resolve();self.f.g('worktree','add','--detach',str(native),'agent/native')
         report=self.f.root/'report.json';report.write_text(json.dumps({'outcome':'pass','criterion_results':[{'id':x['id'],'status':'pass'} for x in self.lane['requirements']],'gaps':[],'decisions':[]}))
-        with self.assertRaises(serial.Hold):self.c.stage('PIT-1','developer',report,native)
+        with self.assertRaises(serial.Hold):self.c.stage('PIT-1','developer',core.bound_report(native,report),native)
         with self.f.runtime('developer',native,run='fresh-dev'):
             self.c.workspace('PIT-1',native)
-            self.c.stage('PIT-1','developer',report,native)
+            self.c.stage('PIT-1','developer',core.bound_report(native,report),native)
         lane=self.c.lanes()['PIT-1'];self.assertEqual(lane['phase'],'awaiting_role_exit')
         self.assertEqual(lane['artifact']['commit'],result['recovered_source'])
         self.assertNotIn('rework_expected_pr_head',lane)
@@ -707,7 +714,10 @@ class DeveloperRecovery(unittest.TestCase):
         args=self.requests[0]
         self.assertEqual(args[:2],['issue','update'])
         self.assertEqual(args[args.index('--assignee-id')+1],'dev')
-        self.assertEqual(args[args.index('--status')+1],'in_progress')
+        self.assertEqual(args[args.index('--status')+1],'backlog')
+        self.assertIn('--no-start',args)
+        self.assertEqual(self.requests[1][self.requests[1].index('--status')+1],'todo')
+        self.assertNotIn('--no-start',self.requests[1])
 
     def test_other_issue_becomes_live_after_local_mapping_holds(self):
         self.f.fake.rows.append(issue(2))
@@ -748,7 +758,7 @@ class DeveloperRecovery(unittest.TestCase):
         self.f.fake.rows.append(issue(2))
         self.f.fake.runs['id-2']=[{'id':'valid-completed-run','status':'completed'}]
         self.recover()
-        self.assertEqual(len(self.requests),1)
+        self.assertEqual(len(self.requests),2)
         self.assertEqual(self.c.lanes()['PIT-1']['developer_recoveries'],1)
 
     def test_malformed_identity_after_mapping_holds_without_enqueue(self):
@@ -763,3 +773,84 @@ class DeveloperRecovery(unittest.TestCase):
         self.assertEqual(self.requests,[])
         self.assertTrue(self.c.db.execute("select 1 from operations where state='uncertain'").fetchone())
         self.assertTrue(Path(self.c.lanes()['PIT-1']['developer_recovery']).exists())
+
+    def test_successful_status_update_without_run_stays_uncertain(self):
+        self.no_run=True
+        result=self.recover()
+        self.assertEqual(result['status'],'enqueue_unconfirmed')
+        self.assertEqual(len(self.requests),2)
+        self.assertTrue(self.c.db.execute("select 1 from operations where state='uncertain'").fetchone())
+        with self.assertRaises(serial.Hold):self.recover()
+        self.assertEqual(len(self.requests),2)
+
+    def test_delayed_run_can_be_observed_without_writes_then_acknowledged_once(self):
+        self.no_run=True;self.recover()
+        self.f.fake.runs['id-1'].append({'id':'delayed','issue_id':'id-1','agent_id':'dev','status':'running',
+            'created_at':serial.datetime.now(serial.timezone.utc).isoformat()})
+        before=self.c.db.execute('select * from operations').fetchall()
+        files={str(p):p.read_bytes() for p in self.c.root.rglob('*') if p.is_file()}
+        self.assertEqual(self.c.inspect_recovery('PIT-1'),{'state':'unique_run_observed','run_id':'delayed'})
+        self.assertEqual(before,self.c.db.execute('select * from operations').fetchall())
+        self.assertEqual(files,{str(p):p.read_bytes() for p in self.c.root.rglob('*') if p.is_file()})
+        with self.assertRaises(serial.Hold):self.c.confirm_recovery('PIT-1','wrong')
+        self.c.confirm_recovery('PIT-1','delayed');self.c.confirm_recovery('PIT-1','delayed')
+        self.assertFalse(self.c.db.execute("select 1 from operations where state='uncertain'").fetchone())
+        self.assertEqual(len(self.requests),2)
+        self.assertEqual(len(list((Path(self.c.lanes()['PIT-1']['developer_recovery']).with_suffix('')/'start-events').glob('*.json'))),4)
+
+    def test_lost_start_acknowledgement_is_reconciled_without_enqueue(self):
+        self.lost_after_start=True
+        with self.assertRaises(TimeoutError):self.recover()
+        self.assertEqual(self.c.inspect_recovery('PIT-1')['state'],'unique_run_observed')
+        with self.assertRaises(serial.Hold):self.recover()
+        self.c.confirm_recovery('PIT-1','fresh-dev')
+        self.assertEqual(len(self.requests),2)
+
+    def test_wrong_duplicate_unknown_or_earlier_run_never_confirms(self):
+        self.no_run=True;self.recover()
+        before=copy.deepcopy(self.f.fake.runs['id-1'])
+        valid={'id':'new','issue_id':'id-1','agent_id':'dev','status':'queued','created_at':serial.datetime.now(serial.timezone.utc).isoformat()}
+        for rows in [[dict(valid,agent_id='qa')],[dict(valid,issue_id='id-other')],
+                     [dict(valid,status='unknown')],[dict(valid,created_at='2000-01-01T00:00:00Z')],
+                     [dict(valid,created_at=None)],[valid,dict(valid,id='second')],[valid,valid]]:
+            self.f.fake.runs['id-1']=before+rows
+            with self.subTest(rows=rows):
+                self.assertEqual(self.c.inspect_recovery('PIT-1')['state'],'conflict_or_unavailable')
+                with self.assertRaises(serial.Hold):self.c.confirm_recovery('PIT-1','new')
+        self.assertEqual(len(self.requests),2)
+
+    def test_missing_parking_ack_never_enqueues(self):
+        original=self.c.call
+        def call(args):
+            value=original(args)
+            if args[:2]==['issue','update'] and '--no-start' in args:
+                self.f.fake.rows[0]['revision']=7
+            return value
+        self.c.call=call
+        with self.assertRaisesRegex(serial.Hold,'Parking'):self.recover()
+        self.assertEqual(len(self.requests),1)
+        self.assertEqual(self.c.inspect_recovery('PIT-1')['state'],'not_enqueued_or_unknown')
+
+    def test_prior_runtime_provenance_changes_hold_before_enqueue_and_in_reconciliation(self):
+        self.no_run=True;self.recover()
+        valid={'id':'new','issue_id':'id-1','agent_id':'dev','status':'queued','created_at':serial.datetime.now(serial.timezone.utc).isoformat()}
+        original=copy.deepcopy(self.f.fake.runs['id-1'])
+        for key,value in [('agent_id','qa'),('issue_id','other'),('work_dir','another-worktree'),
+                          ('branch_name','agent/other'),('created_at','2000-01-01T00:00:00Z'),
+                          ('result',{'branch_name':'agent/other'})]:
+            self.f.fake.runs['id-1']=[{**original[0],key:value},valid]
+            with self.subTest(key=key):
+                self.assertEqual(self.c.inspect_recovery('PIT-1')['state'],'conflict_or_unavailable')
+                with self.assertRaises(serial.Hold):self.c.confirm_recovery('PIT-1','new')
+        self.f.fake.runs['id-1']=original+[valid]
+        self.assertEqual(self.c.inspect_recovery('PIT-1')['state'],'unique_run_observed')
+        self.assertEqual(len(self.requests),2)
+
+    def test_prior_runtime_owner_change_after_mapping_prevents_parking(self):
+        original=serial.write_json
+        def write(path,data):
+            original(path,data)
+            if Path(path).name=='mapping.json':self.f.fake.runs['id-1'][0]['agent_id']='qa'
+        with patch.object(serial,'write_json',side_effect=write):
+            with self.assertRaisesRegex(serial.Hold,'runtime history changed'):self.recover()
+        self.assertEqual(self.requests,[])
