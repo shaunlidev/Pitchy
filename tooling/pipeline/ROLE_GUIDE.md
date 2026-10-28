@@ -1,5 +1,7 @@
 # Serial role protocol
 
+Current configuration, pause semantics and the single read-only status entry are defined in [PIPELINE.md](../../docs/development/PIPELINE.md). Use `status.py --live --issue PIT-N` from canonical source for observation; never change control mode as a role. Admission pause allows authorized in-flight handoffs; maintenance holds transitions without cancelling a run.
+
 Use the absolute canonical `tooling/pipeline/serial.py` from your actual native Multica worktree. Do not execute task copies, change central state/config, call core controller.py directly, mention another Agent, or change issue status yourself. The existing dispatcher tick owns transitions only after the submitting process is terminal. Ordinary local role processes are not an OS authorization boundary.
 
 Developer:

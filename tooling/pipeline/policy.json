@@ -15,5 +15,7 @@
   "automatic_done": true,
   "automatic_deployment": false,
   "required_ci_check": "PR gate",
-  "activation": "explicit_verified_local_receipt"
+  "activation": "explicit_verified_local_receipt",
+  "dispatch_control_default": "admission_paused",
+  "max_observation_seconds": 120
 }

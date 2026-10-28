@@ -11,7 +11,7 @@ import serial
 import test_controller as core
 
 SHA='a'*40
-POLICY={'repository':'owner/repo','project_id':'project','merge_policy':'human_approved_squash'}
+POLICY={'repository':'owner/repo','project_id':'project','merge_policy':'human_approved_squash','dispatch_control_default':'open'}
 
 
 def issue(n=1):

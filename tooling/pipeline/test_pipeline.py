@@ -1,3 +1,7 @@
+import copy
+from datetime import datetime, timezone
+import hashlib
+import sqlite3
 import importlib.util
 import json
 import os
@@ -17,20 +21,6 @@ import delivery
 
 
 class PipelineBehavior(unittest.TestCase):
-    def test_live_drift_and_missing_association_are_visible(self):
-        policy = {**json.loads((ROOT / 'tooling/pipeline/policy.json').read_text()), 'mode':'serial_pr_foundation', 'migration_prs':[1,2,3], 'migration_base':'codex/pit-30-git-baseline'}
-        prs = [{'number': 2, 'state': 'OPEN', 'baseRefName': 'main', 'statusCheckRollup': []}]
-        findings = status.reconcile(policy, prs, [{'status': 'active'}], [], {'PIT-47': {'pull_requests': []}})
-        self.assertEqual(len(findings), 5)
-        prs[0].update(baseRefName=policy['migration_base'], statusCheckRollup=[{'name': 'PR gate', 'conclusion': 'SUCCESS'}])
-        self.assertEqual(status.reconcile(policy, prs, [], [{'resource_ref': {'execution_mode': 'worktree'}}], {'PIT-47': {'pull_requests': [1]}}), [])
-
-    def test_unavailable_live_query_is_an_error_not_pass(self):
-        with patch.object(status, 'read_json', side_effect=RuntimeError('unavailable')):
-            result = status.snapshot(live=True)
-        self.assertFalse(result['live_checked'])
-        self.assertEqual(len(result['errors']), 7)
-
     def test_ci_environment_cannot_inherit_provider_or_personal_database(self):
         source = {'PATH': '/bin', 'OPENAI_API_KEY': 'test-provider', 'GITHUB_TOKEN': 'test-token', 'DATABASE_URL': 'test-personal', 'PITCHROOM_RUNTIME': 'live'}
         normal = ci.environment('unit', source)
@@ -62,6 +52,261 @@ class PipelineBehavior(unittest.TestCase):
         self.assertIn('if: always()', workflow)
         self.assertIn('needs: [source, application]', workflow)
         self.assertEqual(workflow.count('python3 tooling/pipeline/ci.py '), len(ci.STAGES))
+
+
+class OperationalStatus(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        folder = self.root / 'tooling/pipeline'
+        folder.mkdir(parents=True)
+        for name in status.FINGERPRINT_FILES:
+            (folder / name).write_bytes((ROOT / 'tooling/pipeline' / name).read_bytes())
+        self.policy, self.config = status.load_config(self.root)
+        self.state = self.root / 'state'
+        self.state.mkdir()
+        self.now = datetime.now(timezone.utc)
+        self.head, self.tree, self.merge = 'a' * 40, 'b' * 40, 'c' * 40
+        self.lane = {'issue':'PIT-1', 'phase':'awaiting_merge', 'generation':1,
+                     'branch':'codex/pit-1-test', 'pr_number':1,
+                     'artifact': {'commit':self.head, 'tree':self.tree, 'contract_sha256':'contract', 'description_sha256':'description'},
+                     'receipts':{}}
+        self.runs = []
+        for n, role in enumerate(('reviewer','qa'), 1):
+            run = f'00000000-0000-0000-0000-{n:012d}'
+            self.lane['receipts'][role] = {'role':role, 'actor_id':self.config[role], 'run_id':run,
+                'generation':1, 'commit':self.head, 'tree':self.tree, 'contract_sha256':'contract',
+                'description_sha256':'description', 'outcome':'pass', 'dirty':False, 'complete_contract_review':True}
+            self.runs.append({'id':run,'agent_id':self.config[role],'status':'completed'})
+        self.issue = {'id':'00000000-0000-0000-0000-000000000003', 'identifier':'PIT-1',
+                      'project_id':self.config['project'], 'status':'in_review', 'assignee_id':self.config['owner']}
+        self.pr = {'number':1, 'head':self.head, 'state':'DRAFT', 'base':'main',
+                   'ci':{'state':'success','sha':self.head,'run_id':1}}
+        self.write('activation.json', {'source_fingerprint':status.fingerprint(self.root), 'task_lanes':1,
+                   'verified':True, 'integrated_commit':self.merge})
+        self.write('sync-health.json', {'state':'fresh','observed_at':self.now.isoformat()})
+        db = sqlite3.connect(self.state/'ledger.sqlite3')
+        db.execute('CREATE TABLE lanes (issue TEXT PRIMARY KEY, data TEXT NOT NULL)')
+        db.execute('CREATE TABLE operations (token TEXT PRIMARY KEY, state TEXT NOT NULL)')
+        db.execute('INSERT INTO lanes VALUES (?,?)', ('PIT-1', json.dumps(self.lane)))
+        db.commit(); db.close()
+
+    def write(self, name, value):
+        (self.state/name).write_text(json.dumps(value))
+
+    def view(self, **changes):
+        args = dict(key='PIT-1',lane=self.lane,issue=self.issue,runs=self.runs,pr=self.pr,config=self.config,fresh=True)
+        return status.task_view(**{**args, **changes})
+
+    def inventory(self):
+        return {str(p.relative_to(self.root)):hashlib.sha256(p.read_bytes()).hexdigest() for p in self.root.rglob('*') if p.is_file()}
+
+    def test_one_owner_for_policy_and_runtime_shadows_fail(self):
+        self.assertEqual(self.config['max_lanes'], self.policy['task_lanes'])
+        p = self.root/'tooling/pipeline/runtime.json'
+        original = json.loads(p.read_text())
+        for key, value in [('max_lanes',1),('project','other'),('repository','other/repo'),
+                           ('machine_cap',6),('default_base','dev'),('automatic_done',False),('enabled',True)]:
+            with self.subTest(key=key):
+                p.write_text(json.dumps({**original,key:value}))
+                with self.assertRaises(ValueError): status.load_config(self.root)
+        p.write_text(json.dumps(original))
+
+    def test_unsupported_lane_and_completion_policy_fail_closed(self):
+        p = self.root/'tooling/pipeline/policy.json'
+        original = json.loads(p.read_text())
+        for key,value in [('task_lanes',2),('task_lanes',True),('engineering_done_requires',['ci']),
+                          ('dispatch_control_default','open'),('automatic_deployment',True)]:
+            p.write_text(json.dumps({**original,key:value}))
+            result = status.snapshot(root=self.root,state=self.state)
+            self.assertEqual(result['errors'], ['configuration_invalid'])
+        p.write_text(json.dumps(original))
+
+    def test_fingerprint_includes_status_validation_and_policy(self):
+        self.assertEqual(status.activation_state(self.root,self.state)['state'], 'valid')
+        for name in ('status.py','policy.json'):
+            path = self.root/'tooling/pipeline'/name
+            original = path.read_bytes(); path.write_bytes(original+b' ')
+            self.assertEqual(status.activation_state(self.root,self.state)['state'], 'stale')
+            path.write_bytes(original)
+        (self.state/'activation.json').write_text('[]')
+        self.assertEqual(status.activation_state(self.root,self.state)['state'], 'invalid')
+
+    def test_default_pause_and_stale_operator_control_cannot_enable(self):
+        self.assertEqual(status.control_state(self.root,self.state,self.policy)['mode'], 'admission_paused')
+        self.write('control.json', {'mode':'open','source_fingerprint':'old'})
+        result = status.control_state(self.root,self.state,self.policy)
+        self.assertEqual(result['mode'],'maintenance'); self.assertFalse(result['valid'])
+        self.write('control.json', {'mode':'open','source_fingerprint':status.fingerprint(self.root)})
+        self.assertEqual(status.control_state(self.root,self.state,self.policy)['mode'],'open')
+
+    def test_ready_requires_independent_current_head_receipts(self):
+        self.assertTrue(self.view()['ready_to_merge'])
+        self.assertFalse(self.view()['engineering_done'])
+        self.assertTrue(self.view()['human_decision_required'])
+        self.pr['head']='d'*40; self.pr['ci']['sha']='d'*40
+        result=self.view()
+        self.assertFalse(result['ready_to_merge'])
+        self.assertIn('head_changed',result['blocked_reasons'])
+        self.assertEqual(result['roles']['qa']['state'],'unknown')
+
+    def test_stale_failed_and_wrong_actor_proofs_cannot_pass(self):
+        for field,value in [('actor_id',self.config['owner']),('generation',2),('dirty',True),
+                            ('outcome','fail'),('not_run',['required']),('contract_sha256','other')]:
+            with self.subTest(field=field):
+                lane=copy.deepcopy(self.lane);lane['receipts']['qa'][field]=value
+                self.assertFalse(self.view(lane=lane)['ready_to_merge'])
+        self.assertFalse(self.view(fresh=False)['ready_to_merge'])
+        self.runs[1]['status']='running'
+        self.assertFalse(self.view()['ready_to_merge'])
+
+    def test_merged_needs_controller_mapping_and_exact_merge_ci(self):
+        self.pr.update(state='MERGED',merge_sha=self.merge)
+        self.lane.update(phase='done',integration={'method':'squash','head':self.head,'commit':self.merge,'parent':'d'*40,'tree':self.tree})
+        self.issue['status']='done'
+        self.assertFalse(self.view()['engineering_done'])
+        self.pr['integration_ci']={'state':'success','sha':'e'*40}
+        self.assertFalse(self.view()['engineering_done'])
+        self.pr['integration_ci']['sha']=self.merge
+        self.assertTrue(self.view()['engineering_done'])
+        self.lane['phase']='awaiting_merge'
+        self.assertFalse(self.view()['engineering_done'])
+
+    def test_runtime_completion_or_tracker_status_is_not_engineering_done(self):
+        self.issue['status']='in_progress'
+        result=self.view()
+        self.assertIn('tracker_active_without_runtime',result['blocked_reasons'])
+        self.assertFalse(result['engineering_done']);self.assertFalse(result['ready_to_merge'])
+        result=self.view(runs=[{'status':'completed'}])
+        self.assertFalse(result['runtime_known']);self.assertFalse(result['engineering_done'])
+
+    def test_offline_snapshot_has_no_writes_or_dispatch_and_no_raw_content(self):
+        self.write('sync-health.json', {'state':'unavailable','error':'synthetic-private-value'})
+        before=self.inventory()
+        with patch.object(status.subprocess,'run',side_effect=AssertionError('No external command')):
+            result=status.snapshot(root=self.root,state=self.state,now=self.now)
+        self.assertEqual(self.inventory(),before)
+        self.assertNotIn('synthetic-private-value',json.dumps(result))
+        self.assertFalse(result['live_checked'])
+        self.assertFalse(result['tasks'][0]['engineering_done'])
+        self.assertFalse(result['scheduler']['new_admission'])
+
+    def test_read_never_creates_missing_ledger_or_consumes_wal(self):
+        (self.state/'ledger.sqlite3').unlink()
+        before=self.inventory()
+        result=status.snapshot(root=self.root,state=self.state)
+        self.assertIn('ledger_unavailable_or_invalid',result['errors'])
+        self.assertEqual(before,self.inventory())
+        (self.state/'ledger.sqlite3-wal').write_text('synthetic')
+        with self.assertRaises(ValueError):status.read_ledger(self.state)
+
+    def test_old_or_future_poll_is_not_fresh(self):
+        for value in ('2000-01-01T00:00:00Z','2999-01-01T00:00:00Z','bad'):
+            self.write('sync-health.json',{'state':'fresh','observed_at':value})
+            result=status.snapshot(root=self.root,state=self.state,now=self.now)
+            self.assertEqual(result['poll']['state'],'unavailable_or_stale')
+
+    def test_live_reads_are_allowlisted_and_paused_schedule_is_visible(self):
+        queries=[]
+        def reader(argv):
+            queries.append(argv)
+            if argv[0]!='multica':raise AssertionError(argv)
+            tail=argv[5:]
+            if tail[:2]==['issue','list']:return {'issues':[self.issue]}
+            if tail[:2]==['issue','runs']:return self.runs
+            if tail[:2]==['autopilot','list']:
+                return {'autopilots':[{'id':self.config['autopilot'],'project_id':self.config['project'],'status':'paused'}]}
+            raise AssertionError(argv)
+        import github_sync
+        class GH:
+            def __init__(self,*a,**kw):pass
+            def api(self,path):return {}
+            def snapshot(other,pr):return self.pr
+        before=self.inventory()
+        with patch.object(github_sync,'GitHub',GH):
+            result=status.snapshot(True,root=self.root,state=self.state,reader=reader)
+        self.assertTrue(result['live_checked'],result['errors'])
+        self.assertEqual(result['scheduler']['status'],'paused')
+        self.assertFalse(result['scheduler']['handoffs'])
+        self.assertEqual(before,self.inventory())
+        self.assertEqual(len(queries),3)
+
+    def test_failed_live_read_is_unknown_and_retains_no_raw_error(self):
+        def reader(argv):raise ValueError('synthetic-private-value')
+        result=status.snapshot(True,root=self.root,state=self.state,reader=reader)
+        self.assertFalse(result['live_checked'])
+        self.assertFalse(result['scheduler']['new_admission'])
+        self.assertNotIn('synthetic-private-value',json.dumps(result))
+
+
+    def test_duplicate_runtime_identity_cannot_pass(self):
+        self.runs.append(copy.deepcopy(self.runs[0]))
+        view=self.view()
+        self.assertFalse(view['runtime_known']);self.assertFalse(view['ready_to_merge'])
+        self.assertEqual(view['roles']['reviewer']['state'],'unknown')
+
+    def test_activation_missing_commit_is_not_valid(self):
+        self.write('activation.json',{'verified':True,'task_lanes':1,'source_fingerprint':status.fingerprint(self.root)})
+        self.assertEqual(status.activation_state(self.root,self.state)['state'],'stale')
+
+    def test_manual_infra_pr_is_visible_without_faking_controller_acceptance(self):
+        issue={**self.issue,'metadata':{'pr_number':1,'pr_url':'https://github.com/'+self.policy['repository']+'/pull/1'}}
+        def reader(argv):
+            tail=argv[5:]
+            if tail[:2]==['issue','list']:return {'issues':[issue]}
+            if tail[:2]==['issue','runs']:return self.runs
+            if tail[:2]==['autopilot','list']:return {'autopilots':[{'id':self.config['autopilot'],'project_id':self.config['project'],'status':'paused'}]}
+            raise AssertionError(argv)
+        import github_sync
+        class GH:
+            def __init__(self,*a,**kw):pass
+            def api(other,path):
+                return {'number':1,'title':'PIT-1: infra','head':{'ref':'codex/pit-1-infra','repo':{}},'base':{'repo':{'full_name':self.policy['repository']}}}
+            def snapshot(other,raw):return self.pr
+        with patch.object(status,'read_ledger',return_value=({},0)),patch.object(github_sync,'GitHub',GH):
+            result=status.snapshot(True,root=self.root,state=self.state,reader=reader)
+        self.assertTrue(result['live_checked'],result['errors'])
+        row=result['tasks'][0];self.assertEqual(row['pr'],1);self.assertEqual(row['ci'],'success')
+        self.assertFalse(row['ready_to_merge']);self.assertFalse(row['engineering_done'])
+        self.assertIn('not_controlled_or_phase_unknown',row['blocked_reasons'])
+
+    def test_late_invalid_task_revokes_earlier_ready_display(self):
+        import github_sync
+        second={**self.issue,'identifier':'PIT-2','id':'00000000-0000-0000-0000-000000000004'}
+        def reader(argv):
+            tail=argv[5:]
+            if tail[:2]==['issue','list']:return {'issues':[self.issue,second]}
+            if tail[:2]==['issue','runs']:return self.runs
+            if tail[:2]==['autopilot','list']:return {'autopilots':[{'id':self.config['autopilot'],'project_id':self.config['project'],'status':'paused'}]}
+            raise AssertionError(argv)
+        class GH:
+            def __init__(self,*a,**kw):pass
+            def api(other,path):return {}
+            def snapshot(other,raw):return self.pr
+        lanes={'PIT-1':self.lane,'PIT-2':{'issue':'PIT-2','artifact':[]}}
+        with patch.object(status,'read_ledger',return_value=(lanes,0)),patch.object(github_sync,'GitHub',GH):
+            result=status.snapshot(True,root=self.root,state=self.state,reader=reader)
+        self.assertFalse(result['live_checked'])
+        self.assertFalse(result['tasks'][0]['ready_to_merge'])
+        self.assertEqual(result['tasks'][0]['roles']['qa']['state'],'unknown')
+
+    def test_admission_pause_keeps_handoff_and_maintenance_stops_all(self):
+        import serial
+        from unittest.mock import Mock
+        ctl=serial.Serial.__new__(serial.Serial);ctl.c=self.config;ctl.root=self.state;ctl.policy=self.policy
+        ctl.db=sqlite3.connect(self.state/'ledger.sqlite3');self.addCleanup(ctl.db.close)
+        ctl.refresh=Mock();ctl.require_enabled=Mock();ctl.drain=Mock(return_value=['existing_handoff'])
+        ctl.observation={'observed_at':self.now.isoformat(),'writes':0}
+        result=ctl.tick(True)
+        self.assertEqual(result['transitions'],['existing_handoff'])
+        self.assertEqual(result['dispatch']['started'],[])
+        self.assertEqual(result['dispatch']['held']['admission'],'admission_paused')
+        ctl.drain.assert_called_once_with(True)
+        self.write('control.json',{'mode':'maintenance','source_fingerprint':status.fingerprint(self.root)})
+        ctl.refresh.reset_mock();ctl.drain.reset_mock()
+        self.assertIn('held',ctl.tick(True))
+        ctl.refresh.assert_not_called();ctl.drain.assert_not_called()
 
 
 if __name__ == '__main__':

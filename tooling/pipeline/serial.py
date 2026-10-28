@@ -2,7 +2,6 @@
 """Canonical single-lane polling controller. No automatic merge or deployment."""
 import argparse
 from datetime import datetime, timezone
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -15,6 +14,7 @@ import time
 from controller import Controller, Hold, RUNNING, ACTIVE, digest, git, lock, write_json
 from artifacts import ArtifactError, verify_squash_merge, _path, checkpoint, has_ancestor, materialize, prepare_dependencies, verify_clean_tree
 from github_sync import GitHub, SyncError, all_issues, cli, sync, invalidate
+from status import load_config, fingerprint, activation_state, control_state, FINGERPRINT_FILES, CONTROL_MODES
 
 SOURCE = Path(__file__).resolve().parents[2]
 
@@ -23,17 +23,8 @@ def canonical(root=SOURCE):
     return Path(git(root, 'rev-parse', '--path-format=absolute', '--git-common-dir')).parent
 
 
-def fingerprint(root):
-    digestor = hashlib.sha256()
-    for name in ('serial.py', 'controller.py', 'acceptance.py', 'artifacts.py', 'github_sync.py', 'runtime.json', 'policy.json'):
-        digestor.update(name.encode() + b'\0' + (Path(root) / 'tooling/pipeline' / name).read_bytes())
-    return digestor.hexdigest()
-
-
 def configured(root):
-    value = json.loads((root / 'tooling/pipeline/runtime.json').read_text())
-    value['repository'] = str(root)
-    return value
+    return load_config(root)[1]
 
 
 def runtime_identity(run):
@@ -61,12 +52,10 @@ class Serial(Controller):
         return all_issues(self.call, self.c['project'])
 
     def require_enabled(self):
-        path = self.root / 'activation.json'
-        if not path.exists():
-            raise Hold('Runtime not activated; sync alone is allowed')
-        value = json.loads(path.read_text())
-        if value.get('source_fingerprint') != fingerprint(self.c['repository']) or value.get('task_lanes') != 1 or value.get('verified') is not True:
-            raise Hold('Activation stale or unverified; no scheduling')
+        if activation_state(self.c['repository'], self.root)['state'] != 'valid':
+            raise Hold('Activation missing, stale or unverified; no scheduling')
+        if control_state(self.c['repository'], self.root, self.policy)['mode'] == 'maintenance':
+            raise Hold('Maintenance pause; no controlled transition')
 
     def require_fresh(self):
         if not self.observation or time.monotonic()>=self.observation.get('deadline_monotonic',0):
@@ -608,6 +597,9 @@ class Serial(Controller):
         return active
 
     def dispatch(self, apply=False):
+        control = control_state(self.c['repository'], self.root, self.policy)
+        if control['mode'] != 'open':
+            return {'active': [], 'started': [], 'held': {'admission': control['mode']}}
         active=[x['issue'] for x in self.lanes().values() if x['phase'] not in ('done','held')]
         if active:return {'active':active,'started':[],'held':{'single_lane':'Existing artifact owns the lane through merge'}}
         self.require_fresh()
@@ -618,6 +610,9 @@ class Serial(Controller):
         return super().dispatch(apply)
 
     def tick(self, apply=False):
+        control = control_state(self.c['repository'], self.root, self.policy)
+        if control['mode'] == 'maintenance':
+            return {'held': 'Maintenance pause; no synchronization, transition or dispatch'}
         self.refresh(apply)
         if self.db.execute("SELECT 1 FROM operations WHERE state='uncertain'").fetchone():raise Hold('Uncertain write requires explicit reconciliation')
         if apply:self.require_enabled()
@@ -646,7 +641,7 @@ def activate(root, config, state, github, call, receipt_path):
             if not has_ancestor(root,merged,head):raise Hold('Reviewed squash integration is absent from main')
             verify_squash_merge(root,sha,merged,receipt.get('reviewed_integration_base',''))
             if github.ci(merged,'push')['state']!='success':raise Hold('Reviewed squash integration CI must pass')
-        for name in ('serial.py','controller.py','artifacts.py','acceptance.py','github_sync.py','runtime.json','policy.json'):
+        for name in FINGERPRINT_FILES:
             actual=(root/'tooling/pipeline'/name).read_bytes()
             approved=subprocess.check_output(['git','-C',str(root),'show',sha+':tooling/pipeline/'+name])
             if approved!=actual:raise Hold('Controller changed after independent review')
@@ -670,6 +665,7 @@ def main():
     q=sub.add_parser('tick');q.add_argument('--apply',action='store_true')
     q=sub.add_parser('inspect-recovery');q.add_argument('issue')
     q=sub.add_parser('confirm-recovery');q.add_argument('issue');q.add_argument('--run',required=True)
+    q=sub.add_parser('control');q.add_argument('--mode',choices=sorted(CONTROL_MODES),required=True)
     q=sub.add_parser('activate');q.add_argument('--receipt',type=Path,required=True)
     q=sub.add_parser('approve-merge');q.add_argument('issue');q.add_argument('--approved-head',required=True)
     q=sub.add_parser('retry-qa');q.add_argument('issue');q.add_argument('--head',required=True);q.add_argument('--reason',required=True)
@@ -680,11 +676,13 @@ def main():
         if name in ('checkout','stage','return'):q.add_argument('--role',choices=['developer','reviewer','qa'],required=True)
         if name in ('plan','stage','return'):q.add_argument('--report',type=Path,required=True)
         if name=='return':q.add_argument('--rework',action='store_true')
-    args=p.parse_args();root=canonical()
+    args=p.parse_args()
+    if args.command=='control' and os.environ.get('MULTICA_TASK_ID'):raise Hold('Control is operator-only')
+    root=canonical()
     if SOURCE!=root:raise Hold('Execute the integrated canonical controller, never a task copy')
-    config=configured(root);policy=json.loads((root/'tooling/pipeline/policy.json').read_text());state=root/'.state/pipeline'
+    policy,config=load_config(root);state=root/'.state/pipeline'
     def call(a):return cli(['multica','--profile',config['profile'],'--workspace-id',config['workspace'],*a])
-    name='controller' if args.command in ('tick','activate','approve-merge','retry-qa','recover-developer','inspect-recovery','confirm-recovery') else 'issue-'+args.issue
+    name='controller' if args.command in ('tick','activate','control','approve-merge','retry-qa','recover-developer','inspect-recovery','confirm-recovery') else 'issue-'+args.issue
     if '/' in name or '..' in name:raise Hold('Invalid issue identity')
     if args.command=='inspect-recovery':
         c=Serial.__new__(Serial);c.c=config;c.call=call;c.root=state;c.github=GitHub(policy['repository'])
@@ -696,9 +694,13 @@ def main():
     with lock(state,name=name,wait=45):
         c=Serial(config,call,state,GitHub(policy['repository']),policy)
         try:
-            if args.command=='inspect-recovery':result=c.inspect_recovery(args.issue)
-            elif args.command=='confirm-recovery':
+            if args.command=='confirm-recovery':
                 c.require_enabled();result=c.confirm_recovery(args.issue,args.run)
+            elif args.command=='control':
+                if args.mode != 'maintenance' and activation_state(root,state)['state'] != 'valid':
+                    raise Hold('Verified activation required before lifting maintenance')
+                result={'mode':args.mode,'source_fingerprint':fingerprint(root)}
+                write_json(state/'control.json',result)
             elif args.command=='activate':result=activate(root,config,state,c.github,call,args.receipt)
             elif args.command=='tick':result=c.tick(args.apply)
             elif args.command=='recover-developer':
