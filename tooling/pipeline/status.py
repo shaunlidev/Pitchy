@@ -169,10 +169,12 @@ def read_ledger(state):
 def role_result(lane, role, config, head):
     record = lane.get('receipts', {}).get(role, {})
     artifact = lane.get('artifact', {})
-    valid = bool(head and record.get('commit') == head and record.get('tree') == artifact.get('tree')
+    valid = bool(head and record.get('issue') == lane.get('issue') and artifact.get('issue') == lane.get('issue')
+                 and type(lane.get('generation')) is int and lane['generation'] > 0
+                 and record.get('commit') == head and record.get('tree') == artifact.get('tree')
                  and sha(artifact.get('tree')) and record.get('generation') == lane.get('generation')
                  and record.get('contract_sha256') and record.get('contract_sha256') == artifact.get('contract_sha256')
-                 and record.get('description_sha256') == artifact.get('description_sha256')
+                 and record.get('description_sha256') == artifact.get('description_sha256') == lane.get('description_sha256')
                  and record.get('actor_id') == config[role] and record.get('role') == role
                  and identity(record.get('run_id')) and record.get('dirty') is False)
     passed = (valid and record.get('outcome') == 'pass'
@@ -192,7 +194,8 @@ def task_view(key, lane, issue, runs, pr, config, fresh):
     tracker = issue.get('status') if issue.get('status') in TRACKER else None
     gaps = []
     valid_runs = isinstance(runs, list) and all(isinstance(r, dict) and identity(r.get('id'))
-        and identity(r.get('agent_id')) and r.get('status') in RUNNING | TERMINAL for r in runs)
+        and identity(r.get('agent_id')) and identity(issue.get('id')) and r.get('issue_id') == issue.get('id')
+        and r.get('status') in RUNNING | TERMINAL for r in runs)
     valid_runs = valid_runs and len({r['id'] for r in runs}) == len(runs)
     active = [{k: r.get(k) for k in ('id', 'agent_id', 'status')} for r in runs if r['status'] in RUNNING] if valid_runs else []
     if not fresh: gaps.append('live_observation_unavailable_or_stale')
@@ -200,6 +203,19 @@ def task_view(key, lane, issue, runs, pr, config, fresh):
     if tracker in {'todo', 'in_progress', 'started_2', 'started_3'} and valid_runs and not active:
         gaps.append('tracker_active_without_runtime')
     if phase is None: gaps.append('not_controlled_or_phase_unknown')
+    if lane:
+        if lane.get('id') != issue.get('id') or lane.get('issue') != key or issue.get('identifier') != key:
+            gaps.append('task_identity_mismatch')
+        description = issue.get('description')
+        if not isinstance(description, str) or hashlib.sha256(description.encode()).hexdigest() != lane.get('description_sha256'):
+            gaps.append('contract_description_changed_or_unknown')
+    if tracker is None: gaps.append('tracker_unknown')
+    if tracker == 'blocked': gaps.append('tracker_hold')
+    if tracker == 'cancelled': gaps.append('tracker_cancelled')
+    if phase == 'awaiting_merge' and tracker not in {'in_review', 'blocked', 'cancelled', None}:
+        gaps.append('tracker_phase_mismatch')
+    if active and phase in {'awaiting_merge', 'done'}: gaps.append('runtime_phase_conflict')
+    if pr and pr.get('base') != 'main': gaps.append('pr_base_mismatch')
     if not head: gaps.append('head_unknown')
     if current_head and recorded_head and current_head != recorded_head: gaps.append('head_changed')
     ci = pr.get('ci', {}) if pr else {}
@@ -217,11 +233,10 @@ def task_view(key, lane, issue, runs, pr, config, fresh):
                 and integration.get('method') == 'squash' and sha(integration.get('parent'))
                 and integration.get('tree') == artifact.get('tree') and pr.get('state') == 'MERGED'
                 and ci_state == 'success' and integration_ci == 'success' and all(r['state'] == 'pass' for r in roles.values()) and not gaps)
-    ready = bool(not gaps and phase == 'awaiting_merge' and pr and pr.get('state') in {'OPEN', 'DRAFT'}
+    ready = bool(not gaps and tracker == 'in_review' and phase == 'awaiting_merge' and pr and pr.get('state') in {'OPEN', 'DRAFT'}
                  and ci_state == 'success' and all(r['state'] == 'pass' for r in roles.values()))
     if pr and pr.get('state') == 'MERGED' and not done: gaps.append('integration_not_verified')
     if phase == 'held': gaps.append('controller_hold')
-    if tracker == 'blocked': gaps.append('tracker_hold')
     if ci_state != 'success': gaps.append('ci_' + ci_state)
     human = True if ready or phase == 'held' or tracker == 'blocked' else None if gaps else False
     action = ('engineering_complete' if done else 'request_exact_head_merge_approval' if ready else

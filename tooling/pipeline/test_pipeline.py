@@ -68,19 +68,21 @@ class OperationalStatus(unittest.TestCase):
         self.state.mkdir()
         self.now = datetime.now(timezone.utc)
         self.head, self.tree, self.merge = 'a' * 40, 'b' * 40, 'c' * 40
-        self.lane = {'issue':'PIT-1', 'phase':'awaiting_merge', 'generation':1,
+        description=hashlib.sha256(b'Original acceptance').hexdigest()
+        self.lane = {'issue':'PIT-1', 'id':'00000000-0000-0000-0000-000000000003',
+                     'description_sha256':description, 'phase':'awaiting_merge', 'generation':1,
                      'branch':'codex/pit-1-test', 'pr_number':1,
-                     'artifact': {'commit':self.head, 'tree':self.tree, 'contract_sha256':'contract', 'description_sha256':'description'},
+                     'artifact': {'issue':'PIT-1','commit':self.head, 'tree':self.tree, 'contract_sha256':'contract', 'description_sha256':description},
                      'receipts':{}}
         self.runs = []
         for n, role in enumerate(('reviewer','qa'), 1):
             run = f'00000000-0000-0000-0000-{n:012d}'
-            self.lane['receipts'][role] = {'role':role, 'actor_id':self.config[role], 'run_id':run,
+            self.lane['receipts'][role] = {'issue':'PIT-1','role':role, 'actor_id':self.config[role], 'run_id':run,
                 'generation':1, 'commit':self.head, 'tree':self.tree, 'contract_sha256':'contract',
-                'description_sha256':'description', 'outcome':'pass', 'dirty':False, 'complete_contract_review':True}
-            self.runs.append({'id':run,'agent_id':self.config[role],'status':'completed'})
+                'description_sha256':description, 'outcome':'pass', 'dirty':False, 'complete_contract_review':True}
+            self.runs.append({'id':run,'issue_id':self.lane['id'],'agent_id':self.config[role],'status':'completed'})
         self.issue = {'id':'00000000-0000-0000-0000-000000000003', 'identifier':'PIT-1',
-                      'project_id':self.config['project'], 'status':'in_review', 'assignee_id':self.config['owner']}
+                      'project_id':self.config['project'], 'description':'Original acceptance', 'status':'in_review', 'assignee_id':self.config['owner']}
         self.pr = {'number':1, 'head':self.head, 'state':'DRAFT', 'base':'main',
                    'ci':{'state':'success','sha':self.head,'run_id':1}}
         self.write('activation.json', {'source_fingerprint':status.fingerprint(self.root), 'task_lanes':1,
@@ -239,6 +241,38 @@ class OperationalStatus(unittest.TestCase):
         self.assertFalse(result['scheduler']['new_admission'])
         self.assertNotIn('synthetic-private-value',json.dumps(result))
 
+
+    def test_ready_requires_live_in_review_tracker_before_verdict(self):
+        self.assertTrue(self.view()['ready_to_merge'])
+        for tracker in ('blocked','cancelled','unrecognized_status',None,'backlog','todo','in_progress','done','started_2','started_3'):
+            with self.subTest(tracker=tracker):
+                issue={**self.issue,'status':tracker}
+                if tracker is None:issue.pop('status')
+                result=self.view(issue=issue)
+                self.assertFalse(result['ready_to_merge'])
+                self.assertFalse(result['engineering_done'])
+                self.assertTrue(result['blocked_reasons'])
+                self.assertEqual(result['next_action'],'inspect_hold')
+
+    def test_foreign_receipt_run_and_changed_contract_never_show_ready(self):
+        lane=copy.deepcopy(self.lane);lane['receipts']['qa']['issue']='PIT-99'
+        self.assertFalse(self.view(lane=lane)['ready_to_merge'])
+        lane=copy.deepcopy(self.lane);lane['artifact']['issue']='PIT-99'
+        self.assertFalse(self.view(lane=lane)['ready_to_merge'])
+        runs=copy.deepcopy(self.runs);runs[0]['issue_id']='00000000-0000-0000-0000-000000000099'
+        self.assertFalse(self.view(runs=runs)['ready_to_merge'])
+        for field,value in [('description','Changed acceptance'),('description',None),('id','00000000-0000-0000-0000-000000000099')]:
+            with self.subTest(field=field,value=value):
+                result=self.view(issue={**self.issue,field:value})
+                self.assertFalse(result['ready_to_merge']);self.assertTrue(result['blocked_reasons'])
+
+    def test_active_extra_run_and_non_main_pr_hold_completed_receipts(self):
+        runs=copy.deepcopy(self.runs)+[{'id':'00000000-0000-0000-0000-000000000008',
+            'issue_id':self.issue['id'],'agent_id':self.config['qa'],'status':'running'}]
+        self.assertIn('runtime_phase_conflict',self.view(runs=runs)['blocked_reasons'])
+        self.assertFalse(self.view(runs=runs)['ready_to_merge'])
+        result=self.view(pr={**self.pr,'base':'other'})
+        self.assertFalse(result['ready_to_merge']);self.assertIn('pr_base_mismatch',result['blocked_reasons'])
 
     def test_duplicate_runtime_identity_cannot_pass(self):
         self.runs.append(copy.deepcopy(self.runs[0]))
