@@ -151,7 +151,7 @@ it("advances actual isolated product HTTP only to Understanding review and prese
 }, 30000);
 
 const humanViewSchema = z.object({ kind: z.literal("awaiting_human"), step: z.string(), checkpointHash: z.string(), capability: z.string(), workspace: workspaceStateSchema, choices: z.array(z.object({ key: z.string() })) });
-function advanceProcess(referenceFile: string, crash?: { sessionRoot: string; kind: string }, args = ["advance", "--run", referenceFile]) {
+function advanceProcess(referenceFile: string, crash?: { sessionRoot: string; kind: string; pause?: boolean }, args = ["advance", "--run", referenceFile], delayMs = 0) {
   const cli = fileURLToPath(new URL("./cli.ts", import.meta.url));
   const injected = crash ? `import fs from 'node:fs'; import {syncBuiltinESMExports} from 'node:module';
     const root=${JSON.stringify(crash.sessionRoot)}, handle=${JSON.stringify(dirname(referenceFile))}, kind=${JSON.stringify(crash.kind)};
@@ -163,17 +163,24 @@ function advanceProcess(referenceFile: string, crash?: { sessionRoot: string; ki
         const anchor=JSON.parse(fs.readFileSync(handle+'/'+anchors.at(-1),'utf8'));
         const event=JSON.parse(fs.readFileSync(root+'/events/'+events.at(-1),'utf8'));
         const found=fs.readdirSync(root+'/observations').some(n=>JSON.parse(fs.readFileSync(root+'/observations/'+n,'utf8')).data?.kind===kind);
-        if(found && anchor.sequence===event.sequence) process.kill(process.pid,'SIGKILL');
+        if(found && anchor.sequence===event.sequence) {
+          if(${JSON.stringify(crash.pause ?? false)}) { process.send({kind:'claim_paused'}); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0); }
+          else process.kill(process.pid,'SIGKILL');
+        }
       } return result;
     }; syncBuiltinESMExports();
     const {runTaskAcceptanceCLI}=await import(${JSON.stringify(new URL("./cli.ts", import.meta.url).href)});
+    process.exitCode=await runTaskAcceptanceCLI(${JSON.stringify(args)});` : delayMs ? `
+    await new Promise(resolve=>setTimeout(resolve,${JSON.stringify(delayMs)}));
+    const {runTaskAcceptanceCLI}=await import(${JSON.stringify(new URL("./cli.ts", import.meta.url).href)});
     process.exitCode=await runTaskAcceptanceCLI(${JSON.stringify(args)});` : null;
-  const child = spawn(process.execPath, ["--import", import.meta.resolve("tsx"), ...(injected ? ["--input-type=module", "--eval", injected] : [cli, ...args])], { stdio: ["ignore", "pipe", "pipe"] });
+  const child = spawn(process.execPath, ["--import", import.meta.resolve("tsx"), ...(injected ? ["--input-type=module", "--eval", injected] : [cli, ...args])], { stdio: crash?.pause ? ["ignore", "pipe", "pipe", "ipc"] : ["ignore", "pipe", "pipe"] });
+  if (!child.stdout || !child.stderr) { child.kill("SIGKILL"); throw new Error("CLI output pipes missing"); }
   let stdout = "", stderr = "";
   child.stdout.on("data", chunk => { stdout += chunk.toString(); });
   child.stderr.on("data", chunk => { stderr += chunk.toString(); });
-  const result = new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve, reject) => {
-    child.once("error", reject); child.once("exit", code => resolve({ code, stdout, stderr }));
+  const result = new Promise<{ code: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string }>((resolve, reject) => {
+    child.once("error", reject); child.once("exit", (code, signal) => resolve({ code, signal, stdout, stderr }));
   });
   return { child, result };
 }
@@ -188,24 +195,48 @@ it.each(["workflow_operation", "workspace_command_outcome"])("resumes a killed C
   const ids = z.array(z.object({ commandId: z.string() })).parse(f.commands).map(item => item.commandId);
   expect(new Set(ids).size).toBe(7);
 }, 30000);
-it("holds a concurrent CLI and never repeats a POST whose response was lost by process death", async () => {
+it.each([0, 1500])("holds a concurrent CLI with a live claimed owner despite %sms competitor delay", async delayMs => {
+  const f = await httpFixture(), run = prepare(f.input);
+  const first = advanceProcess(run.referenceFile, { sessionRoot: f.sessionRoot, kind: "workflow_operation", pause: true });
+  let deadline: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      new Promise<void>(resolve => first.child.once("message", message => { expect(message).toEqual({ kind: "claim_paused" }); resolve(); })),
+      first.result.then(result => { throw new Error(`CLI exited before claim handshake: ${result.stdout} ${result.stderr}`); }),
+      new Promise<never>((_, reject) => { deadline = setTimeout(() => reject(new Error("Claim handshake timeout")), 8000); }),
+    ]);
+    clearTimeout(deadline);
+    expect(f.commands).toHaveLength(0);
+    const concurrent = await advanceProcess(run.referenceFile, undefined, undefined, delayMs).result;
+    expect(concurrent.code).toBe(2);
+    expect(JSON.parse(concurrent.stdout).result).toMatchObject({ kind: "held", reason: "WORKFLOW_OWNER_LIVE" });
+    expect(f.commands).toHaveLength(0);
+    expect(() => process.kill(first.child.pid!, 0)).not.toThrow();
+  } finally { clearTimeout(deadline); first.child.kill("SIGKILL"); await first.result; }
+}, 20000);
+
+it("never repeats a POST whose response was lost by process death", async () => {
+  let first: ReturnType<typeof advanceProcess> | undefined;
   let signalPost: () => void = () => {}, releasePost: () => void = () => {};
   const posted = new Promise<void>(resolve => { signalPost = resolve; });
   const release = new Promise<void>(resolve => { releasePost = resolve; });
-  const f = await httpFixture(false, async () => { signalPost(); await release; });
-  const run = prepare(f.input), first = advanceProcess(run.referenceFile);
+  const f = await httpFixture(false, async () => {
+    first!.child.kill("SIGKILL"); signalPost(); await release;
+  });
+  const run = prepare(f.input); first = advanceProcess(run.referenceFile);
+  let deadline: ReturnType<typeof setTimeout> | undefined;
   try {
-    await Promise.race([posted, first.result.then(result => { throw new Error(`CLI exited before POST: ${result.stdout} ${result.stderr}`); }), new Promise<never>((_, reject) => setTimeout(() => reject(new Error("POST timeout")), 8000))]);
-    const concurrent = await advanceProcess(run.referenceFile).result;
-    expect(concurrent.code).toBe(2); expect(JSON.parse(concurrent.stdout).result).toMatchObject({ kind: "held", reason: "WORKFLOW_OWNER_LIVE" });
-    expect(f.commands).toHaveLength(1);
-    first.child.kill("SIGKILL"); await first.result; releasePost();
+    await Promise.race([posted, first.result.then(result => { throw new Error(`CLI exited before POST: ${result.stdout} ${result.stderr}`); }), new Promise<never>((_, reject) => { deadline = setTimeout(() => reject(new Error("POST timeout")), 8000); })]);
+    clearTimeout(deadline);
+    const killed = await first.result;
+    expect(killed.code).toBeNull(); expect(killed.signal).toBe("SIGKILL");
+    expect(f.commands).toHaveLength(1); releasePost();
     const restarted = await advanceProcess(run.referenceFile).result;
     expect(restarted.code).toBe(2); expect(JSON.parse(restarted.stdout).result).toMatchObject({ kind: "held", reason: "WORKFLOW_OUTCOME_UNKNOWN" });
     expect(f.commands).toHaveLength(1);
     expect(await advance(run)).toMatchObject({ kind: "held", reason: "WORKFLOW_OUTCOME_UNKNOWN" });
     expect(audit(run)).toMatchObject({ execution: "held", semantic: "not_evaluated", userTask: "not_observed" });
-  } finally { releasePost(); first.child.kill("SIGKILL"); await first.result; }
+  } finally { clearTimeout(deadline); releasePost(); first.child.kill("SIGKILL"); await first.result; }
 }, 20000);
 function decision(view: z.infer<typeof humanViewSchema>, response: unknown) {
   return { decisionId: randomUUID(), actor: "Synthetic harness operator, not a real R1 participant", at: new Date().toISOString(), checkpointHash: view.checkpointHash, capability: view.capability, assistance: { kind: "none" }, response };
