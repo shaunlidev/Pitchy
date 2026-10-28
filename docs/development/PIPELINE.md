@@ -92,3 +92,62 @@ Role submissions now retain explicitly declared evidence before either a passing
 Before using the changed controller, the operator performs fresh global evidence accounting over the v6 manifest roots and every later workspace evidence root, preserving high-water reservations for removed/shrunk evidence. Allocate a bounded part of the remaining **320,000,000-byte total cap** in local `.state/pipeline/evidence-budget.json`: `cap_bytes`, `accounted_bytes`, `allocation_bytes`, and `accounting_sha256` (SHA256 of that local accounting receipt). The allocation is reserved from global remaining capacity immediately; it does not reset that capacity. Retention, frozen logs and handoffs debit `.state/pipeline/evidence-reservations.json` under an independent storage lock, before writes. Reservations never refund on deletion or partial failure; changing a grant with an existing reservation ledger holds. Include the reservation ledger and remaining allocation in subsequent global accounting. Other local evidence producers must continue to honor the same global accounting; this is not an OS disk quota. Allocation authorizes only the already-scoped small local engineering evidence, not recording, installation, models or raw upload.
 
 Activation stays invalid after these source changes until independent Reviewer/QA, exact-head CI, separately approved Squash integration and main CI pass. The completed stage-6 pilot remains paused. No new business task, parallel schedule, model or deployment is enabled by this repair.
+
+### Manual delivery receipts (operator only)
+
+Manual issues have no automatic lane. Do not insert a lane, invent native runtime
+receipts, change status to simulate QA, or weaken `approve-merge`. After this
+entry is reviewed and integrated, the human operator may use:
+
+```
+python3 tooling/pipeline/serial.py approve-manual-merge PIT-N --approved-head FULL_SHA --manifest /absolute/local/manifest.json
+python3 tooling/pipeline/serial.py verify-manual-merge PIT-N --approved-head FULL_SHA --manifest /absolute/local/manifest.json
+```
+
+Only the integrated canonical checkout executes these commands. They share the
+controller lock and read its ledger without writes. Any existing issue lane or
+uncertain operation holds. They neither merge, mark PRs Ready, push, dispatch,
+change Multica status, nor activate the scheduler. Automatic `approve-merge`
+keeps its existing lane and runtime requirements. These operator commands do
+not require automatic scheduling activation. `operator_merge.py` participates
+in the activation fingerprint: integration invalidates the old activation;
+reactivation remains a separately approved operation, never an automatic step.
+
+The local JSON manifest must have schema_version 1, kind `manual_delivery`,
+repository, issue, head, pr_number, description_sha256 (exact current Multica
+UTF-8 description hash), complete_contract true, approval_reference (the direct
+human exact-head approval reference), a nonempty unique list of required
+criterion strings, and reports with exactly developer/reviewer/qa entries.
+Each entry contains a relative contained path and sha256. Each report must bind
+the same issue/head/description_sha256, role, distinct actor, verdict `pass`,
+complete_contract_review true, criterion_results mapping every manifest
+criterion to `pass`, empty failures/not_run/decisions arrays, and nonempty
+checks containing command and integer exit_code 0. Report paths and receipt
+paths reject symlink ancestors; each JSON file is capped at 1 MB.
+
+The operator is the trust boundary for identity, approval authenticity and the
+completeness of the acceptance inventory. Hashes bind bytes; they do not prove
+that a person reviewed them. Inspect the complete original criteria and actual
+reports before invoking. Never manufacture passing reports from partial or
+older evidence; this strict version requires full same-head reports. A missing
+complete report holds even when incremental tests and PR CI are green. Keep
+scope exclusions distinct from required not_run checks. Raw evidence stays local.
+
+Before recording, manually mark the reviewed PR Ready and fetch required Git
+objects using the normal approved read path. The command requires the issue's
+manual metadata and pr_number binding, exact repository/head/main target,
+Ready/open state, current-head `pr-ci.yml` CI and live-main push CI. It computes
+the expected tree using merge-tree without changing any checkout, then rereads
+PR/main, issue description and evidence within a 120-second observation window.
+A conflict, unavailable objects, changed binding or CI failure holds.
+
+Intent is atomically created under `.state/pipeline/manual-merges/PIT-N-HEAD.json`
+with exact base/head, CI run identities, expected tree, evidence hashes, approval
+reference and squash method. Identical invocation is idempotent; a different
+base, CI run or evidence holds for explicit reconciliation. Never edit or delete
+an existing intent to make it match. A pending temporary file is not a receipt.
+After recording, use the already human-approved squash command with
+`--match-head-commit`. Verification requires a merged PR, live main equal to
+that merge, exactly one parent equal to the captured base, exact expected tree,
+and successful merge-commit push CI. It prints verification evidence only;
+human-authorized acceptance and downstream work remain separate actions.
