@@ -171,7 +171,7 @@ class OperationalStatus(unittest.TestCase):
 
     def test_fingerprint_includes_status_validation_and_policy(self):
         self.assertEqual(status.activation_state(self.root,self.state)['state'], 'valid')
-        for name in ('status.py','policy.json'):
+        for name in ('status.py','policy.json','operator_merge.py'):
             path = self.root/'tooling/pipeline'/name
             original = path.read_bytes(); path.write_bytes(original+b' ')
             self.assertEqual(status.activation_state(self.root,self.state)['state'], 'stale')

@@ -13,7 +13,7 @@ import time
 ROOT = Path(__file__).resolve().parents[2]
 CONTROL_MODES = {'open', 'admission_paused', 'maintenance'}
 FINGERPRINT_FILES = ('serial.py', 'controller.py', 'acceptance.py', 'artifacts.py',
-                     'github_sync.py', 'status.py', 'runtime.json', 'policy.json')
+                     'github_sync.py', 'status.py', 'runtime.json', 'policy.json', 'operator_merge.py')
 PHASES = {'developer', 'reviewer', 'qa', 'supplemental', 'awaiting_role_exit', 'awaiting_merge', 'done', 'held'}
 RUNNING = {'queued', 'dispatched', 'running', 'waiting_local_directory', 'deferred'}
 TERMINAL = {'completed', 'failed', 'cancelled'}
