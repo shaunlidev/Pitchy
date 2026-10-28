@@ -111,7 +111,9 @@ performs the assignment/status handoff. Uncertain writes are never replayed.
 
 The supplemental role gets an immutable local bundle containing the exact
 base/head/tree, original requirements, frozen contract, diff, developer receipt,
-and hashes/paths of existing controller check receipts and stdout/stderr. It
+and hashes/paths of existing controller check receipts and stdout/stderr.
+The developer's durable manifest and every declared retained evidence file are
+validated and included in the bundle fingerprint; a path alone is not proof. It
 executes no task check and cannot submit formal Reviewer/QA receipts. Findings
 are advisory: they do not request automatic rework, approve any criterion or
 replace full independent review. The formal Reviewer receives the advisory report

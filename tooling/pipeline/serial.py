@@ -78,6 +78,14 @@ class Serial(Controller):
         run = lane['receipts']['developer']['run_id']
         if not re.fullmatch(r'[A-Za-z0-9_-]{1,128}', run):
             raise Hold('Invalid developer evidence run')
+        retained_path = lane['receipts']['developer'].get('retained_evidence')
+        if not retained_path:
+            raise Hold('Developer retained evidence manifest missing')
+        retained = Path(retained_path)
+        binding = {'issue':lane['issue'], 'generation':lane['generation'], 'role':'developer',
+                   'actor_id':self.role_actor(lane,'developer'), 'run_id':run, 'commit':artifact['commit'],
+                   'contract_sha256':artifact['contract_sha256'], 'description_sha256':artifact['description_sha256']}
+        declared = self.verify_role_evidence(retained.parent, binding)
         root = self.root / 'evidence' / lane['issue'] / str(lane['generation']) / 'developer' / run
         files = {}
         for check in lane['contract']['checks']:
@@ -92,7 +100,8 @@ class Serial(Controller):
                 'description_sha256': artifact['description_sha256'], 'contract_sha256': artifact['contract_sha256'],
                 'requirements': lane['description'], 'contract': lane['contract'],
                 'diff': git(repo, 'diff', '--no-ext-diff', '--no-textconv', base, artifact['commit'], '--'),
-                'developer_receipt': lane['receipts']['developer'], 'evidence': files}
+                'developer_receipt': lane['receipts']['developer'], 'evidence': files,
+                'declared_developer_evidence': {'root':str(retained.parent), 'manifest':declared}}
 
     def supplemental_source(self):
         # A tracked-source guard, not an OS sandbox. Runtime-created local report

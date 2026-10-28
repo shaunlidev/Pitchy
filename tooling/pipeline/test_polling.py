@@ -292,6 +292,10 @@ class OptionalRoles(unittest.TestCase):
         root = self.c.root/'evidence/PIT-1/1/developer/dev-run'
         for name, value in {'checks/normal.json':'{"assertion_passed":true}', 'logs/normal.stdout':'{"passed":true}', 'logs/normal.stderr':''}.items():
             path=root/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_text(value)
+        local = self.f.repo/'.pipeline-local';local.mkdir(exist_ok=True)
+        extra = local/'extra-evidence.txt';extra.write_text('original observation')
+        report = local/'developer.json';report.write_text(json.dumps({'evidence_files':['.pipeline-local/extra-evidence.txt']}))
+        lane['receipts']['developer']['retained_evidence'] = self.c.retain_role_evidence(lane,'developer',report,self.f.repo,'kimi-dev','dev-run')
         self.c.save(lane)
         self.row.update(status='started_2',assignee_id='kimi-review')
         self.f.fake.runs['id-1']=[{'id':'supp-run','issue_id':'id-1','agent_id':'kimi-review','status':'running','work_dir':str(self.f.repo)}]
@@ -431,6 +435,24 @@ class OptionalRoles(unittest.TestCase):
             self.assertNotIn('supplemental_receipt',self.c.lanes()['PIT-1'])
             path=Path(next(iter(bundle['inputs']['evidence'].values()))['path']);path.write_text('changed')
             with self.assertRaisesRegex(controller.Hold,'stale'):self.c.supplemental_submit('PIT-1',self.report(bundle))
+
+    def test_declared_developer_evidence_is_bound_and_revalidated(self):
+        lane=self.prepared()
+        with self.runtime(),self.in_repo():
+            bundle=self.c.supplemental_bundle('PIT-1')
+            declared=bundle['inputs']['declared_developer_evidence']
+            self.assertTrue(any(x['path'].endswith('extra-evidence.txt') for x in declared['manifest']['files']))
+            retained=Path(declared['root'])/'files/.pipeline-local/extra-evidence.txt'
+            retained.write_text('altered observation')
+            with self.assertRaisesRegex(controller.Hold,'evidence incomplete or invalid'):
+                self.c.supplemental_submit('PIT-1',self.report(bundle))
+            self.assertNotIn('supplemental_receipt',self.c.lanes()['PIT-1'])
+            with self.assertRaises(controller.Hold):self.c.supplemental_bundle('PIT-1')
+
+    def test_missing_developer_manifest_refuses_bundle(self):
+        lane=self.prepared();lane['receipts']['developer'].pop('retained_evidence');self.c.save(lane)
+        with self.runtime(),self.in_repo():
+            with self.assertRaisesRegex(controller.Hold,'manifest missing'):self.c.supplemental_bundle('PIT-1')
 
     def test_read_only_review_rejects_tracked_source_edits(self):
         self.prepared()
