@@ -27,7 +27,7 @@ def canonical(root=SOURCE):
 
 def fingerprint(root):
     digestor = hashlib.sha256()
-    for name in ('serial.py', 'controller.py', 'acceptance.py', 'artifacts.py', 'github_sync.py', 'runtime.json', 'policy.json'):
+    for name in ('serial.py', 'controller.py', 'acceptance.py', 'artifacts.py', 'github_sync.py', 'runtime.json', 'policy.json', 'operator_merge.py'):
         digestor.update(name.encode() + b'\0' + (Path(root) / 'tooling/pipeline' / name).read_bytes())
     return digestor.hexdigest()
 
@@ -787,7 +787,7 @@ def activate(root, config, state, github, call, receipt_path):
             if not has_ancestor(root,merged,head):raise Hold('Reviewed squash integration is absent from main')
             verify_squash_merge(root,sha,merged,receipt.get('reviewed_integration_base',''))
             if github.ci(merged,'push')['state']!='success':raise Hold('Reviewed squash integration CI must pass')
-        for name in ('serial.py','controller.py','artifacts.py','acceptance.py','github_sync.py','runtime.json','policy.json'):
+        for name in ('serial.py','controller.py','artifacts.py','acceptance.py','github_sync.py','runtime.json','policy.json', 'operator_merge.py'):
             actual=(root/'tooling/pipeline'/name).read_bytes()
             approved=subprocess.check_output(['git','-C',str(root),'show',sha+':tooling/pipeline/'+name])
             if approved!=actual:raise Hold('Controller changed after independent review')
@@ -813,6 +813,8 @@ def main():
     q=sub.add_parser('confirm-recovery');q.add_argument('issue');q.add_argument('--run',required=True)
     q=sub.add_parser('activate');q.add_argument('--receipt',type=Path,required=True)
     q=sub.add_parser('approve-merge');q.add_argument('issue');q.add_argument('--approved-head',required=True)
+    for name in ('approve-manual-merge','verify-manual-merge'):
+        q=sub.add_parser(name);q.add_argument('issue');q.add_argument('--approved-head',required=True);q.add_argument('--manifest',type=Path,required=True)
     q=sub.add_parser('retry-qa');q.add_argument('issue');q.add_argument('--head',required=True);q.add_argument('--reason',required=True)
     q=sub.add_parser('recover-developer');q.add_argument('issue');q.add_argument('--generation',type=int,required=True)
     for field in ('head','main','run','source','reason'):q.add_argument('--'+field,required=True)
@@ -828,6 +830,12 @@ def main():
     if SOURCE!=root:raise Hold('Execute the integrated canonical controller, never a task copy')
     config=configured(root);policy=json.loads((root/'tooling/pipeline/policy.json').read_text());state=root/'.state/pipeline'
     def call(a):return cli(['multica','--profile',config['profile'],'--workspace-id',config['workspace'],*a])
+    if args.command in ('approve-manual-merge','verify-manual-merge'):
+        from operator_merge import execute
+        with lock(state,name='controller',wait=45):
+            try:result=execute(args.command,root,state,config,GitHub(policy['repository']),call,args.issue,args.approved_head,args.manifest)
+            except (KeyError,TypeError,AttributeError,sqlite3.Error) as error:raise Hold('Malformed or unavailable manual delivery evidence') from error
+        print(json.dumps(result,ensure_ascii=False,indent=2));return
     name='controller' if args.command in ('tick','activate','approve-merge','retry-qa','recover-developer','inspect-recovery','confirm-recovery') else 'issue-'+args.issue
     if '/' in name or '..' in name:raise Hold('Invalid issue identity')
     if args.command=='inspect-recovery':
