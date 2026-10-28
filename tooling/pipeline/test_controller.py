@@ -436,3 +436,50 @@ class DurableRoleEvidence(unittest.TestCase):
         self.assertFalse((self.ctl.root/'role-evidence').exists())
         self.assertFalse((self.ctl.root/'evidence-reservations.json').exists())
         self.report=original;self.assertTrue(self.retain().is_file())
+
+    def serial_return_fixture(self):
+        import serial
+        from unittest.mock import Mock
+        self.prepare()
+        note=json.loads(self.report.read_text());note.update(gaps=['defect'],details='x'*20000)
+        self.report.write_text(json.dumps(note))
+        lane={**self.lane,'repairs':0,'phase':'reviewer'}
+        ctl=serial.Serial.__new__(serial.Serial);ctl.c=self.c;ctl.root=self.ctl.root
+        ctl.current=lambda key,role:(lane,{'status':'started_2'})
+        ctl.actor=lambda role:('review','review-run')
+        ctl.save=Mock()
+        def transition(lane,issue,target,report):lane['pending']={}
+        ctl.transition=Mock(side_effect=transition)
+        return ctl
+
+    def test_serial_return_reserves_duplicate_before_transition(self):
+        ctl=self.serial_return_fixture()
+        note=json.loads(self.report.read_text());note['details']='预算'*10000
+        self.report.write_text(json.dumps(note))
+        with patch('pathlib.Path.cwd',return_value=self.repo):
+            result=ctl.return_to_owner('PIT-1','reviewer',self.report,rework=True)
+        self.assertEqual(result['status'],'queued_until_runtime_exit')
+        ledger=json.loads((ctl.root/'evidence-reservations.json').read_text())
+        returned=ctl.root/'returns/PIT-1-g3-reviewer-review-run.json';original=returned.read_bytes()
+        self.assertEqual(ledger['reservations']['return:PIT-1:3:reviewer:review-run'],len(original))
+        total=sum(p.stat().st_size for name in ('returns','role-evidence') for p in (ctl.root/name).rglob('*') if p.is_file())
+        self.assertLessEqual(total,sum(ledger['reservations'].values()))
+        with patch('pathlib.Path.cwd',return_value=self.repo):
+            with self.assertRaises(Hold):ctl.return_to_owner('PIT-1','reviewer',self.report,rework=True)
+        self.assertEqual(returned.read_bytes(),original);ctl.transition.assert_called_once()
+
+    def test_serial_return_exhaustion_preserves_report_without_transition(self):
+        ctl=self.serial_return_fixture()
+        grant=ctl.root/'evidence-budget.json';value=json.loads(grant.read_text())
+        value['allocation_bytes']=30000;grant.write_text(json.dumps(value))
+        with patch('pathlib.Path.cwd',return_value=self.repo):
+            with self.assertRaisesRegex(Hold,'Evidence budget missing, invalid or exhausted'):
+                ctl.return_to_owner('PIT-1','reviewer',self.report,rework=True)
+        ctl.transition.assert_not_called();ctl.save.assert_not_called()
+        self.assertFalse((ctl.root/'returns').exists())
+        retained=ctl.root/'role-evidence/PIT-1/3/reviewer/review-run'
+        self.assertEqual(json.loads((retained/'report.json').read_text())['gaps'],['defect'])
+        ledger=(ctl.root/'evidence-reservations.json').read_bytes()
+        with patch('pathlib.Path.cwd',return_value=self.repo):
+            with self.assertRaises(Hold):ctl.return_to_owner('PIT-1','reviewer',self.report,rework=True)
+        self.assertEqual((ctl.root/'evidence-reservations.json').read_bytes(),ledger)

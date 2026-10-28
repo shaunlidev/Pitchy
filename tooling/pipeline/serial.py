@@ -182,7 +182,11 @@ class Serial(Controller):
         if not note.get('gaps') and not note.get('decisions'):raise Hold('Retained report has no gap or decision')
         note['retained_evidence']=manifest
         repair=rework and role in ('reviewer','qa') and lane['repairs']<2
-        path=self.root/'returns'/f'{key}-g{lane["generation"]}-{role}.json';write_json(path,note)
+        path=self.root/'returns'/f'{key}-g{lane["generation"]}-{role}-{run}.json'
+        payload=json.dumps(note,ensure_ascii=False,indent=2)+'\n'
+        self.reserve_evidence(':'.join(('return',key,str(lane['generation']),role,run)),len(payload.encode()))
+        path.parent.mkdir(parents=True,exist_ok=True)
+        with path.open('xb') as stream:stream.write(payload.encode())
         self.transition(lane,issue,'todo' if repair else 'in_review',path)
         lane['pending']['rework']=repair;lane['phase']='awaiting_role_exit';self.save(lane)
         return {'issue':key,'status':'queued_until_runtime_exit'}
