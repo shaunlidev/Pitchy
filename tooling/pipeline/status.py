@@ -180,7 +180,8 @@ def role_result(lane, role, config, head):
     valid = bool(head and record.get('issue') == lane.get('issue') and artifact.get('issue') == lane.get('issue')
                  and type(lane.get('generation')) is int and lane['generation'] > 0
                  and record.get('commit') == head and record.get('tree') == artifact.get('tree')
-                 and sha(artifact.get('tree')) and record.get('generation') == lane.get('generation')
+                 and sha(artifact.get('tree')) and type(record.get('generation')) is int
+                 and record['generation'] == lane['generation']
                  and isinstance(record.get('contract_sha256'), str)
                  and re.fullmatch(r'[a-f0-9]{64}', record['contract_sha256'])
                  and record['contract_sha256'] == artifact.get('contract_sha256')
@@ -188,7 +189,8 @@ def role_result(lane, role, config, head):
                  and record.get('actor_id') == config[role] and record.get('role') == role
                  and identity(record.get('run_id')) and record.get('dirty') is False)
     passed = (valid and record.get('outcome') == 'pass'
-              and not any(record.get(k) for k in ('gaps', 'decisions', 'failures', 'skipped', 'not_run'))
+              and all(isinstance(record.get(k, []), list) and not record.get(k, [])
+                      for k in ('gaps', 'decisions', 'failures', 'skipped', 'not_run'))
               and (role != 'reviewer' or record.get('complete_contract_review') is True))
     return {'state': 'pass' if passed else 'unknown', 'head': sha(record.get('commit')),
             'run_id': identity(record.get('run_id'))}

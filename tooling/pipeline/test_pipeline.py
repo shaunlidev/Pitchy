@@ -201,6 +201,29 @@ class OperationalStatus(unittest.TestCase):
                 self.assertEqual(row['roles']['reviewer']['state'], 'unknown')
                 self.assertEqual(row['roles']['qa']['state'], 'unknown')
 
+    def test_malformed_receipt_types_cannot_preserve_acceptance(self):
+        self.assertTrue(self.view()['ready_to_merge'])
+        for role in ('reviewer', 'qa'):
+            for value in (True, 1.0, '1', None, 0, -1, 2):
+                with self.subTest(role=role, generation=value):
+                    lane = copy.deepcopy(self.lane)
+                    lane['receipts'][role]['generation'] = value
+                    row = self.view(lane=lane)
+                    self.assertFalse(row['ready_to_merge'])
+                    self.assertFalse(row['engineering_done'])
+                    self.assertEqual(row['roles'][role]['state'], 'unknown')
+            for field in ('gaps', 'decisions', 'failures', 'skipped', 'not_run'):
+                for value in (None, False, 0, '', {}):
+                    with self.subTest(role=role, field=field, value=value):
+                        lane = copy.deepcopy(self.lane)
+                        lane['receipts'][role][field] = value
+                        row = self.view(lane=lane)
+                        self.assertFalse(row['ready_to_merge'])
+                        self.assertEqual(row['roles'][role]['state'], 'unknown')
+                lane = copy.deepcopy(self.lane)
+                lane['receipts'][role][field] = []
+                self.assertTrue(self.view(lane=lane)['ready_to_merge'])
+
     def test_ready_requires_independent_current_head_receipts(self):
         self.assertTrue(self.view()['ready_to_merge'])
         self.assertFalse(self.view()['engineering_done'])
