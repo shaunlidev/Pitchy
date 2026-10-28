@@ -1,4 +1,6 @@
 import copy
+import os
+import controller
 import json
 from pathlib import Path
 import subprocess
@@ -244,6 +246,252 @@ class SerialBehavior(unittest.TestCase):
         self.assertEqual(self.f.g('rev-parse','HEAD'),base)
         self.assertIn('private-runtime',(native/'AGENTS.md').read_text())
         self.assertEqual(self.f.g('show',artifact['commit']+':source.txt'),'lane1')
+
+
+class OptionalRoles(unittest.TestCase):
+    def setUp(self):
+        self.fixture = SerialBehavior()
+        self.fixture.setUp()
+        self.f, self.c = self.fixture.f, self.fixture.c
+        self.c.c['optional_roles'] = {'small_tasks_enabled': True, 'small_tasks_agent': 'kimi-dev',
+                                      'supplemental_enabled': True, 'supplemental_agent': 'kimi-review'}
+        self.f.fake.rows = [core.item(1)]
+        self.row = self.f.fake.rows[0]
+        old = self.c.call
+        def call(args):
+            result = old(args)
+            if args[:2] == ['issue', 'update'] and '--assignee-id' in args:
+                self.row['assignee_id'] = args[args.index('--assignee-id') + 1]
+            return result
+        self.c.call = call
+        self.c.observation = {'deadline_monotonic': time.monotonic()+120, 'issues': {}}
+
+    def tearDown(self):
+        self.fixture.tearDown()
+
+    def admit(self, small=True, supplement=True):
+        self.row['metadata'].update(developer_route='small' if small else 'default',
+                                    supplemental_review='on' if supplement else 'off')
+        # Exercise the actual admission implementation without Serial's unrelated live-main precondition.
+        controller.Controller.dispatch(self.c, True)
+        return self.c.lanes()['PIT-1']
+
+    def prepared(self):
+        lane = self.admit()
+        head = self.f.g('rev-parse', 'HEAD')
+        contract = {'checks': {'normal': {'argv': ['python3','check.py']}}}
+        from acceptance import contract_digest
+        lane.update(phase='supplemental', description=self.row['description'], contract=contract,
+                    artifact={'commit': head, 'tree': self.f.g('rev-parse', 'HEAD^{tree}'),
+                              'contract_sha256': contract_digest(contract), 'description_sha256': lane['description_sha256']},
+                    receipts={'developer': {'run_id':'dev-run'}}, pr_number=1)
+        # Supply a parent commit for the synthetic public artifact.
+        self.f.g('commit', '--allow-empty', '-qm', 'public artifact')
+        lane['artifact']['commit'] = self.f.g('rev-parse', 'HEAD')
+        root = self.c.root/'evidence/PIT-1/1/developer/dev-run'
+        for name, value in {'checks/normal.json':'{"assertion_passed":true}', 'logs/normal.stdout':'{"passed":true}', 'logs/normal.stderr':''}.items():
+            path=root/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_text(value)
+        self.c.save(lane)
+        self.row.update(status='started_2',assignee_id='kimi-review')
+        self.f.fake.runs['id-1']=[{'id':'supp-run','issue_id':'id-1','agent_id':'kimi-review','status':'running','work_dir':str(self.f.repo)}]
+        self.c.observation['issues']={'PIT-1':{'prs':[{'number':1,'head':lane['artifact']['commit'],'base':'main','state':'DRAFT','ci':{'state':'success'}}]}}
+        return lane
+
+    def runtime(self):
+        return patch.dict(os.environ, MULTICA_AGENT_ID='kimi-review', MULTICA_TASK_ID='supp-run')
+
+    def in_repo(self):
+        return patch('pathlib.Path.cwd', return_value=self.f.repo)
+
+    def report(self,bundle,**overrides):
+        path=self.f.root/'advisory.json'
+        path.write_text(json.dumps({'completed':True,'inputs_sha256':bundle['inputs_sha256'],
+                                    'gaps':[],'failures':[],'not_run':[],'findings':[],**overrides}))
+        return path
+
+    def test_real_git_small_developer_through_supplement_review_qa_waits_for_human(self):
+        self.admit()
+        native=self.f.root/'kimi-native'
+        self.f.g('worktree','add','-qb','kimi-task',str(native))
+        (native/'source.txt').write_text('lane1')
+        self.row.update(status='in_progress',assignee_id='kimi-dev')
+        self.f.fake.runs['id-1']=[{'id':'kimi-run','issue_id':'id-1','agent_id':'kimi-dev','status':'running','work_dir':str(native)}]
+        criterion=dict(core.requirements(self.row['description'])[0],kind='engineering',required=True,check_ids=['normal'])
+        plan={'engineering':True,'decisions':[],'criteria':[criterion],'checks':{'normal':{'argv':['python3','check.py'],'cwd':'.','proof':{'kind':'json','pointer':'/passed','equals':True}}},'allowed_paths':['source.txt']}
+        plan_path=self.f.root/'plan.json';plan_path.write_text(json.dumps(plan))
+        report=self.f.root/'formal.json';report.write_text(json.dumps({'outcome':'synthetic correct value','gaps':[],'decisions':[],'criterion_results':[{'id':'AC-1','status':'pass'}],'complete_contract_review':True}))
+        base=self.f.g('rev-parse','HEAD')
+        self.c.github.api=lambda path:{'sha':base}
+        def publish(lane):lane['pr_number']=1;self.c.save(lane)
+        with patch.dict(os.environ,MULTICA_AGENT_ID='kimi-dev',MULTICA_TASK_ID='kimi-run'), patch('pathlib.Path.cwd',return_value=native), patch.object(self.c,'publish_pr',side_effect=publish):
+            self.c.workspace('PIT-1',native);self.c.plan('PIT-1',plan_path)
+            self.c.stage('PIT-1','developer',report,native)
+        lane=self.c.lanes()['PIT-1'];head=lane['artifact']['commit']
+        self.assertEqual(lane['artifact']['actors'],{'developer':'kimi-dev','reviewer':'review','qa':'qa'})
+        self.c.observation['issues']={'PIT-1':{'prs':[{'number':1,'head':head,'base':'main','state':'DRAFT','ci':{'state':'success'}}]}}
+        self.f.fake.runs['id-1'][0]['status']='completed';self.c.drain(True)
+        self.f.fake.runs['id-1']=[{'id':'supp-run','issue_id':'id-1','agent_id':'kimi-review','status':'running','work_dir':str(self.f.repo)}]
+        with self.runtime(),self.in_repo():
+            bundle=self.c.supplemental_bundle('PIT-1')
+            self.c.supplemental_submit('PIT-1',self.report(bundle))
+        self.f.fake.runs['id-1'][0]['status']='completed';self.c.drain(True)
+        for role in ('reviewer','qa'):
+            folder=self.f.root/role;self.f.g('worktree','add','--detach',str(folder),base)
+            with self.f.runtime(role,folder):
+                self.c.checkout('PIT-1',role,folder)
+                self.c.stage('PIT-1',role,report,folder)
+            self.f.fake.runs['id-1'][0]['status']='completed';self.c.drain(True)
+        lane=self.c.lanes()['PIT-1']
+        self.assertEqual(lane['phase'],'awaiting_merge')
+        self.assertEqual(set(lane['receipts']),{'developer','reviewer','qa'})
+        self.assertEqual(self.f.g('rev-parse','HEAD'),base)
+        self.assertFalse(any(a[:2]==['issue','update'] and 'done' in a for a in self.f.fake.writes))
+
+    def test_default_route_and_disabled_features_never_enroll_new_actors(self):
+        self.c.c['optional_roles']['small_tasks_enabled']=False
+        self.c.c['optional_roles']['supplemental_enabled']=False
+        lane=self.admit(False,False)
+        self.assertEqual(lane['routing']['actors'],{'developer':'dev','reviewer':'review','qa':'qa'})
+        self.assertNotIn('supplemental',lane['routing']['actors'])
+
+    def test_explicit_selection_requires_enabled_known_distinct_actors(self):
+        for changes in ({'small_tasks_enabled':False},{'small_tasks_agent':None},{'small_tasks_agent':'review'}, {'supplemental_agent':'kimi-dev'}, {'supplemental_enabled':False}):
+            config=copy.deepcopy(self.c.c['optional_roles']);self.c.c['optional_roles'].update(changes)
+            self.row['metadata'].update(developer_route='small',supplemental_review='on')
+            result=controller.Controller.dispatch(self.c,True)
+            self.assertIn('PIT-1',result['held']);self.assertEqual(self.f.fake.writes,[])
+            self.c.c['optional_roles']=config
+        self.row['metadata']['developer_route']='typo'
+        self.assertIn('PIT-1',controller.Controller.dispatch(self.c)['held'])
+
+    def test_admission_freezes_selected_actor_and_does_not_duplicate(self):
+        lane=self.admit()
+        self.assertEqual(lane['routing']['actors']['developer'],'kimi-dev')
+        assign=next(a for a in self.f.fake.writes if a[:2]==['issue','assign'])
+        self.assertEqual(assign[assign.index('--to-id')+1],'kimi-dev')
+        self.assertEqual(controller.Controller.dispatch(self.c,True)['started'],[])
+        self.row['metadata']['developer_route']='default'
+        with self.assertRaisesRegex(controller.Hold,'Frozen'):self.c.verify_routing(lane,self.row)
+
+    def test_selected_runtime_identity_and_legacy_no_adoption(self):
+        lane=self.admit(supplement=False)
+        self.row.update(status='in_progress',assignee_id='kimi-dev')
+        self.f.fake.runs['id-1']=[{'id':'k-run','issue_id':'id-1','agent_id':'kimi-dev','status':'running','work_dir':str(self.f.repo)}]
+        with patch.dict(os.environ,MULTICA_AGENT_ID='kimi-dev',MULTICA_TASK_ID='k-run'), self.in_repo():
+            self.assertEqual(self.c.current('PIT-1','developer')[0]['routing'],lane['routing'])
+        with patch.dict(os.environ,MULTICA_AGENT_ID='dev',MULTICA_TASK_ID='k-run'), self.in_repo():
+            with self.assertRaisesRegex(controller.Hold,'identity'):self.c.current('PIT-1','developer')
+        lane.pop('routing')
+        with self.assertRaisesRegex(controller.Hold,'Legacy'):self.c.verify_routing(lane,self.row)
+
+    def test_developer_exit_ci_then_supplement_before_formal_review(self):
+        lane=self.fixture.lane(ci='pending')
+        self.row['metadata'].update(developer_route='small',supplemental_review='on')
+        lane['routing']=self.c.routing(self.row)
+        lane['pending'].update(actor='kimi-dev',assignee='kimi-dev')
+        self.row['assignee_id']='kimi-dev';self.f.fake.runs['id-1'][0]['agent_id']='kimi-dev'
+        self.c.save(lane)
+        self.assertIn('waiting',self.c.drain(True)[0])
+        self.c.observation['issues']['PIT-1']['prs'][0]['ci']['state']='success'
+        self.f.fake.runs['id-1'][0]['status']='running'
+        self.assertIn('waiting',self.c.drain(True)[0])
+        self.f.fake.runs['id-1'][0]['status']='completed'
+        self.assertEqual(self.c.drain(True)[0]['status'],'supplemental')
+        self.assertEqual(self.c.lanes()['PIT-1']['phase'],'supplemental')
+        self.assertEqual(self.row['assignee_id'],'kimi-review')
+        self.assertEqual(self.c.drain(True),[])
+        self.assertEqual(self.c.dispatch(True)['started'],[])
+
+    def test_advisory_report_handoff_preserves_formal_review_and_has_no_checks(self):
+        self.prepared()
+        with self.runtime(), self.in_repo(), patch.object(self.c,'checks',side_effect=AssertionError('must not execute checks')):
+            bundle=self.c.supplemental_bundle('PIT-1')
+            self.assertEqual(self.c.supplemental_bundle('PIT-1'),bundle)
+            finding={'location':'source.txt:1','trigger':'example input','impact':'wrong output','evidence':'diff hunk'}
+            self.c.supplemental_submit('PIT-1',self.report(bundle,findings=[finding]))
+            with self.assertRaises(controller.Hold):self.c.supplemental_submit('PIT-1',self.report(bundle))
+        self.assertIn('waiting',self.c.drain(True)[0])
+        self.f.fake.runs['id-1'][0]['status']='completed'
+        self.c.drain(True)
+        lane=self.c.lanes()['PIT-1']
+        self.assertEqual(lane['phase'],'reviewer');self.assertEqual(self.row['assignee_id'],'review')
+        self.assertNotIn('reviewer',lane['receipts']);self.assertNotIn('qa',lane['receipts'])
+        self.assertEqual(lane['repairs'],0)
+        self.assertNotIn('completion_decision',lane)
+
+    def test_incomplete_formal_or_stale_report_refuses(self):
+        self.prepared()
+        with self.runtime(), self.in_repo():
+            bundle=self.c.supplemental_bundle('PIT-1')
+            for change in ({'completed':False},{'inputs_sha256':'wrong'},{'gaps':['missing test']}, {'failures':['failed']},{'not_run':['required']},{'verdict':'pass'},{'findings':[{}]}):
+                with self.assertRaises(controller.Hold):self.c.supplemental_submit('PIT-1',self.report(bundle,**change))
+            self.assertNotIn('supplemental_receipt',self.c.lanes()['PIT-1'])
+            path=Path(next(iter(bundle['inputs']['evidence'].values()))['path']);path.write_text('changed')
+            with self.assertRaisesRegex(controller.Hold,'stale'):self.c.supplemental_submit('PIT-1',self.report(bundle))
+
+    def test_read_only_review_rejects_tracked_source_edits(self):
+        self.prepared()
+        with self.runtime(), self.in_repo():
+            bundle=self.c.supplemental_bundle('PIT-1')
+            (self.f.repo/'source.txt').write_text('unauthorized repair')
+            with self.assertRaisesRegex(controller.Hold,'tracked source changed'):
+                self.c.supplemental_submit('PIT-1',self.report(bundle))
+            self.assertNotIn('supplemental_receipt',self.c.lanes()['PIT-1'])
+
+    def test_missing_evidence_and_wrong_actor_are_not_success(self):
+        self.prepared()
+        with self.runtime(), self.in_repo():
+            with self.assertRaisesRegex(controller.Hold,'formal stage'):self.c.stage('PIT-1','supplemental',self.f.root/'absent',self.f.repo)
+            path=self.c.root/'evidence/PIT-1/1/developer/dev-run/logs/normal.stdout';path.unlink()
+            with self.assertRaisesRegex(controller.Hold,'Missing'):self.c.supplemental_bundle('PIT-1')
+        with patch.dict(os.environ,MULTICA_AGENT_ID='review',MULTICA_TASK_ID='supp-run'), self.in_repo():
+            with self.assertRaisesRegex(controller.Hold,'identity'):self.c.supplemental_bundle('PIT-1')
+
+    def test_changed_head_and_changed_report_block_forward_handoff(self):
+        self.prepared()
+        with self.runtime(), self.in_repo():
+            bundle=self.c.supplemental_bundle('PIT-1');self.c.supplemental_submit('PIT-1',self.report(bundle))
+        self.f.fake.runs['id-1'][0]['status']='completed'
+        self.c.observation['issues']['PIT-1']['prs'][0]['head']='b'*40
+        with self.assertRaises(controller.Hold):self.c.drain(True)
+        lane=self.c.lanes()['PIT-1'];self.c.observation['issues']['PIT-1']['prs'][0]['head']=lane['artifact']['commit']
+        Path(lane['supplemental_receipt']['report_path']).write_text('{}')
+        with self.assertRaisesRegex(controller.Hold,'report changed'):self.c.drain(True)
+
+    def test_rework_keeps_selected_developer_and_invalidates_advisory(self):
+        lane=self.admit();lane.update(phase='exit-reviewer-g1',native_head='native',artifact={'commit':'public'},contract={'allowed_paths':['source.txt']},supplemental_bundle='old',supplemental_receipt={'old':True},pending={'run':'review-run','engineering_verified':False})
+        self.row.update(status='started_2',assignee_id='review');self.c.save(lane)
+        self.c._transition(lane,self.row,'todo','report')
+        updated=self.c.lanes()['PIT-1']
+        self.assertEqual(self.row['assignee_id'],'kimi-dev');self.assertEqual(updated['repairs'],1)
+        self.assertEqual(updated['routing'],lane['routing'])
+        self.assertNotIn('supplemental_bundle',updated);self.assertNotIn('supplemental_receipt',updated)
+
+    def test_uncertain_supplement_enqueue_is_never_replayed(self):
+        lane=self.fixture.lane();self.row['metadata'].update(developer_route='small',supplemental_review='on');lane['routing']=self.c.routing(self.row)
+        lane['pending'].update(actor='kimi-dev',assignee='kimi-dev');self.row['assignee_id']='kimi-dev';self.f.fake.runs['id-1'][0]['agent_id']='kimi-dev';self.c.save(lane)
+        self.f.fake.fail_update=True
+        with self.assertRaises(TimeoutError):self.c.drain(True)
+        count=len(self.f.fake.writes)
+        self.assertEqual(self.c.drain(True),[])
+        self.assertEqual(len(self.f.fake.writes),count)
+        self.assertIsNotNone(self.c.db.execute("SELECT 1 FROM operations WHERE state='uncertain'").fetchone())
+
+
+class OptionalRecovery(unittest.TestCase):
+    def test_recovery_requeues_the_frozen_small_developer(self):
+        case=DeveloperRecovery()
+        case.setUp()
+        try:
+            case.c.c['optional_roles']={'small_tasks_enabled':True,'small_tasks_agent':'kimi-dev'}
+            row=case.f.fake.rows[0];row['metadata']['developer_route']='small';row['assignee_id']='kimi-dev'
+            case.f.fake.runs['id-1'][0]['agent_id']='kimi-dev'
+            lane=case.c.lanes()['PIT-1'];lane['routing']=case.c.routing(row);case.c.save(lane)
+            case.recover()
+            request=case.requests[-1]
+            self.assertEqual(request[request.index('--assignee-id')+1],'kimi-dev')
+            self.assertEqual(case.c.lanes()['PIT-1']['routing'],lane['routing'])
+        finally:case.tearDown()
 
 
 if __name__=='__main__':unittest.main()
