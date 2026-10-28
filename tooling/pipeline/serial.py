@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """Canonical single-lane polling controller. No automatic merge or deployment."""
 import argparse
+from datetime import datetime, timezone
 import hashlib
 import json
 import os
 from pathlib import Path
 import re
 import shutil
+import sqlite3
 import subprocess
 import sys
 import time
@@ -38,6 +40,15 @@ def configured(root):
 
 def bundle_digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode()).hexdigest()
+
+def runtime_identity(run):
+    # Freeze provenance too: an unchanged ID/status cannot hide reassignment.
+    result=run.get('result')
+    if result is not None and not isinstance(result,dict):raise Hold('Unknown runtime result')
+    fields=('id','status','agent_id','issue_id','created_at','work_dir','branch_name')
+    value={key:run.get(key) for key in fields}
+    value['result_branch']=(result or {}).get('branch_name')
+    return value
 
 
 class Serial(Controller):
@@ -103,6 +114,7 @@ class Serial(Controller):
         else:
             if lane.get('supplemental_bundle'):
                 raise Hold('Supplemental run already bound; explicit reconciliation required')
+            self.reserve_evidence('supplemental-bundle:'+key+':'+str(lane['generation'])+':'+run, len(json.dumps(value,ensure_ascii=False,indent=2).encode())+1)
             write_json(path, value)
             lane['supplemental_bundle'] = str(path)
             self.save(lane)
@@ -118,6 +130,11 @@ class Serial(Controller):
         receipt = lane.get('supplemental_receipt')
         if not receipt or receipt['inputs_sha256'] != bundle['inputs_sha256'] or receipt['actor_id'] != bundle['actor_id'] or receipt['run_id'] != bundle['run_id']:
             raise Hold('Completed supplemental receipt missing or mismatched')
+        retained = Path(receipt['retained_evidence'])
+        expected = {'issue':lane['issue'], 'generation':lane['generation'], 'role':'supplemental',
+                    'actor_id':receipt['actor_id'], 'run_id':receipt['run_id'], 'commit':lane['artifact']['commit'],
+                    'contract_sha256':lane['artifact']['contract_sha256'], 'description_sha256':lane['description_sha256']}
+        self.verify_role_evidence(retained.parent, expected)
         if json.loads(Path(receipt['report_path']).read_text()) != receipt['report']:
             raise Hold('Supplemental report changed')
         return bundle
@@ -146,12 +163,12 @@ class Serial(Controller):
         for finding in note['findings']:
             if not isinstance(finding, dict) or any(not isinstance(finding.get(k), str) or not finding[k].strip() for k in ('location', 'trigger', 'impact', 'evidence')):
                 raise Hold('Supplemental finding needs location, trigger, impact and evidence')
-        path = Path(lane['supplemental_bundle']).with_name('report.json')
-        if path.exists():
-            raise Hold('Supplemental report already exists; no replay')
-        write_json(path, note)
+        manifest = self.retain_role_evidence(lane, 'supplemental', report, Path.cwd(), actor, run)
+        path = Path(manifest).parent/'report.json'
+        if json.loads(path.read_text()) != note:
+            raise Hold('Supplemental report changed during retention')
         lane['supplemental_receipt'] = {'actor_id': actor, 'run_id': run, 'inputs_sha256': bundle['inputs_sha256'],
-                                       'report_path': str(path), 'report': note}
+                                       'report_path': str(path), 'report': note, 'retained_evidence': manifest}
         lane['pending'] = {'target': self.c['review_status'], 'role': 'supplemental', 'run': run, 'actor': actor,
                            'issue_status': issue['status'], 'assignee': actor, 'report': str(path),
                            'source_description': lane['description_sha256'], 'engineering_verified': False}
@@ -281,10 +298,17 @@ class Serial(Controller):
 
     def return_to_owner(self, key, role, report, rework=False):
         lane, issue = self.current(key, role)
-        note=json.loads(Path(report).read_text())
-        if not note.get('gaps') and not note.get('decisions'):raise Hold('Concrete gap/decision required')
+        actor,run=self.actor(role, lane)
+        manifest=self.retain_role_evidence(lane,role,report,Path.cwd(),actor,run)
+        note=json.loads((Path(manifest).parent/'report.json').read_text())
+        if not note.get('gaps') and not note.get('decisions'):raise Hold('Retained report has no gap or decision')
+        note['retained_evidence']=manifest
         repair=rework and role in ('reviewer','qa') and lane['repairs']<2
-        path=self.root/'returns'/f'{key}-g{lane["generation"]}-{role}.json';write_json(path,note)
+        path=self.root/'returns'/f'{key}-g{lane["generation"]}-{role}-{run}.json'
+        payload=json.dumps(note,ensure_ascii=False,indent=2)+'\n'
+        self.reserve_evidence(':'.join(('return',key,str(lane['generation']),role,run)),len(payload.encode()))
+        path.parent.mkdir(parents=True,exist_ok=True)
+        with path.open('xb') as stream:stream.write(payload.encode())
         self.transition(lane,issue,'todo' if repair else 'in_review',path)
         lane['pending']['rework']=repair;lane['phase']='awaiting_role_exit';self.save(lane)
         return {'issue':key,'status':'queued_until_runtime_exit'}
@@ -434,11 +458,12 @@ class Serial(Controller):
                 runs=self.call(['issue','runs',row['id'],'--output','json'])
                 if not isinstance(runs,list) or any(not isinstance(r,dict) or not isinstance(r.get('id'),str) or not r['id'].strip() or not isinstance(r.get('status'),str) or r['status'] not in RUNNING | {'completed','failed','cancelled'} for r in runs):
                     raise Hold('Unknown runtime history')
+                if len({r['id'] for r in runs})!=len(runs):raise Hold('Duplicate runtime identity')
                 if any(r['status'] in RUNNING for r in runs):raise Hold('Live runtime prevents recovery')
                 histories[row['id']]=runs
             return histories
         def inventory_identity(histories):
-            return {key:[(r.get('id'),r.get('status')) for r in runs] for key,runs in histories.items()}
+            return {key:{r['id']:runtime_identity(r) for r in runs} for key,runs in histories.items()}
         histories=idle_inventory()
         initial_inventory=inventory_identity(histories)
         matches=[r for r in histories.get(lane['id'],[]) if r.get('id')==run_id and r.get('agent_id')==self.role_actor(lane,'developer') and r['status']=='completed']
@@ -530,10 +555,124 @@ class Serial(Controller):
                 or fresh.get('assignee_id')!=self.role_actor(lane,'developer') or fresh.get('description')!=issue.get('description')):
             raise Hold('Developer assignment changed before recovery enqueue')
         self.require_fresh()
-        target='in_progress' if issue['status']=='todo' else 'todo'
-        self.call(['issue','update',lane['id'],'--status',target,'--assignee-id',self.role_actor(lane,'developer'),'--output','json'])
-        self.finish(token)
-        return {'issue':key,'generation':generation,'repairs':lane['repairs'],'recovered_source':recovered,'status':'developer_retry_requested','archive':str(archive)}
+        start = {'schema_version':1, 'token':token, 'issue':key, 'id':lane['id'],
+                 'generation':generation, 'repairs':lane['repairs'], 'actor':self.role_actor(lane,'developer'),
+                 'description_sha256':lane['description_sha256'], 'revision':issue['revision'],
+                 'inventory':initial_inventory, 'mapping':json.loads((folder/'mapping.json').read_text()),
+                 'branch':branch, 'pr_number':lane['rework_pr_number'], 'pr_branch':lane['rework_branch']}
+        write_json(folder/'start.json', start)
+        self.recovery_event(folder, 'parking_intent')
+        self.call(['issue','update',lane['id'],'--status','backlog','--assignee-id',self.role_actor(lane,'developer'),'--no-start','--output','json'])
+        parked=self.issue(key)
+        if (parked.get('status')!='backlog' or parked.get('assignee_id')!=self.role_actor(lane,'developer')
+                or digest(parked.get('description') or '')!=lane['description_sha256']
+                or parked.get('revision')!=issue['revision']+1
+                or inventory_identity(idle_inventory())!=initial_inventory):
+            raise Hold('Parking acknowledgement changed; reconcile without replay')
+        self.recovery_event(folder, 'parked', revision=parked['revision'])
+        if self.github.api('commits/main')['sha']!=main or git(repo,'rev-parse','refs/heads/'+branch)!=native_head:
+            raise Hold('Source changed after parking; no enqueue')
+        pr=self.github.api('pulls/'+str(lane['rework_pr_number']))
+        if pr['state']!='open' or pr['base']['ref']!='main' or pr['head']['sha']!=head or pr['head']['ref']!=lane['rework_branch']:
+            raise Hold('PR changed after parking; no enqueue')
+        latest=self.issue(key)
+        if latest!=parked or inventory_identity(idle_inventory())!=initial_inventory:
+            raise Hold('Task/runtime changed after parking; no enqueue')
+        self.require_fresh()
+        self.recovery_event(folder, 'enqueue_intent')
+        self.call(['issue','update',lane['id'],'--status','todo','--assignee-id',self.role_actor(lane,'developer'),'--output','json'])
+        result=self.inspect_recovery(key)
+        if result['state']=='unique_run_observed':
+            self.recovery_event(folder, 'confirmed', run_id=result['run_id'])
+            self.finish(token)
+        return {'issue':key,'generation':generation,'repairs':lane['repairs'],'recovered_source':recovered,
+                'status':result['state'],'run_id':result.get('run_id'),'archive':str(archive)}
+
+    def recovery_event(self, folder, state, **fields):
+        events=folder/'start-events';events.mkdir(exist_ok=True)
+        number=len(list(events.glob('*.json')))
+        with (events/f'{number:04d}.json').open('x') as stream:
+            json.dump({'state':state,'at':datetime.now(timezone.utc).isoformat(),**fields},stream,indent=2)
+            stream.write('\n')
+
+    def inspect_recovery(self, key):
+        """Read-only observation; no refresh/publication or journal writes."""
+        if os.environ.get('MULTICA_TASK_ID'):raise Hold('Recovery reconciliation is operator-only')
+        lane=self.lanes().get(key)
+        if not lane or not lane.get('developer_recovery'):raise Hold('No recorded recovery')
+        folder=Path(lane['developer_recovery']).with_suffix('')
+        try:
+            start=json.loads((folder/'start.json').read_text())
+            original=json.loads(Path(lane['developer_recovery']).read_text())
+            expected='recover-developer:'+key+':'+str(lane['generation'])+':'+original['runtime']
+            operation=self.db.execute('SELECT state FROM operations WHERE token=?',(expected,)).fetchone()
+            if start.get('token')!=expected or not operation or operation[0] not in ('uncertain','confirmed'):
+                raise Hold('Recovery operation identity missing or changed')
+            events=[json.loads(p.read_text()) for p in sorted((folder/'start-events').glob('*.json'))]
+            intent=[e for e in events if e['state']=='enqueue_intent']
+            if not intent:return {'state':'not_enqueued_or_unknown','run_id':None}
+            if len(intent)!=1:raise Hold('Ambiguous enqueue journal')
+            if (start['issue']!=key or start['id']!=lane['id'] or start['actor']!=self.role_actor(lane,'developer')
+                    or start['generation']!=lane['generation'] or start['repairs']!=lane['repairs']
+                    or start['description_sha256']!=lane['description_sha256']
+                    or start['mapping']!=json.loads((folder/'mapping.json').read_text())
+                    or lane['rework_base_commit']!=start['mapping']['native_head']
+                    or lane['rework_public_commit']!=start['mapping']['public_recovered']):
+                raise Hold('Recovery mapping changed')
+            issue=self.issue(key)
+            if (issue.get('assignee_id')!=start['actor'] or issue.get('status') not in ('todo','in_progress')
+                    or type(issue.get('revision')) is not int or issue['revision']<start['revision']+2
+                    or digest(issue.get('description') or '')!=start['description_sha256']):
+                raise Hold('Recovery task changed or enqueue unacknowledged')
+            if self.github.api('commits/main')['sha']!=start['mapping']['main']:
+                raise Hold('Recovery base changed')
+            pr=self.github.api('pulls/'+str(start['pr_number']))
+            if pr['state']!='open' or pr['base']['ref']!='main' or pr['head']['sha']!=start['mapping']['public_head'] or pr['head']['ref']!=start['pr_branch']:
+                raise Hold('Recovery PR changed')
+            if not has_ancestor(self.c['repository'],start['mapping']['native_head'],git(self.c['repository'],'rev-parse','refs/heads/'+start['branch'])):
+                raise Hold('Recovery source lost')
+            histories={}
+            for row in self.issues():
+                runs=self.call(['issue','runs',row['id'],'--output','json'])
+                if not isinstance(runs,list) or any(not isinstance(r,dict) or not isinstance(r.get('id'),str) or not r['id'].strip()
+                    or not isinstance(r.get('status'),str) or r['status'] not in RUNNING | {'completed','failed','cancelled'} for r in runs):
+                    raise Hold('Unknown runtime history')
+                if len({r['id'] for r in runs})!=len(runs):raise Hold('Duplicate runtime identity')
+                histories[row['id']]=runs
+            if set(histories)!=set(start['inventory']):raise Hold('Project inventory changed')
+            added=[]
+            for issue_id,runs in histories.items():
+                before=start['inventory'][issue_id];current={r['id']:runtime_identity(r) for r in runs}
+                if not isinstance(before,dict):raise Hold('Legacy inventory lacks provenance; explicit reconciliation required')
+                if any(current.get(r)!=v for r,v in before.items()):raise Hold('Prior run history changed')
+                new=[r for r in runs if r['id'] not in before]
+                if issue_id!=start['id'] and new:raise Hold('Other issue runtime changed')
+                if issue_id==start['id']:added=new
+            if not added:return {'state':'enqueue_unconfirmed','run_id':None}
+            if len(added)!=1:raise Hold('Multiple new runs; cannot identify recovery')
+            run=added[0]
+            if run.get('issue_id')!=start['id'] or run.get('agent_id')!=start['actor']:
+                raise Hold('New run belongs to another issue or role')
+            created=datetime.fromisoformat(run['created_at'].replace('Z','+00:00'))
+            requested=datetime.fromisoformat(intent[0]['at']).replace(microsecond=0)
+            if created.tzinfo is None or created<requested:raise Hold('New run predates enqueue intent')
+            if run['status'] in ('failed','cancelled'):return {'state':'observed_run_failed','run_id':run['id']}
+            confirmed=[e for e in events if e['state']=='confirmed']
+            if confirmed and (len(confirmed)!=1 or confirmed[0]['run_id']!=run['id']):raise Hold('Confirmation conflict')
+            return {'state':'unique_run_observed','run_id':run['id']}
+        except (AttributeError,KeyError,TypeError,ValueError,OSError,subprocess.SubprocessError):
+            return {'state':'conflict_or_unavailable','run_id':None}
+
+    def confirm_recovery(self, key, run_id):
+        result=self.inspect_recovery(key)
+        if result['state']!='unique_run_observed' or result['run_id']!=run_id:
+            raise Hold('Exact unique recovery run not observed; no acknowledgement')
+        lane=self.lanes()[key];folder=Path(lane['developer_recovery']).with_suffix('')
+        start=json.loads((folder/'start.json').read_text())
+        events=[json.loads(p.read_text()) for p in (folder/'start-events').glob('*.json')]
+        if not any(e['state']=='confirmed' for e in events):self.recovery_event(folder,'confirmed',run_id=run_id)
+        self.finish(start['token'])
+        return result
 
     def retry_qa(self, key, head, reason):
         if os.environ.get('MULTICA_TASK_ID'):
@@ -661,6 +800,8 @@ def activate(root, config, state, github, call, receipt_path):
 def main():
     p=argparse.ArgumentParser(description=__doc__);sub=p.add_subparsers(dest='command',required=True)
     q=sub.add_parser('tick');q.add_argument('--apply',action='store_true')
+    q=sub.add_parser('inspect-recovery');q.add_argument('issue')
+    q=sub.add_parser('confirm-recovery');q.add_argument('issue');q.add_argument('--run',required=True)
     q=sub.add_parser('activate');q.add_argument('--receipt',type=Path,required=True)
     q=sub.add_parser('approve-merge');q.add_argument('issue');q.add_argument('--approved-head',required=True)
     q=sub.add_parser('retry-qa');q.add_argument('issue');q.add_argument('--head',required=True);q.add_argument('--reason',required=True)
@@ -678,12 +819,22 @@ def main():
     if SOURCE!=root:raise Hold('Execute the integrated canonical controller, never a task copy')
     config=configured(root);policy=json.loads((root/'tooling/pipeline/policy.json').read_text());state=root/'.state/pipeline'
     def call(a):return cli(['multica','--profile',config['profile'],'--workspace-id',config['workspace'],*a])
-    name='controller' if args.command in ('tick','activate','approve-merge','retry-qa','recover-developer') else 'issue-'+args.issue
+    name='controller' if args.command in ('tick','activate','approve-merge','retry-qa','recover-developer','inspect-recovery','confirm-recovery') else 'issue-'+args.issue
     if '/' in name or '..' in name:raise Hold('Invalid issue identity')
+    if args.command=='inspect-recovery':
+        c=Serial.__new__(Serial);c.c=config;c.call=call;c.root=state;c.github=GitHub(policy['repository'])
+        c.db=sqlite3.connect((state/'ledger.sqlite3').as_uri()+'?mode=ro',uri=True)
+        c.db.execute('PRAGMA query_only=ON')
+        try:print(json.dumps(c.inspect_recovery(args.issue),ensure_ascii=False,indent=2))
+        finally:c.close()
+        return
     with lock(state,name=name,wait=45):
         c=Serial(config,call,state,GitHub(policy['repository']),policy)
         try:
-            if args.command=='activate':result=activate(root,config,state,c.github,call,args.receipt)
+            if args.command=='inspect-recovery':result=c.inspect_recovery(args.issue)
+            elif args.command=='confirm-recovery':
+                c.require_enabled();result=c.confirm_recovery(args.issue,args.run)
+            elif args.command=='activate':result=activate(root,config,state,c.github,call,args.receipt)
             elif args.command=='tick':result=c.tick(args.apply)
             elif args.command=='recover-developer':
                 c.require_enabled();c.refresh(False);result=c.recover_developer(args.issue,args.generation,args.head,args.main,args.run,args.source,args.reason)

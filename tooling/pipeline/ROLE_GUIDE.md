@@ -66,3 +66,11 @@ results and formal contract approval fields are rejected. Keep reports/raw
 evidence local. Exit after submission; the next tick waits for your terminal run
 and hands off to the existing Reviewer. Never mention or assign another Agent.
 A failure or unavailable report holds for operator attention, without replay.
+
+## Durable role evidence
+
+Reports may declare `evidence_files`, a unique list of relative files inside the current native workspace's `.pipeline-local/` directory (scripts and raw outputs, at most 100 files, 2 MB each). Empty/absent means no additional files declared, not proof that every historical probe was retained. Declare all evidence used to reach the verdict. Report JSON itself is always retained, including FAIL and return-to-owner reports. It too must be a regular file inside the actual native workspace, without symlink components.
+
+Before executing frozen checks or publishing a verdict, the controller copies the report and declared files into `.state/pipeline/role-evidence/PIT-N/generation/role/run/`. The manifest binds actor/run/source/contract, original path, bytes and SHA256. Files outside that workspace, symlinks, missing/changed files and repeat submissions hold. An interrupted copy keeps its intent, partial files and consumed reservation; it cannot be overwritten or retried under the same run. A later independently authorized run has another evidence directory. The original native files stay unchanged. Verification reads the retained manifest and files, so native workspace cleanup does not destroy declared evidence.
+
+The operator must allocate storage first. Roles must not create/edit `.state/pipeline/evidence-budget.json` or reservations. Missing/exhausted budget holds; it never authorizes deletion, uploads or recordings. Controller check logs and handoffs also consume reservations. A command exceeding available output storage holds before writing those outputs; retained role evidence and earlier failures remain. Budget refusal is a missing-evidence hold, never a passed check.
