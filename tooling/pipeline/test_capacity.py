@@ -292,6 +292,28 @@ class WiredCapacityTests(core.Tests):
             self.ctl.stage('PIT-1','developer',self.root/'missing-report.json',self.repo)
         self.assertEqual(self.ctl.lanes()['PIT-1'],before)
 
+    def test_unknown_machine_attribution_holds_actual_dispatch_and_known_other_allows(self):
+        def machine_call(daemon_value):
+            stamp=datetime.now(timezone.utc).isoformat()
+            def call(args):
+                if args[:2]==['runtime','list']:
+                    return [{'id':'known','daemon_id':'machine','status':'online','last_seen_at':stamp},
+                            {'id':'uncertain','daemon_id':daemon_value,'status':'online','last_seen_at':stamp}]
+                if args[:2]==['issue','list']:return [{'id':'external-project-issue'}]
+                return [{'id':f'external-{n}','issue_id':'external-project-issue','agent_id':'other','runtime_id':'uncertain','status':'running'} for n in range(5)]
+            return call
+        for invalid in (None,'',[],{},123,'unknown','not-a-machine'):
+            self.ctl.machine_inventory=lambda: inventory(machine_call(invalid),'machine')
+            result=self.ctl.dispatch(True)
+            self.assertEqual(result['started'],[],repr(invalid))
+            self.assertEqual(self.fake.writes,[],repr(invalid))
+            self.assertEqual(self.ctl.capacity.leases(),{})
+        self.ctl.machine_inventory=lambda: inventory(machine_call('machine'),'machine')
+        self.assertEqual(self.ctl.dispatch(True)['started'],[])
+        self.assertEqual(self.fake.writes,[])
+        self.ctl.machine_inventory=lambda: inventory(machine_call('22222222-2222-4222-8222-222222222222'),'machine')
+        self.assertEqual(self.ctl.dispatch(True)['started'],['PIT-1','PIT-2'])
+
     def test_wired_machine_limit_blocks_remote_mutation(self):
         self.ctl.machine_inventory = lambda: observed(5)
         result = self.ctl.dispatch(True)

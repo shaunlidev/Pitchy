@@ -71,7 +71,8 @@ def inventory(call, daemon, maximum_age=120):
         except (KeyError, ValueError, TypeError) as error:
             raise Hold('Unknown runtime heartbeat') from error
     machine_ids = {r['id'] for r in selected}
-    known_ids = {r['id'] for r in runtimes}
+    runtime_by_id = {r['id']: r for r in runtimes}
+    known_ids = set(runtime_by_id)
     issues, seen, offset = [], set(), 0
     while True:
         data = call(['issue', 'list', '--limit', '100', '--offset', str(offset), '--output', 'json'])
@@ -97,6 +98,10 @@ def inventory(call, daemon, maximum_age=120):
             run_ids.add(run['id'])
             if run['status'] in RUNNING:
                 require(isinstance(run.get('runtime_id'), str) and run['runtime_id'] in known_ids, 'Active runtime has unknown machine')
+                assigned_machine = runtime_by_id[run['runtime_id']].get('daemon_id')
+                require(isinstance(assigned_machine, str) and
+                        (assigned_machine == daemon or bool(re.fullmatch(r'[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}', assigned_machine))),
+                        'Active runtime machine attribution unknown; no capacity exclusion')
                 if run['runtime_id'] in machine_ids:
                     require(isinstance(run.get('agent_id'), str) and run['agent_id'], 'Active runtime actor unavailable')
                     runs.append(run)
