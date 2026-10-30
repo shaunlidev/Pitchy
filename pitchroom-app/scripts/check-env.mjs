@@ -10,7 +10,7 @@ if ([...flags].some((flag) => !["--production", "--worker", "--live"].includes(f
 const environment = { ...process.env, ...(flags.has("--production") ? { NODE_ENV: "production" } : {}) };
 
 const localEnvPath = resolve(process.cwd(), "apps/web/.env.local");
-const localFilesAllowed = environment.NODE_ENV !== "production" && [undefined, "local"].includes(environment.PITCHROOM_DEPLOYMENT_ENV);
+const localFilesAllowed = !flags.has("--worker") && environment.NODE_ENV !== "production" && [undefined, "local"].includes(environment.PITCHROOM_DEPLOYMENT_ENV);
 if (localFilesAllowed && existsSync(localEnvPath)) {
   for (const rawLine of readFileSync(localEnvPath, "utf8").split(/\r?\n/)) {
     const line = rawLine.trim();

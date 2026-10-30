@@ -40,6 +40,8 @@ describe("runtime configuration boundary", () => {
       environment.DATABASE_URL.replace("/trial?", "/other?"),
       environment.DATABASE_URL + "&host=other.example.test",
       environment.DATABASE_URL.replace("sslmode=require", "sslmode=disable"),
+      environment.DATABASE_URL + "&sslmode=disable",
+      environment.DATABASE_URL + "&sslmode=require",
       "not-a-database-url", "https://db.example/trial",
     ]) expect(parseRuntimeConfiguration({ ...environment, DATABASE_URL: databaseUrl }).success).toBe(false);
     expect(parseRuntimeConfiguration({ ...environment, PITCHROOM_DATABASE_TARGET: "db.example:5432/other" }).success).toBe(false);

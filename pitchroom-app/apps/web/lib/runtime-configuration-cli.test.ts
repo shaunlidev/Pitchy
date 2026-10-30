@@ -49,6 +49,16 @@ describe("configuration CLI and worker entry", () => {
     expect(check({}, [], temporaryCwd("PITCHROOM_DEPLOYMENT_ENV=trial")).status).toBe(1);
   });
 
+  it("checks worker configuration from the same explicit environment used by its entry point", () => {
+    const cwd = temporaryCwd("PITCHROOM_RUNTIME=postgres-fake\nDATABASE_URL=postgres://localhost/synthetic\n");
+    const missing = check({}, ["--worker"], cwd);
+    expect(missing.status).toBe(1);
+    expect(missing.stderr).toContain("runtime.databaseUrl");
+    const explicit = check({ DATABASE_URL: "postgres://localhost/synthetic" }, ["--worker"], cwd);
+    expect(explicit.status).toBe(0);
+    expect(JSON.parse(explicit.stdout)).toMatchObject({ runtime: "postgres-fake", environment: "local" });
+  });
+
   it("reports complete declarations without credentials or a production PASS", () => {
     const result = check(deployedEnvironment());
     expect(result.status).toBe(0);

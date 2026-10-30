@@ -37,7 +37,8 @@ function databaseTarget(value: string, deployed: boolean): string | undefined {
     if (!["postgres:", "postgresql:"].includes(url.protocol) || !url.hostname || url.pathname.length < 2 || url.hash) return;
     if (deployed) {
       const allowedParameters = new Set(["sslmode", "channel_binding", "application_name"]);
-      if (!url.username || !url.password || [...url.searchParams.keys()].some((key) => !allowedParameters.has(key))) return;
+      const parameters = [...url.searchParams.keys()];
+      if (!url.username || !url.password || parameters.some((key) => !allowedParameters.has(key)) || new Set(parameters).size !== parameters.length) return;
       if (!["require", "verify-full"].includes(url.searchParams.get("sslmode") ?? "")) return;
     }
     return `${url.hostname}:${url.port || "5432"}${decodeURIComponent(url.pathname)}`;

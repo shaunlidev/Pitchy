@@ -99,7 +99,7 @@ deployment PASS. Validation makes no database or provider request.
 | `PITCHROOM_RUNTIME` | live |
 | `PITCHROOM_RELEASE_SHA` | Full lowercase 40-character Git SHA |
 | `PITCHROOM_SCHEMA_VERSION` | Expected schema identity; declaration only, not observed migration state |
-| `DATABASE_URL` | PostgreSQL URL with credentials; TLS `sslmode=require` or `verify-full`. Query parameters are limited to sslmode, channel_binding and application_name. No fragment or connection-target override. |
+| `DATABASE_URL` | PostgreSQL URL with credentials; TLS `sslmode=require` or `verify-full`. Query parameters are limited to sslmode, channel_binding and application_name, each appearing at most once. No fragment or connection-target override. |
 | `PITCHROOM_DATABASE_TARGET` | Credential-free `host:port/database`, matching the parsed URL. Omitted PostgreSQL port normalizes to 5432. This comparison does not attest actual server identity or credential isolation. |
 | `PITCHROOM_PROVIDER` | openai or deepseek, matching the allowed endpoint |
 | `OPENAI_BASE_URL` | Explicitly `https://api.openai.com/v1`, or the supported DeepSeek base `https://api.deepseek.com` / `/v1`; no userinfo, query or fragment. No provider fallback. |
