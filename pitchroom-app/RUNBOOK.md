@@ -99,7 +99,7 @@ deployment PASS. Validation makes no database or provider request.
 | `PITCHROOM_RUNTIME` | live |
 | `PITCHROOM_RELEASE_SHA` | Full lowercase 40-character Git SHA |
 | `PITCHROOM_SCHEMA_VERSION` | Exact SHA-256 fingerprint exported as `deploymentSchemaVersion` by the release migration manifest |
-| `DATABASE_URL` | Canonically serialized PostgreSQL URL with credentials, one DNS/IPv4 host, explicit port and a literal database name (no percent encoding or path separators). TLS `sslmode=verify-full` only. Process-wide `NODE_TLS_REJECT_UNAUTHORIZED` must be absent or `1`. Query parameters are limited to sslmode, channel_binding and application_name, each appearing at most once. No fragment or connection-target override. |
+| `DATABASE_URL` | Canonically serialized PostgreSQL URL with credentials, one DNS host, explicit port and a literal database name (no percent encoding or path separators). TLS `sslmode=verify-full` only. Process-wide `NODE_TLS_REJECT_UNAUTHORIZED` must be absent or `1`. Query parameters are limited to sslmode, channel_binding and application_name, each appearing at most once. No fragment or connection-target override. |
 | `PITCHROOM_DATABASE_TARGET` | Credential-free `host:port/database`, matching the supported URL exactly. The deployed URL must supply its port, so inherited `PGPORT` cannot change the client's target. This comparison does not attest actual server identity or credential isolation. |
 | `PITCHROOM_ENVIRONMENT_ID` | UUID for the provisioned environment, matching its independently initialized database identity row |
 | `PITCHROOM_DATABASE_ROLE` | Expected runtime SQL role, matching `current_user` and the identity row |
@@ -116,7 +116,7 @@ These references must eventually resolve to accepted artifacts under PIT-55/39.
 They are currently declarations, and deployed readiness remains refused.
 
 Deployed URLs omit no target fields. Encode reserved user/password characters
-using URL serialization, but use the database's literal name. Multi-host, IPv6,
+using URL serialization, but use the database's literal name. Multi-host, IPv4, IPv6,
 encoded database names and noncanonical URLs are refused because the installed
 driver can interpret them differently from the declaration parser. Local modes
 retain their existing URL compatibility; they do not attest a deployed target.
@@ -174,7 +174,11 @@ ledger does not detect arbitrary manual DDL drift; use reviewed migrations and
 restricted operator access.
 
 Deployment TLS validates the certificate chain and hostname with the installed
-Postgres driver. Local synthetic tests exercise real TLS handshakes. TLS and an
+Postgres driver. Literal IP hosts are refused for deployed configurations because
+postgres 3.4.9 omits their TLS host, causing Node to verify localhost instead.
+Local synthetic IP compatibility remains separate. Real-driver regression probes
+use distinct DNS-only and IP-only certificates, not a certificate carrying both
+identities. TLS and an
 identity row still cannot establish cloud account/project/branch ownership:
 PIT-32 must independently accept that receipt and its SHA before any release.
 Copying an identity row into another database is not provisioning acceptance.

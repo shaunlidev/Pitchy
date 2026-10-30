@@ -13,7 +13,7 @@ const parent = new URL(process.env.DATABASE_URL!);
 if (!["localhost", "127.0.0.1"].includes(parent.hostname) || parent.username !== "clarify_qa" || parent.pathname !== "/clarify_qa") throw new Error("Synthetic integration target required");
 const admin = postgres(parent.href, { max: 1 });
 const name = `readiness_${randomUUID().replaceAll("-", "")}`;
-const target = new URL(parent); target.pathname = `/${name}`;
+const target = new URL(parent); target.hostname = "localhost"; target.pathname = `/${name}`;
 const database = createDatabase(target.href);
 const repository = new PitchroomRepository(database.db);
 const observer = openDeploymentReadiness(target.href);

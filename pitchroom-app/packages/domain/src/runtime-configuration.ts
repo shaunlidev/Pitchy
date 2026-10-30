@@ -41,6 +41,8 @@ function databaseTarget(value: string, deployed: boolean): string | undefined {
     if (deployed) {
       // Keep the raw URL unambiguous for the installed driver's independent parser.
       if (url.href !== value || !url.port || !/^[a-zA-Z0-9.-]+$/.test(url.hostname) || databasePath !== url.pathname || databasePath.slice(1).includes("/")) return;
+      // postgres 3.4.9 omits the TLS host for IP sockets; Node then verifies localhost.
+      if (/^\d+(?:\.\d+){3}$/.test(url.hostname)) return;
       const allowedParameters = new Set(["sslmode", "channel_binding", "application_name"]);
       const parameters = [...url.searchParams.keys()];
       if (!url.username || !url.password || parameters.some((key) => !allowedParameters.has(key)) || new Set(parameters).size !== parameters.length) return;
