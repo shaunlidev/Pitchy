@@ -373,6 +373,7 @@ class Serial(Controller):
         return super().checkout(key, role, workdir)
 
     def stage(self, key, role, report, workdir):
+        if self.capacity: self.current(key, role)
         if self.capacity and role != 'developer': self.compatibility(self.lanes()[key])
         if self.capacity and role == 'developer':
             lane = self.lanes()[key]

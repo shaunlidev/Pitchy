@@ -284,6 +284,14 @@ class WiredCapacityTests(core.Tests):
         self.assertNotIn('OPENAI_API_KEY', actual)
         self.assertNotEqual(actual['DATABASE_URL'], 'personal database')
 
+    def test_wrong_stage_actor_cannot_rewrite_compatibility_base(self):
+        self.ctl.dispatch(True)
+        lane=self.ctl.lanes()['PIT-1'];lane['compatibility_base']='e'*40;self.ctl.save(lane)
+        before=self.ctl.lanes()['PIT-1']
+        with patch.dict(os.environ,{},clear=True), self.assertRaises(Hold):
+            self.ctl.stage('PIT-1','developer',self.root/'missing-report.json',self.repo)
+        self.assertEqual(self.ctl.lanes()['PIT-1'],before)
+
     def test_wired_machine_limit_blocks_remote_mutation(self):
         self.ctl.machine_inventory = lambda: observed(5)
         result = self.ctl.dispatch(True)
