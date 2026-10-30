@@ -138,6 +138,16 @@ class PipelineBehavior(unittest.TestCase):
         execute.assert_called_once_with('offline-eval')
         thread.join.assert_not_called()
 
+    def test_offline_failed_summary_sink_preserves_command_exit(self):
+        for code in (0, 7, 124):
+            with self.subTest(code=code), tempfile.TemporaryDirectory() as directory:
+                def output(value, **options):
+                    if value.startswith('offline-diagnostics:'):
+                        raise OSError('synthetic-failed-sink')
+                with patch.dict(os.environ, {'RUNNER_TEMP': directory}), patch.object(ci, 'diagnostic_context', return_value={'head': None}), patch.object(ci, 'offline_reports', side_effect=ValueError('synthetic-setup')), patch.object(ci.subprocess, 'run', return_value=subprocess.CompletedProcess([], code)) as child, patch('builtins.print', side_effect=output):
+                    self.assertEqual(ci.run_stage('offline-eval'), code)
+                child.assert_called_once()
+
     def test_unit_reports_are_fresh_and_separate_per_workspace(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()

@@ -285,7 +285,11 @@ def execute_stage(stage):
             summary = summarize_unit(workspaces, tracked, code, context) if workspaces else {'status': 'diagnostics_unavailable', 'exit': code, 'context': context, 'failures': [], 'omitted_failures': 0}
             print_unit_summary(summary, stage)
         except (OSError, ValueError, TypeError, AttributeError, RuntimeError):
-            print_unit_summary({'status': 'diagnostics_unavailable', 'failures': [], 'omitted_failures': 0}, stage)
+            try:
+                print_unit_summary({'status': 'diagnostics_unavailable', 'failures': [], 'omitted_failures': 0}, stage)
+            except OSError:
+                if stage != 'offline-eval':
+                    raise
     summary = os.environ.get('GITHUB_STEP_SUMMARY')
     if summary:
         with open(summary, 'a') as stream:
