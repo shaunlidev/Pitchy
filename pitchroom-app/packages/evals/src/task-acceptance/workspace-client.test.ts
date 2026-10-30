@@ -62,11 +62,14 @@ const add = (commandId = randomUUID(), expectedRevision = 0) => ({ attemptId: co
 
 it("persists the exact command before a real HTTP route mutation, then replays its saved receipt without a second POST", async () => {
   const f = await fixture(), input = add();
+  expect(f.client.getReceipt(input.command.commandId)).toEqual({ kind: "not_dispatched" });
   f.beforePost(() => {
     const state = verifyTaskSession(f.policy, f.client.reference);
     expect(state.observations.some(item => item.commandId === input.command.commandId && zKind(item.data) === "workspace_command_prepared")).toBe(true);
+    expect(f.client.getReceipt(input.command.commandId)).toMatchObject({ kind: "prepared" });
   });
   const first = await f.client.execute(input); expect(first.kind).toBe("confirmed"); expect(f.posts()).toBe(1);
+  expect(f.client.getReceipt(input.command.commandId)).toMatchObject({ kind: "outcome", outcome: first, prepared: { attemptId: input.attemptId, commandId: input.command.commandId } }); expect(f.posts()).toBe(1);
   const resumed = new IsolatedWorkspaceClient({ binding: f.binding, policy: f.policy, reference: f.client.reference });
   expect(await resumed.execute(input)).toEqual(first); expect(f.posts()).toBe(1);
   await expect(resumed.execute({ ...input, command: { ...input.command, text: "changed" } })).rejects.toThrow("WORKSPACE_COMMAND_REUSE_CONFLICT");
