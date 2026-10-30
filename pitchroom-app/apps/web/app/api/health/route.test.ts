@@ -26,11 +26,13 @@ describe("health readiness", () => {
   it("does not equate valid declarations and SELECT 1 with deployment readiness", async () => {
     for (const [key, value] of Object.entries(deployedEnvironment())) vi.stubEnv(key, value);
     const probe = vi.fn(async () => true);
-    const response = await healthResponse(probe);
+    const deploymentProbe = vi.fn(async () => ({ database: true, targetIdentity: false, schema: false, worker: false, authorization: false as const, failures: ["DATABASE_IDENTITY_MISMATCH"] }));
+    const response = await healthResponse(probe, deploymentProbe);
     expect(response.status).toBe(503);
     const body = await response.json();
     expect(body).toMatchObject({ status: "not_ready", environment: "trial", runtime: "live", releaseSha: "a".repeat(40), expectedSchemaVersion: "synthetic-schema-1", code: "DEPLOYMENT_READINESS_UNVERIFIED", checks: { configuration: true, database: true, targetIdentity: false, schema: false, worker: false, authorization: false } });
-    expect(probe).toHaveBeenCalledOnce();
+    expect(probe).not.toHaveBeenCalled();
+    expect(deploymentProbe).toHaveBeenCalledOnce();
     expect(JSON.stringify(body)).not.toMatch(/example|test-synthetic-provider-key|db.example/);
   });
 
@@ -43,6 +45,16 @@ describe("health readiness", () => {
     const probe = vi.fn(async () => true);
     expect((await healthResponse(probe)).status).toBe(200);
     expect(probe).toHaveBeenCalledWith("postgres://local/test");
+  });
+
+  it("reports observed database and worker readiness while authorization remains a release gate", async () => {
+    for (const [key, value] of Object.entries(deployedEnvironment())) vi.stubEnv(key, value);
+    const response = await healthResponse(undefined, async () => ({ database: true, targetIdentity: true, schema: true, worker: true, authorization: false, failures: ["AUTHORIZATION_UNVERIFIED"] }));
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({ checks: { targetIdentity: true, schema: true, worker: true, authorization: false } });
+    const failed = await healthResponse(undefined, async () => { throw new Error("postgres://secret@localhost/private"); });
+    expect(failed.status).toBe(503);
+    expect(await failed.text()).not.toMatch(/secret|private|postgres:/);
   });
 
   it("rejects an unknown runtime before probing storage or reporting ready", async () => {

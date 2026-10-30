@@ -21,6 +21,8 @@ const deploymentSchema = z.discriminatedUnion("kind", [
     kind: z.literal("deployed"), environment: z.enum(["staging", "trial", "production"]),
     releaseSha: z.string().regex(/^[a-f0-9]{40}$/), schemaVersion: identifier,
     databaseTarget: nonblank, transferApprovalId: identifier, budgetId: identifier,
+    environmentId: z.string().uuid(), databaseRole: identifier,
+    targetReceiptSha: z.string().regex(/^[a-f0-9]{64}$/),
   }),
 ]);
 export type RuntimeConfiguration = {
@@ -42,7 +44,7 @@ function databaseTarget(value: string, deployed: boolean): string | undefined {
       const allowedParameters = new Set(["sslmode", "channel_binding", "application_name"]);
       const parameters = [...url.searchParams.keys()];
       if (!url.username || !url.password || parameters.some((key) => !allowedParameters.has(key)) || new Set(parameters).size !== parameters.length) return;
-      if (!["require", "verify-full"].includes(url.searchParams.get("sslmode") ?? "")) return;
+      if (url.searchParams.get("sslmode") !== "verify-full") return;
     }
     return `${url.hostname}:${url.port || "5432"}${databasePath}`;
   } catch { return; }
@@ -71,10 +73,13 @@ export function parseRuntimeConfiguration(
   const selectedEnvironment = environment.PITCHROOM_DEPLOYMENT_ENV ?? (environment.NODE_ENV === "production" ? undefined : "local");
   if (!selectedEnvironment || !["local", "staging", "trial", "production"].includes(selectedEnvironment)) return refuse("PITCHROOM_DEPLOYMENT_ENV");
   const deployed = selectedEnvironment !== "local";
+  if (deployed && environment.NODE_TLS_REJECT_UNAUTHORIZED !== undefined && environment.NODE_TLS_REJECT_UNAUTHORIZED !== "1") return refuse("NODE_TLS_REJECT_UNAUTHORIZED");
   const deployment = deploymentSchema.safeParse(deployed ? {
     kind: "deployed", environment: selectedEnvironment,
     releaseSha: environment.PITCHROOM_RELEASE_SHA, schemaVersion: environment.PITCHROOM_SCHEMA_VERSION,
     databaseTarget: environment.PITCHROOM_DATABASE_TARGET,
+    environmentId: environment.PITCHROOM_ENVIRONMENT_ID, databaseRole: environment.PITCHROOM_DATABASE_ROLE,
+    targetReceiptSha: environment.PITCHROOM_TARGET_RECEIPT_SHA,
     transferApprovalId: environment.PITCHROOM_TRANSFER_APPROVAL_ID, budgetId: environment.PITCHROOM_BUDGET_ID,
   } : { kind: "local", environment: "local" });
   if (!deployment.success) return refuse(...deployment.error.issues.map((issue) => `deployment.${issue.path.join(".")}`));

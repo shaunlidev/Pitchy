@@ -22,6 +22,7 @@ describe("runtime configuration boundary", () => {
 
   it.each([
     "PITCHROOM_RELEASE_SHA", "PITCHROOM_SCHEMA_VERSION", "PITCHROOM_DATABASE_TARGET", "DATABASE_URL",
+    "PITCHROOM_ENVIRONMENT_ID", "PITCHROOM_DATABASE_ROLE", "PITCHROOM_TARGET_RECEIPT_SHA",
     "PITCHROOM_PROVIDER", "OPENAI_BASE_URL", "OPENAI_API_KEY", "OPENAI_MODEL",
     "PITCHROOM_LIVE_TRANSFER_ACK", "PITCHROOM_TRANSFER_APPROVAL_ID", "PITCHROOM_BUDGET_ID",
   ])("rejects missing or empty %s without leaking configuration values", (key) => {
@@ -39,12 +40,18 @@ describe("runtime configuration boundary", () => {
     for (const databaseUrl of [
       environment.DATABASE_URL.replace("/trial?", "/other?"),
       environment.DATABASE_URL + "&host=other.example.test",
-      environment.DATABASE_URL.replace("sslmode=require", "sslmode=disable"),
+      environment.DATABASE_URL.replace("sslmode=verify-full", "sslmode=disable"),
+      environment.DATABASE_URL.replace("sslmode=verify-full", "sslmode=require"),
       environment.DATABASE_URL + "&sslmode=disable",
       environment.DATABASE_URL + "&sslmode=require",
       "not-a-database-url", "https://db.example/trial",
     ]) expect(parseRuntimeConfiguration({ ...environment, DATABASE_URL: databaseUrl }).success).toBe(false);
     expect(parseRuntimeConfiguration({ ...environment, PITCHROOM_DATABASE_TARGET: "db.example:5432/other" }).success).toBe(false);
+  });
+
+  it("refuses process-wide TLS bypass for deployed connections", () => {
+    for (const value of ["0", "", "false"]) expect(parseRuntimeConfiguration({ ...deployedEnvironment(), NODE_TLS_REJECT_UNAUTHORIZED: value }).success).toBe(false);
+    expect(parseRuntimeConfiguration({ ...deployedEnvironment(), NODE_TLS_REJECT_UNAUTHORIZED: "1" }).success).toBe(true);
   });
 
   it("refuses unsupported providers and lookalike, credential-bearing or alternate endpoints", () => {
