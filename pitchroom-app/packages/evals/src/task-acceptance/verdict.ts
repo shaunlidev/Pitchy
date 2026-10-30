@@ -3,14 +3,15 @@ import { readWorkflowReviewContext, type WorkflowReviewContext } from "./workflo
 import { engineeringChecks } from "./checks";
 import { packetFindings, reviewAuthority, reviewRecords, targetAt, type ReviewRecord, type ReviewTarget, type ReviewPacket } from "./review";
 
-export type SemanticFacts = { confirmedFailures: string[]; disputes: string[]; missingOutputs: string[]; missingReviews: string[]; lowScores: string[]; reviewHashes: string[] };
+export type SemanticFacts = { confirmedFailures: string[]; disputes: string[]; missingOutputs: string[]; missingReviews: string[]; lowScores: string[]; noncriticalFindings: string[]; reviewHashes: string[] };
 /** Priority is deliberately total and independent from execution/tool failures. */
 export function semanticVerdict(facts: SemanticFacts) {
-  if (facts.confirmedFailures.length) return { kind: "fail", findingIds: facts.confirmedFailures };
-  if (facts.disputes.length) return { kind: "disputed", disputeIds: facts.disputes };
-  if (facts.missingOutputs.length) return { kind: "incomplete", missingOutputs: facts.missingOutputs };
-  if (facts.missingReviews.length) return { kind: "awaiting_review", missingReviewIds: facts.missingReviews };
-  if (facts.lowScores.length) return { kind: "fail", findingIds: facts.lowScores };
+  const actionable = facts.noncriticalFindings.length ? { actionableFindingIds: facts.noncriticalFindings } : {};
+  if (facts.confirmedFailures.length) return { kind: "fail", findingIds: facts.confirmedFailures, ...actionable };
+  if (facts.disputes.length) return { kind: "disputed", disputeIds: facts.disputes, ...actionable };
+  if (facts.missingOutputs.length) return { kind: "incomplete", missingOutputs: facts.missingOutputs, ...actionable };
+  if (facts.missingReviews.length) return { kind: "awaiting_review", missingReviewIds: facts.missingReviews, ...actionable };
+  if (facts.lowScores.length || facts.noncriticalFindings.length) return { kind: "fail", findingIds: [...facts.lowScores, ...facts.noncriticalFindings], ...actionable };
   return { kind: "pass", reviewHashes: facts.reviewHashes };
 }
 export function scoreReview(stage: ReviewTarget["stage"], scores: ReviewPacket["scores"], directionDifference: string): "missing" | "below_threshold" | "pass" {
@@ -21,7 +22,7 @@ export function scoreReview(stage: ReviewTarget["stage"], scores: ReviewPacket["
   return scores.some(score => score.score < minimum) || (stage === "positioning" && scores.reduce((sum, score) => sum + score.score, 0) / scores.length < taskRubric.positioning.minimumMean) ? "below_threshold" : "pass";
 }
 function targetFacts(target: ReviewTarget, records: ReviewRecord[]): SemanticFacts {
-  const facts: SemanticFacts = { confirmedFailures: [], disputes: [], missingOutputs: [], missingReviews: [], lowScores: [], reviewHashes: [] };
+  const facts: SemanticFacts = { confirmedFailures: [], disputes: [], missingOutputs: [], missingReviews: [], lowScores: [], noncriticalFindings: [], reviewHashes: [] };
   const packets = records.filter(item => item.kind === "review_packet" && hashTaskValue(item.binding) === hashTaskValue(target.binding));
   if (!packets.length) facts.missingReviews.push(target.binding.checkpointHash);
   const findings = new Map<string, { critical: boolean; values: { verdict: string; packetHash: string }[] }>();
@@ -37,12 +38,12 @@ function targetFacts(target: ReviewTarget, records: ReviewRecord[]): SemanticFac
     else if (score === "below_threshold") facts.lowScores.push(`scores:${packet.id}`);
   }
   for (const [key, finding] of findings) {
-    const resolution = records.find(item => item.kind === "review_adjudication" && item.findingKey === key && hashTaskValue(item.binding) === hashTaskValue(target.binding));
     const hashes = [...new Set(finding.values.map(item => item.packetHash))].sort();
+    const resolution = records.find(item => item.kind === "review_adjudication" && item.findingKey === key && hashTaskValue(item.binding) === hashTaskValue(target.binding) && hashTaskValue([...item.packetHashes].sort()) === hashTaskValue(hashes));
     const resolved = resolution?.kind === "review_adjudication" && hashTaskValue([...resolution.packetHashes].sort()) === hashTaskValue(hashes) ? resolution.verdict : null;
     const values = new Set(finding.values.map(item => item.verdict));
-    if (resolved === "violated" || (!resolved && values.size === 1 && values.has("violated"))) facts.confirmedFailures.push(key);
-    else if (resolved === "disputed" || (!resolved && (values.size > 1 || values.has("disputed")))) facts.disputes.push(key);
+    if (resolved === "violated" || (!resolved && values.size === 1 && values.has("violated"))) (finding.critical ? facts.confirmedFailures : facts.noncriticalFindings).push(key);
+    else if (resolved === "disputed" || (!resolved && (values.size > 1 || values.has("disputed")))) (finding.critical ? facts.disputes : facts.noncriticalFindings).push(key);
   }
   return facts;
 }
@@ -69,13 +70,13 @@ export function assessTask(rawRun: unknown) {
     }
     const latest = new Map<string, ReviewTarget>();
     for (const target of targets) if (target.stage !== "actual_use") latest.set(target.stage, target);
-    const aggregate: SemanticFacts = { confirmedFailures: [], disputes: [], missingOutputs: [], missingReviews: [], lowScores: [], reviewHashes: [] };
+    const aggregate: SemanticFacts = { confirmedFailures: [], disputes: [], missingOutputs: [], missingReviews: [], lowScores: [], noncriticalFindings: [], reviewHashes: [] };
     for (const stage of context.bundle.taskCase.spec.requiredStages) {
       if (stage === "actual_use") continue;
       const target = latest.get(stage);
       if (!target) { aggregate.missingOutputs.push(stage); continue; }
       const facts = targetFacts(target, records);
-      for (const key of ["confirmedFailures", "disputes", "missingOutputs", "missingReviews", "lowScores", "reviewHashes"] satisfies (keyof SemanticFacts)[]) aggregate[key].push(...facts[key]);
+      for (const key of ["confirmedFailures", "disputes", "missingOutputs", "missingReviews", "lowScores", "noncriticalFindings", "reviewHashes"] satisfies (keyof SemanticFacts)[]) aggregate[key].push(...facts[key]);
     }
     const firstByStage = new Set<string>();
     const attemptHistory = targets.map(target => {

@@ -4,7 +4,7 @@ import { fixture, httpFixture } from "./review-fixture";
 import { appendWorkflowReview, advance, prepare, readWorkflowReviewContext } from "./workflow";
 import { taskRubric } from "./schema";
 import { runTaskAcceptanceCLI } from "./cli";
-const empty = (): SemanticFacts => ({ confirmedFailures: [], disputes: [], missingOutputs: [], missingReviews: [], lowScores: [], reviewHashes: [] });
+const empty = (): SemanticFacts => ({ confirmedFailures: [], disputes: [], missingOutputs: [], missingReviews: [], lowScores: [], noncriticalFindings: [], reviewHashes: [] });
 it("uses explicit semantic precedence without averaging away failures or hiding disputes", () => {
   const facts = empty();
   expect(semanticVerdict(facts).kind).toBe("pass");

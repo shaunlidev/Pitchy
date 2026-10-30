@@ -4,7 +4,7 @@ import { readFileSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { expect, it } from "vitest";
 import { z } from "zod";
-import { fixture, httpFixture, humanDecision } from "./review-fixture";
+import { fixture, httpFixture, humanDecision, reachDeck } from "./review-fixture";
 import { advance, audit, prepare, readWorkflowReviewContext, recordDecision } from "./workflow";
 import { issueReviewPacket, recordReviewEvidence, calibrationBank, inventoryReviewFields, reviewRecords, packetFindings, validSpan, reviewEvidenceSources, targetAt } from "./review";
 import { loadEvidencePolicy, recoverEvidenceLock } from "./capacity";
@@ -41,17 +41,18 @@ it("enumerates numeric facts and unknown schema strings instead of silently exem
   expect(fields).toHaveLength(5);
   expect(fields.filter(item => item.classification === "prose").map(item => item.pointer)).toEqual(["/result/percent", "/result/achieved", "/result/newStatement", "/result/id"]);
 });
-async function reviewedFixture() {
-  const f = await httpFixture(), run = prepare(f.input);
+async function reviewedFixture(fullTask = false) {
+  const f = await httpFixture(fullTask), run = prepare(f.input);
   const roles = humanAuthority(); roles.actors.push({ actorId: "reviewer-2", personId: "person-2", role: "human", permissions: ["review"] });
+  roles.actors.push({ actorId: "reviewer-3", personId: "person-3", role: "human", permissions: ["review"] });
   roles.actors.push({ actorId: "alias", personId: "person-1", role: "human", permissions: ["review"] });
   recordReviewEvidence(run, roles);
   const progress = await advance(run); if (progress.kind !== "awaiting_human") throw new Error("Missing boundary");
   const calibrate = (actorId: string, suffix = "", good = true) => ({ kind: "review_calibration", id: `calibration-${actorId}${suffix}`, at: "2026-10-30T00:00:00Z", actorId,
     authorityHash: hashTaskValue(roles), bankHash: hashTaskValue(calibrationBank), answers: calibrationBank.map(item => ({ caseId: item.id, supportVerdict: good ? item.expected : "direct_support", reason: "Explicit synthetic calibration answer." })) });
   for (const actor of roles.actors) recordReviewEvidence(run, calibrate(actor.actorId));
-  const packet = (actorId: string, suffix = "") => {
-    const template = issueReviewPacket(run, { checkpointHash: progress.checkpointHash, actorId });
+  const packet = (actorId: string, suffix = "", checkpointHash = progress.checkpointHash) => {
+    const template = issueReviewPacket(run, { checkpointHash, actorId });
     return { kind: "review_packet", id: `packet-${actorId}${suffix}`, at: "2026-10-30T00:00:00Z", actorId, authorityHash: template.authorityHash, calibrationHash: hashTaskValue(calibrate(actorId)), binding: template.binding,
       fields: template.fields.filter(item => item.classification === "prose").map(item => ({ kind: "no_factual_claim", pointer: item.pointer, valueHash: item.valueHash, readWholeField: true, reason: "Synthetic review disposition; not a claim about real output quality." })),
       oracle: template.oracle.map(item => ({ oracleId: item.id, verdict: "preserved", fieldPointers: [template.fields[0]?.pointer ?? "/"], reason: "Synthetic oracle review." })), scores: [], directionDifference: "", assistance: [] };
@@ -78,25 +79,50 @@ it("retains failed calibration without allowing it to certify reviews and reject
 }, 20000);
 it.each(["critical", "noncritical"])("preserves opposing %s judgments and requires full authorized adjudication references", async severity => {
   const f = await reviewedFixture(), template = issueReviewPacket(f.run, { checkpointHash: f.progress.checkpointHash, actorId: "reviewer" });
-  const field = template.fields.find(item => item.classification === "prose" && typeof item.value === "string" && item.value.length);
+  const field = template.fields.find(item => item.classification === "prose" && typeof item.value === "string" && item.value.length > 1);
   if (!field || typeof field.value !== "string") throw new Error("Missing text");
   const fieldText = field.value;
   const source = readWorkflowReviewContext(f.run).bundle.fixture.sources[0]; if (!source) throw new Error("Missing source");
   const make = (actorId: string, support: "contradicted" | "direct_support") => {
     const packet = f.packet(actorId), judgment = { preserved: true, reason: "Synthetic boundary judgment." };
-    return { ...packet, fields: packet.fields.map(item => item.pointer !== field.pointer ? item : { kind: "claims", pointer: field.pointer, valueHash: field.valueHash, readWholeField: true, allKeyClaimsExtracted: true,
-      claims: [{ claimId: `claim-${actorId}`, checkpointHash: template.binding.checkpointHash, location: { pointer: field.pointer, start: 0, end: fieldText.length }, text: fieldText, nature: "fact", evidenceRefs: [{ sourceId: source.id, sourceHash: hashTaskValue(source), quote: source.material, start: 0, end: source.material.length }], supportVerdict: support, conditions: judgment, time: judgment, attribution: judgment, certainty: judgment, severity, reviewer: actorId, reason: `Synthetic ${support} position.` }] }) };
+    const claim = { claimId: `claim-${actorId}`, checkpointHash: template.binding.checkpointHash, location: { pointer: field.pointer, start: 0, end: fieldText.length }, text: fieldText, nature: "fact", evidenceRefs: [{ sourceId: source.id, sourceHash: hashTaskValue(source), quote: source.material, start: 0, end: source.material.length }], supportVerdict: support, conditions: judgment, time: judgment, attribution: judgment, certainty: judgment, severity, reviewer: actorId, reason: `Synthetic ${support} position.` };
+    const claims = severity === "critical" ? [claim, { ...claim, claimId: `secondary-${actorId}`, location: { pointer: field.pointer, start: 0, end: 1 }, text: fieldText.slice(0, 1), supportVerdict: "contradicted", severity: "noncritical" }] : [claim];
+    return { ...packet, fields: packet.fields.map(item => item.pointer !== field.pointer ? item : { kind: "claims", pointer: field.pointer, valueHash: field.valueHash, readWholeField: true, allKeyClaimsExtracted: true, claims }) };
   };
   const a = make("reviewer", "contradicted"), b = make("reviewer-2", "direct_support");
-  recordReviewEvidence(f.run, a); expect(assessTask(f.run)).toMatchObject({ semantic: { kind: "fail" } });
-  recordReviewEvidence(f.run, b); expect(assessTask(f.run)).toMatchObject({ semantic: { kind: "disputed" } });
+  const inconsistent = { ...a, fields: a.fields.map(item => {
+    if (!("claims" in item)) return item;
+    const claim = item.claims[0]; if (!claim) throw new Error("Missing claim");
+    return { ...item, claims: [claim, { ...claim, claimId: "opposite-same-span", supportVerdict: "direct_support" }] };
+  }) };
+  expect(() => recordReviewEvidence(f.run, inconsistent)).toThrow("REVIEW_INCONSISTENT_FINDING");
+  expect(reviewRecords(readWorkflowReviewContext(f.run)).filter(item => item.kind === "review_packet")).toHaveLength(0);
+  recordReviewEvidence(f.run, a); expect(assessTask(f.run)).toMatchObject({ semantic: { kind: severity === "critical" ? "fail" : "incomplete" } });
+  recordReviewEvidence(f.run, b); expect(assessTask(f.run)).toMatchObject({ semantic: { kind: severity === "critical" ? "disputed" : "incomplete" } });
   const packets = reviewRecords(readWorkflowReviewContext(f.run)).filter(item => item.kind === "review_packet");
   const first = packets[0]; if (!first || first.kind !== "review_packet") throw new Error("Missing packet");
   const key = packetFindings(first, template).find(item => item.verdict === "violated")?.key; if (!key) throw new Error("Missing finding");
-  const resolution = { kind: "review_adjudication", id: "resolve-1", at: "2026-10-30T00:00:00Z", actorId: "reviewer", authorityHash: template.authorityHash, binding: template.binding, findingKey: key, packetHashes: packets.map(hashTaskValue), verdict: "violated", reason: "Material owner preserves both reasons and confirms the false claim." };
+  const resolution = { kind: "review_adjudication", id: "resolve-1", at: "2026-10-30T00:00:00Z", actorId: "reviewer", authorityHash: template.authorityHash, binding: template.binding, findingKey: key, packetHashes: packets.map(hashTaskValue), verdict: "preserved", reason: "Material owner explicitly resolves both reasons." };
   expect(() => recordReviewEvidence(f.run, { ...resolution, packetHashes: [hashTaskValue(a)] })).toThrow("REVIEW_ADJUDICATION_MISSING_REASON");
   expect(() => recordReviewEvidence(f.run, { ...resolution, actorId: "reviewer-2" })).toThrow("REVIEW_ACTOR_NOT_AUTHORIZED");
-  recordReviewEvidence(f.run, resolution); expect(assessTask(f.run)).toMatchObject({ semantic: { kind: "fail" } }); expect(reviewRecords(readWorkflowReviewContext(f.run)).filter(item => item.kind === "review_packet")).toHaveLength(2);
+  const originalResolutionHash = hashTaskValue(resolution);
+  const firstResolution = recordReviewEvidence(f.run, resolution); expect(recordReviewEvidence(f.run, resolution)).toEqual(firstResolution);
+  expect(assessTask(f.run)).toMatchObject({ semantic: { kind: "incomplete" } });
+  expect(() => recordReviewEvidence(f.run, { ...resolution, id: "same-set-again", verdict: "violated" })).toThrow("REVIEW_ADJUDICATION_ALREADY_RECORDED");
+  recordReviewEvidence(f.run, make("reviewer-3", "contradicted"));
+  expect(assessTask(f.run)).toMatchObject({ semantic: { kind: severity === "critical" ? "disputed" : "incomplete" } });
+  const allPackets = reviewRecords(readWorkflowReviewContext(f.run)).filter(item => item.kind === "review_packet");
+  const expanded = { ...resolution, id: "resolve-2", packetHashes: allPackets.map(hashTaskValue), verdict: "violated", reason: "Explicit expanded-set resolution considers the third reason." };
+  expect(() => recordReviewEvidence(f.run, { ...expanded, packetHashes: resolution.packetHashes })).toThrow("REVIEW_ADJUDICATION_MISSING_REASON");
+  const secondResolution = recordReviewEvidence(f.run, expanded); expect(recordReviewEvidence(f.run, expanded)).toEqual(secondResolution);
+  const beforeOldReplay = readWorkflowReviewContext(f.run).reference;
+  expect(recordReviewEvidence(f.run, resolution).recordHash).toBe(firstResolution.recordHash);
+  expect(readWorkflowReviewContext(f.run).reference).toEqual(beforeOldReplay);
+  const assessment = assessTask(f.run); expect(assessment).toMatchObject({ semantic: { kind: severity === "critical" ? "fail" : "incomplete" } });
+  if (assessment.kind !== "task_assessment" || !assessment.attemptHistory) throw new Error("Missing assessment");
+  expect(assessment.attemptHistory.find(item => item.binding.checkpointHash === template.binding.checkpointHash)?.semantic.kind).toBe("fail");
+  const resolutions = reviewRecords(readWorkflowReviewContext(f.run)).filter(item => item.kind === "review_adjudication");
+  expect(resolutions.map(hashTaskValue)).toEqual([originalResolutionHash, hashTaskValue(expanded)]);
 }, 20000);
 
 it("binds UTF-16 spans without splitting surrogate pairs or accepting code-point offsets", () => {
@@ -168,3 +194,21 @@ it("exposes exact resolved retraction words without upgrading the statement to a
   if (!emptyMaterials) throw new Error("Missing actual initial checkpoint");
   expect(() => targetAt(context, emptyMaterials.checkpointHash)).toThrow("REVIEW_OUTPUT_MISSING");
 }, 20000);
+
+it("keeps distinct compound spans and lower-priority findings while missing scores remain awaiting review", async () => {
+  const f = await reviewedFixture(true); await reachDeck(f.run);
+  const context = readWorkflowReviewContext(f.run), checkpoint = context.snapshots.find(item => item.input.stage === "positioning" && item.workspace.positioning);
+  if (!checkpoint) throw new Error("Missing positioning output");
+  const template = issueReviewPacket(f.run, { checkpointHash: checkpoint.checkpointHash, actorId: "reviewer" });
+  const field = template.fields.find(item => typeof item.value === "string" && item.value.length > 1 && item.classification === "prose");
+  if (!field || typeof field.value !== "string") throw new Error("Missing compound field");
+  const text = field.value, base = f.packet("reviewer", "-positioning", checkpoint.checkpointHash), kept = { preserved: true, reason: "Synthetic boundary." };
+  const claims = [0, 1].map(start => ({ claimId: `compound-${start}`, checkpointHash: template.binding.checkpointHash, location: { pointer: field.pointer, start, end: start + 1 }, text: text.slice(start, start + 1), nature: "fact", evidenceRefs: [], supportVerdict: "contradicted", conditions: kept, time: kept, attribution: kept, certainty: kept, severity: "noncritical", reviewer: "reviewer", reason: "Distinct synthetic compound span." }));
+  recordReviewEvidence(f.run, { ...base, fields: base.fields.map(item => item.pointer === field.pointer ? { kind: "claims", pointer: item.pointer, valueHash: item.valueHash, readWholeField: true, allKeyClaimsExtracted: true, claims } : item) });
+  const assessment = assessTask(f.run); if (assessment.kind !== "task_assessment" || !assessment.attemptHistory) throw new Error("Missing assessment");
+  expect(assessment.semantic.kind).toBe("incomplete");
+  expect(assessment.attemptHistory.find(item => item.binding.checkpointHash === checkpoint.checkpointHash)?.semantic).toMatchObject({ kind: "awaiting_review", actionableFindingIds: expect.any(Array) });
+  const stored = reviewRecords(readWorkflowReviewContext(f.run)).find(item => item.kind === "review_packet");
+  if (!stored || stored.kind !== "review_packet") throw new Error("Missing persisted packet");
+  expect(packetFindings(stored, template).filter(item => item.verdict === "violated")).toHaveLength(2);
+}, 30000);

@@ -195,6 +195,13 @@ function validatePacket(context: WorkflowReviewContext, packet: ReviewPacket) {
     if (item.fieldPointers.some(pointer => !target.fields.some(field => field.pointer === pointer))) throw new Error("REVIEW_ORACLE_UNKNOWN_FIELD");
     if (rule?.kind === "must_preserve" && item.verdict === "preserved" && !item.fieldPointers.length) throw new Error("REVIEW_ORACLE_OMISSION");
   }
+  const dispositions = new Map<string, string>();
+  for (const finding of packetFindings(packet, target)) {
+    const disposition = hashTaskValue({ verdict: finding.verdict, critical: finding.critical });
+    const prior = dispositions.get(finding.key);
+    if (prior && prior !== disposition) throw new Error("REVIEW_INCONSISTENT_FINDING");
+    dispositions.set(finding.key, disposition);
+  }
   const dimensions: readonly string[] = target.stage === "positioning" ? [...taskRubric.positioning.dimensions] : ["story_initial", "story_revision", "deck"].includes(target.stage) ? [...taskRubric.storyDeck.dimensions] : [];
   if (new Set(packet.scores.map(item => item.dimension)).size !== packet.scores.length || packet.scores.some(item => !dimensions.includes(item.dimension))) throw new Error("REVIEW_SCORE_DIMENSIONS");
   const roles = reviewAuthority(context);
@@ -226,7 +233,7 @@ function validateReviewRecord(context: WorkflowReviewContext, input: ReviewRecor
         if (new Set(input.packetHashes).size !== input.packetHashes.length || referenced.length !== input.packetHashes.length || referenced.some(item => item.kind !== "review_packet" || hashTaskValue(item.binding) !== hashTaskValue(input.binding) || !packetFindings(item, target).some(finding => finding.key === input.findingKey))) throw new Error("REVIEW_ADJUDICATION_BINDING");
         const allRelevant = records.filter(item => item.kind === "review_packet" && hashTaskValue(item.binding) === hashTaskValue(input.binding) && packetFindings(item, target).some(finding => finding.key === input.findingKey));
         sameInventory(input.packetHashes, allRelevant.map(hashTaskValue), "REVIEW_ADJUDICATION_MISSING_REASON");
-        if (records.some(item => item.kind === "review_adjudication" && item.findingKey === input.findingKey && item.id !== input.id)) throw new Error("REVIEW_ADJUDICATION_ALREADY_RECORDED");
+        if (records.some(item => item.kind === "review_adjudication" && item.findingKey === input.findingKey && hashTaskValue(item.binding) === hashTaskValue(input.binding) && hashTaskValue([...item.packetHashes].sort()) === hashTaskValue([...input.packetHashes].sort()) && item.id !== input.id)) throw new Error("REVIEW_ADJUDICATION_ALREADY_RECORDED");
       }
       if (input.kind === "review_use") {
         const target = targetBinding(context, input.binding), snapshot = context.snapshots.find(item => item.checkpointHash === target.binding.checkpointHash);
@@ -252,7 +259,9 @@ export function reviewRecords(context: WorkflowReviewContext): ReviewRecord[] {
 export function recordReviewEvidence(rawRun: unknown, rawInput: unknown) {
   const input = recordSchema.parse(rawInput);
   return appendWorkflowReview(rawRun, context => {
-    reviewRecords(context); validateReviewRecord(context, input);
+    reviewRecords(context);
+    const prior = context.records.find(record => record.id === `review:${input.id}`);
+    if (!prior || hashTaskValue(prior.data) !== hashTaskValue(input)) validateReviewRecord(context, input);
     const checkpointHash = "binding" in input ? input.binding.checkpointHash : input.kind === "provider_capture" ? input.toCheckpoint : null;
     return { id: `review:${input.id}`, at: input.at, checkpointHash, data: input };
   });
