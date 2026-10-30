@@ -15,6 +15,7 @@ import { addFixtureMaterial, readFixtureState, resetFixtureState } from "../../.
 import { hashTaskBytes, hashTaskValue } from "./schema";
 import { advance, audit, prepare, recordDecision, report } from "./workflow";
 import { loadEvidencePolicy } from "./capacity";
+import { runTaskAcceptanceCLI } from "./cli";
 import { appendTaskCheckpoint, appendTaskObservation, verifyTaskSession } from "./session";
 
 const roots: string[] = [];
@@ -88,6 +89,96 @@ it("prepares a frozen private run locally with no HTTP and keeps semantic/use ve
   expect(result).toMatchObject({ kind: "workflow_integrity_only", execution: "prepared", nextStage: "materials", semantic: "not_evaluated", userTask: "not_observed", checkpointCount: 0, purpose: "tool_validation" });
   expect(result.budget.sessionBytes + result.budget.maximumHandleBytes).toBe(f.input.maximumBytes);
   expect(result.reference.sequence).toBe(2);
+});
+
+it("persists a stopped runtime hold across CLI restarts without HTTP or rebinding", async () => {
+  const f = fixture(), runtime = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+  const exited = new Promise<void>((done, reject) => { runtime.once("exit", () => done()); runtime.once("error", reject); });
+  try {
+    await new Promise<void>((done, reject) => { runtime.once("spawn", done); runtime.once("error", reject); });
+    const receipt = JSON.parse(readFileSync(f.input.launchReceiptFile, "utf8")); receipt.instance.pid = runtime.pid;
+    writeFileSync(f.input.launchReceiptFile, JSON.stringify(receipt));
+    const run = prepare(f.input), locator = readFileSync(run.referenceFile), original = files(f.sessionRoot);
+    runtime.kill("SIGKILL"); await exited;
+    const fetch = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("Unexpected HTTP"));
+    const expected = { kind: "held", reason: "WORKFLOW_RUNTIME_STOPPED", step: "materials" };
+    let output = "";
+    expect(await runTaskAcceptanceCLI(["advance", "--run", run.referenceFile], value => { output += value; })).toBe(2);
+    expect(JSON.parse(output).result).toEqual(expected);
+    expect(fetch).not.toHaveBeenCalled();
+    expect(audit(run)).toMatchObject({ execution: "held", integrity: "valid", checkpointCount: 0 });
+    for (const [path, hash] of Object.entries(original)) expect(hashTaskBytes(readFileSync(path))).toBe(hash);
+    // A replacement launch receipt cannot silently rebind the frozen session, even to a live PID.
+    receipt.instance.pid = process.pid; receipt.instance.instanceId = randomUUID();
+    writeFileSync(f.input.launchReceiptFile, JSON.stringify(receipt));
+    const heldFiles = files(join(f.root, "pitchroom-app/.artifacts"));
+    expect(await advance(run)).toEqual(expected);
+    const restarted = await advanceProcess(run.referenceFile).result;
+    expect(restarted.code).toBe(2); expect(JSON.parse(restarted.stdout).result).toEqual(expected);
+    expect(files(join(f.root, "pitchroom-app/.artifacts"))).toEqual(heldFiles);
+    expect(readFileSync(run.referenceFile)).toEqual(locator);
+    expect(fetch).not.toHaveBeenCalled();
+  } finally { if (runtime.exitCode === null && runtime.signalCode === null) runtime.kill("SIGKILL"); await exited; }
+}, 20000);
+
+it("holds a valid decision when the bound runtime stops without recording adoption", async () => {
+  const f = await httpFixture(), run = prepare(f.input), view = humanViewSchema.parse(await advance(run));
+  const before = f.commands.length, locator = readFileSync(run.referenceFile);
+  vi.spyOn(process, "kill").mockImplementation(() => { throw Object.assign(new Error("stopped"), { code: "ESRCH" }); });
+  const fetch = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("Unexpected HTTP"));
+  const result = await recordDecision({ run, decision: decision(view, { kind: "keep_unknown", versionKey: view.workspace.currentVersionId }) });
+  expect(result).toEqual({ kind: "held", reason: "WORKFLOW_RUNTIME_STOPPED", step: "understanding_review" });
+  expect(audit(run)).toMatchObject({ execution: "held", integrity: "valid" });
+  expect(f.commands).toHaveLength(before); expect(fetch).not.toHaveBeenCalled();
+  expect(readFileSync(run.referenceFile)).toEqual(locator);
+  expect(await advance(run)).toEqual(result);
+});
+
+it("holds a restarted identity at the same origin before workspace HTTP or adoption", async () => {
+  const f = await httpFixture(), run = prepare(f.input), view = humanViewSchema.parse(await advance(run));
+  const locator = readFileSync(run.referenceFile), before = f.commands.length;
+  vi.stubEnv("PITCHROOM_EVAL_INSTANCE_ID", randomUUID());
+  const fetch = vi.spyOn(globalThis, "fetch");
+  expect(await recordDecision({ run, decision: decision(view, { kind: "keep_unknown", versionKey: view.workspace.currentVersionId }) }))
+    .toEqual({ kind: "held", reason: "WORKSPACE_INSTANCE_MISMATCH", step: "understanding_review" });
+  expect(fetch.mock.calls.map(([url]) => new URL(String(url)).pathname)).toEqual(["/api/health"]);
+  expect(f.commands).toHaveLength(before); expect(readFileSync(run.referenceFile)).toEqual(locator);
+  expect(audit(run)).toMatchObject({ execution: "held", integrity: "valid", pendingDecisionId: null });
+  const stable = files(join(f.root, "pitchroom-app/.artifacts"));
+  expect(await advance(run)).toMatchObject({ kind: "held", reason: "WORKSPACE_INSTANCE_MISMATCH" });
+  expect(fetch).toHaveBeenCalledTimes(1); expect(files(join(f.root, "pitchroom-app/.artifacts"))).toEqual(stable);
+});
+
+it("holds a changed project readback without changing the bound project or dispatching", async () => {
+  const f = await httpFixture(), run = prepare(f.input), locator = readFileSync(run.referenceFile);
+  const originalFetch = globalThis.fetch;
+  const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (...args) => {
+    const response = await originalFetch(...args);
+    if (new URL(String(args[0])).pathname !== "/api/workspace") return response;
+    const body = await response.json(); body.project.id = randomUUID();
+    return Response.json(body, { status: response.status, headers: response.headers });
+  });
+  expect(await advance(run)).toEqual({ kind: "held", reason: "WORKSPACE_PROJECT_OR_RUNTIME_MISMATCH", step: "materials" });
+  expect(fetch.mock.calls.map(([url]) => new URL(String(url)).pathname)).toEqual(["/api/health", "/api/workspace"]);
+  expect(f.commands).toHaveLength(0); expect(readFileSync(run.referenceFile)).toEqual(locator);
+  expect(audit(run)).toMatchObject({ execution: "held", integrity: "valid", checkpointCount: 0 });
+});
+
+it.each(["EPERM", "EINVAL"])("keeps an unrelated runtime probe error %s as an execution error", async code => {
+  const f = fixture(), run = prepare(f.input), before = files(join(f.root, "pitchroom-app/.artifacts"));
+  vi.spyOn(process, "kill").mockImplementation(() => { throw Object.assign(new Error("probe refused"), { code }); });
+  const fetch = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("Unexpected HTTP"));
+  let output = "";
+  expect(await runTaskAcceptanceCLI(["advance", "--run", run.referenceFile], value => { output += value; })).toBe(1);
+  expect(JSON.parse(output).errorCode).toBe(code); expect(fetch).not.toHaveBeenCalled();
+  expect(files(join(f.root, "pitchroom-app/.artifacts"))).toEqual(before);
+});
+
+it("does not classify an ESRCH from HTTP as a stopped-runtime hold", async () => {
+  const f = fixture(), run = prepare(f.input), before = files(join(f.root, "pitchroom-app/.artifacts"));
+  vi.spyOn(globalThis, "fetch").mockRejectedValue(Object.assign(new Error("unrelated"), { code: "ESRCH" }));
+  await expect(advance(run)).rejects.toMatchObject({ code: "ESRCH" });
+  expect(files(join(f.root, "pitchroom-app/.artifacts"))).toEqual(before);
 });
 
 it("repeat prepare and read-only audit/report preserve every original byte", () => {

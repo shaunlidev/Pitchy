@@ -61,6 +61,10 @@ export function inspectWorkspaceReceipt(input: { state: ReturnType<typeof verify
     return { kind: "outcome", prepared, outcome: saved.outcome, outcomeHash: hashTaskValue(rawOutcome.data) } satisfies { kind: "outcome"; prepared: typeof prepared; outcome: typeof saved.outcome; outcomeHash: string };
 }
 
+export class WorkspaceBindingUnavailableError extends Error {
+  constructor(readonly reason: "WORKSPACE_RUNTIME_STOPPED" | "WORKSPACE_INSTANCE_MISMATCH" | "WORKSPACE_PROJECT_OR_RUNTIME_MISMATCH") { super(reason); }
+}
+
 export class IsolatedWorkspaceClient {
   readonly #binding: z.infer<typeof bindingSchema>;
   readonly #policy: EvidencePolicy;
@@ -99,15 +103,19 @@ export class IsolatedWorkspaceClient {
   }
   async #verifyInstance() {
     // This receipt must come from an operator-owned isolated launch, never discovery of a daily service.
-    process.kill(this.#binding.instance.pid, 0);
+    try { process.kill(this.#binding.instance.pid, 0); }
+    catch (error) {
+      if (z.object({ code: z.literal("ESRCH") }).safeParse(error).success) throw new WorkspaceBindingUnavailableError("WORKSPACE_RUNTIME_STOPPED");
+      throw error;
+    }
     const response = await this.#fetch("/api/health");
     const health = z.object({ status: z.literal("ready"), runtime: z.enum(["fixture", "postgres-fake"]), evaluationInstance: evaluationInstanceSchema }).parse(response.payload);
-    if (response.status !== 200 || health.runtime !== this.#binding.instance.runtime || hashTaskValue(health.evaluationInstance) !== hashTaskValue(this.#binding.instance)) throw new Error("WORKSPACE_INSTANCE_MISMATCH");
+    if (response.status !== 200 || health.runtime !== this.#binding.instance.runtime || hashTaskValue(health.evaluationInstance) !== hashTaskValue(this.#binding.instance)) throw new WorkspaceBindingUnavailableError("WORKSPACE_INSTANCE_MISMATCH");
   }
   #parseWorkspace(response: { mode: string | null; payload: unknown }) {
     const state = workspaceStateSchema.parse(response.payload);
     const expectedMode = this.#binding.instance.runtime === "fixture" ? "synthetic-fixture" : "postgres-fake";
-    if (state.project.id !== this.#binding.projectId || state.mode !== expectedMode || response.mode !== this.#binding.instance.runtime) throw new Error("WORKSPACE_PROJECT_OR_RUNTIME_MISMATCH");
+    if (state.project.id !== this.#binding.projectId || state.mode !== expectedMode || response.mode !== this.#binding.instance.runtime) throw new WorkspaceBindingUnavailableError("WORKSPACE_PROJECT_OR_RUNTIME_MISMATCH");
     return state;
   }
   async read() {

@@ -7,7 +7,7 @@ import { normalizeMaterialText, readPositioning, storyToDeck, workspaceCommandSc
 import { assertUnlinkedPath, ensurePrivateDirectory, errorCode, evidenceTreeBytes, failEvidence, loadEvidencePolicy, reserveEvidenceWrite, withEvidenceLock, type EvidencePolicy } from "./capacity";
 import { hashTaskBytes, hashTaskValue, parseTaskBundle, previewTaskModelInput, sha256Schema, taskStageSchema } from "./schema";
 import { appendTaskCheckpoint, appendTaskObservation, captureTaskSourceIdentity, createTaskSession, taskSessionRefSchema, verifyTaskSession, type TaskSessionRef } from "./session";
-import { inspectWorkspaceReceipt, IsolatedWorkspaceClient, parseWorkspaceBinding } from "./workspace-client";
+import { inspectWorkspaceReceipt, IsolatedWorkspaceClient, parseWorkspaceBinding, WorkspaceBindingUnavailableError } from "./workspace-client";
 
 const text = z.string().min(1);
 const absolute = text.refine(isAbsolute);
@@ -651,9 +651,23 @@ function gateView(context: Context, step: Step, choices: z.infer<typeof gateSche
   return { kind: "awaiting_human", checkpointHash: gate.checkpointHash, capability: gate.capability, step, choices: structuredClone(choices), allowedActions: [...allowedActions], workspace: structuredClone(observed.workspace) };
 }
 
+async function withRuntimeHold(context: Context, work: () => Promise<TaskWorkflowProgress>): Promise<TaskWorkflowProgress> {
+  try { return await work(); }
+  catch (error) {
+    if (!(error instanceof WorkspaceBindingUnavailableError)) throw error;
+    Object.assign(context, loadRun(context.run));
+    const flow = replay(context);
+    if (flow.held) return { kind: "held", reason: flow.held, step: flow.step };
+    return held(context, error.reason === "WORKSPACE_RUNTIME_STOPPED" ? "WORKFLOW_RUNTIME_STOPPED" : error.reason, flow.pending);
+  }
+}
+
 /** Automatic work stops at a human boundary; it never performs Apply or Accept. */
 export async function advance(raw: unknown): Promise<TaskWorkflowProgress> {
   const context = loadRun(raw); assertCodeUnchanged(context);
+  return withRuntimeHold(context, () => advanceContext(context));
+}
+async function advanceContext(context: Context): Promise<TaskWorkflowProgress> {
   const modelInput = previewTaskModelInput(context.state.bundle);
   for (let count = 0; count < modelInput.sources.length + 5; count++) {
     const flow = replay(context);
@@ -707,6 +721,9 @@ export async function advance(raw: unknown): Promise<TaskWorkflowProgress> {
 export async function recordDecision(raw: unknown): Promise<TaskWorkflowProgress> {
   const input = z.object({ run: runRefSchema, decision: decisionSchema }).strict().parse(raw);
   const context = loadRun(input.run); assertCodeUnchanged(context);
+  return withRuntimeHold(context, () => recordDecisionContext(context, input));
+}
+async function recordDecisionContext(context: Context, input: { run: TaskWorkflowRun; decision: Decision }): Promise<TaskWorkflowProgress> {
   let flow = replay(context);
   const prior = flow.decisions.get(input.decision.decisionId) ?? flow.rejectedDecisions.get(input.decision.decisionId);
   if (prior && hashTaskValue(prior) !== hashTaskValue(input.decision)) failEvidence("WORKFLOW_DECISION_ID_CONFLICT");
