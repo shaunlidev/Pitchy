@@ -28,6 +28,7 @@ const bindingSchema = z.object({
   timeoutMs: z.number().int().min(10).max(120_000),
   maximumResponseBytes: z.number().int().min(1024).max(16_000_000),
 }).strict();
+export function parseWorkspaceBinding(raw: unknown) { return bindingSchema.parse(raw); }
 const preparedSchema = z.object({
   kind: z.literal("workspace_command_prepared"), dispatchOwner: z.string().uuid(), binding: bindingSchema,
   attemptId: z.string().min(1), stage: taskStageSchema, commandId: z.string().min(1),
@@ -42,18 +43,43 @@ const outcomeSchema = z.discriminatedUnion("kind", [
 export type WorkspaceCommandOutcome = z.infer<typeof outcomeSchema>;
 const terminalSchema = z.object({ kind: z.literal("workspace_command_outcome"), preparedHash: z.string(), outcome: outcomeSchema }).strict();
 
+/** Read-only projection of a PIT-51-verified session; mutation never uses this shortcut. */
+export function inspectWorkspaceReceipt(input: { state: ReturnType<typeof verifyTaskSession>; binding: unknown; commandId: string }) {
+  const { state, commandId } = input;
+  const binding = parseWorkspaceBinding(input.binding);
+    const rawPrepared = state.observations.find(item => item.id === `workspace:${commandId}:prepared`);
+    const rawOutcome = state.observations.find(item => item.id === `workspace:${commandId}:outcome`);
+    if (!rawPrepared) {
+      if (rawOutcome) throw new Error("WORKSPACE_OUTCOME_WITHOUT_PREPARE");
+      return { kind: "not_dispatched" } satisfies { kind: "not_dispatched" };
+    }
+    const prepared = preparedSchema.parse(rawPrepared.data);
+    if (prepared.commandId !== commandId || prepared.request.commandId !== commandId || prepared.requestBodyHash !== hashTaskBytes(JSON.stringify(prepared.request)) || hashTaskValue(prepared.binding) !== hashTaskValue(binding)) throw new Error("WORKSPACE_RECEIPT_BINDING_MISMATCH");
+    if (!rawOutcome) return { kind: "prepared", prepared } satisfies { kind: "prepared"; prepared: typeof prepared };
+    const saved = terminalSchema.parse(rawOutcome.data);
+    if (saved.preparedHash !== hashTaskValue(prepared) || state.observations.indexOf(rawOutcome) <= state.observations.indexOf(rawPrepared)) throw new Error("WORKSPACE_OUTCOME_BINDING_MISMATCH");
+    return { kind: "outcome", prepared, outcome: saved.outcome, outcomeHash: hashTaskValue(rawOutcome.data) } satisfies { kind: "outcome"; prepared: typeof prepared; outcome: typeof saved.outcome; outcomeHash: string };
+}
+
+export class WorkspaceBindingUnavailableError extends Error {
+  constructor(readonly reason: "WORKSPACE_RUNTIME_STOPPED" | "WORKSPACE_INSTANCE_MISMATCH" | "WORKSPACE_PROJECT_OR_RUNTIME_MISMATCH") { super(reason); }
+}
+
 export class IsolatedWorkspaceClient {
   readonly #binding: z.infer<typeof bindingSchema>;
   readonly #policy: EvidencePolicy;
   #reference: TaskSessionRef;
   #busy = false;
   constructor(input: { binding: unknown; policy: EvidencePolicy; reference: unknown }) {
-    this.#binding = bindingSchema.parse(input.binding);
+    this.#binding = parseWorkspaceBinding(input.binding);
     this.#policy = input.policy;
     this.#reference = taskSessionRefSchema.parse(input.reference);
     verifyTaskSession(input.policy, this.#reference);
   }
   get reference() { return { ...this.#reference }; }
+  getReceipt(commandId: string) {
+    return inspectWorkspaceReceipt({ state: verifyTaskSession(this.#policy, this.#reference), binding: this.#binding, commandId });
+  }
   async #fetch(path: string, method = "GET", body?: string) {
     const identity = this.#binding.instance;
     const response = await fetch(new URL(path, this.#binding.baseURL), {
@@ -77,15 +103,19 @@ export class IsolatedWorkspaceClient {
   }
   async #verifyInstance() {
     // This receipt must come from an operator-owned isolated launch, never discovery of a daily service.
-    process.kill(this.#binding.instance.pid, 0);
+    try { process.kill(this.#binding.instance.pid, 0); }
+    catch (error) {
+      if (z.object({ code: z.literal("ESRCH") }).safeParse(error).success) throw new WorkspaceBindingUnavailableError("WORKSPACE_RUNTIME_STOPPED");
+      throw error;
+    }
     const response = await this.#fetch("/api/health");
     const health = z.object({ status: z.literal("ready"), runtime: z.enum(["fixture", "postgres-fake"]), evaluationInstance: evaluationInstanceSchema }).parse(response.payload);
-    if (response.status !== 200 || health.runtime !== this.#binding.instance.runtime || hashTaskValue(health.evaluationInstance) !== hashTaskValue(this.#binding.instance)) throw new Error("WORKSPACE_INSTANCE_MISMATCH");
+    if (response.status !== 200 || health.runtime !== this.#binding.instance.runtime || hashTaskValue(health.evaluationInstance) !== hashTaskValue(this.#binding.instance)) throw new WorkspaceBindingUnavailableError("WORKSPACE_INSTANCE_MISMATCH");
   }
   #parseWorkspace(response: { mode: string | null; payload: unknown }) {
     const state = workspaceStateSchema.parse(response.payload);
     const expectedMode = this.#binding.instance.runtime === "fixture" ? "synthetic-fixture" : "postgres-fake";
-    if (state.project.id !== this.#binding.projectId || state.mode !== expectedMode || response.mode !== this.#binding.instance.runtime) throw new Error("WORKSPACE_PROJECT_OR_RUNTIME_MISMATCH");
+    if (state.project.id !== this.#binding.projectId || state.mode !== expectedMode || response.mode !== this.#binding.instance.runtime) throw new WorkspaceBindingUnavailableError("WORKSPACE_PROJECT_OR_RUNTIME_MISMATCH");
     return state;
   }
   async read() {

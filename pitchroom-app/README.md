@@ -517,3 +517,49 @@ Positioning keeps accepted interpretation, exact source quotes, exact human word
 Positioning mutations (`generate_positioning`, `save_positioning_wording`, `apply_positioning`, `undo_positioning`, `adjust_positioning`, legacy `generate_deck`) require `expectedPositioning` alongside `expectedRevision`. Use the returned `positioning.head`, or `{positioningId:null, decisionId:null}` before the first positioning. Every new decision changes the token, including A→B→A. A stale token fails closed; retry keeps the original command ID. `readPositioning` owns legacy decoding, choices, applied snapshots and head calculation; callers must not substitute the first AI direction when a choice is missing.
 
 Apply/Undo append decision snapshots in existing JSON and maintain legacy projection columns. Wording content and older Story/Deck snapshots stay intact; this is not a SQL migration or a new multi-step Undo system. A source selected for generation is rechecked against its complete owning passage and the existing Agent isolation rules. Unselected retained wording and decision history are excluded from provider context. Exact retained openings must keep their source or human attribution in Story trace.
+
+
+## Human task workflow
+
+PIT-53 adds an isolated engineering workflow. A completed run does not establish semantic correctness or user acceptance. Real provider execution remains unavailable in this workflow; PIT-55 owns the subsequent budget and execution controls.
+
+Run from `pitchroom-app/packages/evals`, using the existing installed Node/tsx dependencies:
+
+```sh
+pnpm eval:task --help
+pnpm eval:task prepare --case /absolute/frozen-case --launch-receipt /absolute/launch.json --accounting-policy /absolute/accounting.json --source-repository /absolute/source-checkout --session-id UUID --maximum-bytes INTEGER --purpose tool_validation
+pnpm eval:task advance --run /absolute/run.json
+pnpm eval:task record-decision --run /absolute/run.json --file /absolute/decision.json
+pnpm eval:task audit --run /absolute/run.json
+pnpm eval:task report --run /absolute/run.json
+```
+
+`prepare` makes no HTTP request. Supply the frozen PIT-50 case, PIT-51 evidence accounting policy and PIT-52 isolated service binding explicitly. There is no target discovery, `.env` loading, database reset or service launch. The launch receipt is an operator claim, not independent runtime attestation. The workflow saves the source file identities and refuses later execution after those files change.
+
+The total declared run budget includes a fixed 65,536-byte reserve for the private locator and monotonic journal anchors. Both the session and its sibling `.workflow-handles` directory remain inside globally counted artifacts. Insufficient capacity fails rather than expanding the budget. Retain the full accounted evidence tree; retaining only the locator is insufficient.
+
+`advance` returns the next `awaiting_human` boundary with the actual workspace, choices, `checkpointHash`, `capability` and `allowedActions`. It never chooses a direction, Applies or Accepts. Clarification Apply creates another Understanding review boundary; accepting that exact version is a separate decision. Original wording is offered as attributed manual input, not as a verified customer quote. Recommendation can be overridden.
+
+Create each decision file from the displayed boundary. For example:
+
+```json
+{
+  "decisionId": "unique-operator-decision-id",
+  "actor": "actual operator identity",
+  "at": "2026-10-27T12:00:00+08:00",
+  "checkpointHash": "copy the displayed hash",
+  "capability": "copy the displayed capability",
+  "assistance": { "kind": "none" },
+  "response": { "kind": "accept_understanding", "versionKey": "displayed exact version ID" }
+}
+```
+
+The hash placeholders above must be replaced with actual displayed 64-character values. `response.kind` must be in that boundary's `allowedActions`; candidate/version/page IDs must refer to its actual workspace. Reusing an ID with identical content is idempotent. Reusing it with changed content fails. A changed product state or stale boundary cannot mutate the product. Never copy synthetic test identities or observations into a real task record.
+
+For observed Story feedback, use `feedback` with `storyKey`, `observedCheckpointHash`, `originalWords` and arrays `mustChange`, `mustPreserve`, `mustNot`. Freeze these after observing the adopted draft and before revision. Only `originalWords` goes into the revision request; private expectations remain local. If oracle guidance influenced the operator, use `assistance: { "kind": "provided", "details": "...", "evidenceRef": "..." }`. No genuine need is recorded with the permitted `not_needed` action and a reason; that activity remains uncovered.
+
+Keep preserves the adopted Story, including an empty head when the first draft was never adopted. Undo, historical restore, exact Story edits and Deck page edits retain product history. Deck creation requires the fresh adopted Story and verifies the exact V2 derivation. Saved candidates never become the final Deck automatically.
+
+After a crash, retain all files. `advance` may return `resume_decision`: explicitly resubmit the identical original decision file. It will not execute that pending human intent on its own. A live local owner holds concurrent invocations. A provably dead local owner can resume the same deterministic operation. An uncertain POST outcome holds, with no new command ID or automatic retry. Changed service identity, unverifiable ownership, capacity and evidence-integrity failures require operator investigation; do not delete locks or evidence to make a run pass. Core ledger lock recovery is a separate explicit PIT-51 operation.
+
+Exit status is 0 for a normal boundary/result, 2 for `held`, and 1 for invalid input or an execution error. Output uses bounded error codes instead of echoing input or raw error bodies. `audit` and `report` are read-only projections: semantic status stays `not_evaluated`; missing use stays `not_observed`; an explicit use record is `recorded_awaiting_review`. Neither an Apply nor a recorded observation produces a user-task PASS.
