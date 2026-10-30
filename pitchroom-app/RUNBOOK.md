@@ -99,8 +99,8 @@ deployment PASS. Validation makes no database or provider request.
 | `PITCHROOM_RUNTIME` | live |
 | `PITCHROOM_RELEASE_SHA` | Full lowercase 40-character Git SHA |
 | `PITCHROOM_SCHEMA_VERSION` | Expected schema identity; declaration only, not observed migration state |
-| `DATABASE_URL` | PostgreSQL URL with credentials; TLS `sslmode=require` or `verify-full`. Query parameters are limited to sslmode, channel_binding and application_name, each appearing at most once. No fragment or connection-target override. |
-| `PITCHROOM_DATABASE_TARGET` | Credential-free `host:port/database`, matching the parsed URL. Omitted PostgreSQL port normalizes to 5432. This comparison does not attest actual server identity or credential isolation. |
+| `DATABASE_URL` | Canonically serialized PostgreSQL URL with credentials, one DNS/IPv4 host, explicit port and a literal database name (no percent encoding or path separators). TLS `sslmode=require` or `verify-full`. Query parameters are limited to sslmode, channel_binding and application_name, each appearing at most once. No fragment or connection-target override. |
+| `PITCHROOM_DATABASE_TARGET` | Credential-free `host:port/database`, matching the supported URL exactly. The deployed URL must supply its port, so inherited `PGPORT` cannot change the client's target. This comparison does not attest actual server identity or credential isolation. |
 | `PITCHROOM_PROVIDER` | openai or deepseek, matching the allowed endpoint |
 | `OPENAI_BASE_URL` | Explicitly `https://api.openai.com/v1`, or the supported DeepSeek base `https://api.deepseek.com` / `/v1`; no userinfo, query or fragment. No provider fallback. |
 | `OPENAI_API_KEY`, `OPENAI_MODEL` | Nonempty key and explicit model identifier. Validation does not call the provider or verify model availability. |
@@ -111,6 +111,12 @@ deployment PASS. Validation makes no database or provider request.
 Do not supply invented approval or budget IDs to make a trial appear ready.
 These references must eventually resolve to accepted artifacts under PIT-55/39.
 They are currently declarations, and deployed readiness remains refused.
+
+Deployed URLs omit no target fields. Encode reserved user/password characters
+using URL serialization, but use the database's literal name. Multi-host, IPv6,
+encoded database names and noncanonical URLs are refused because the installed
+driver can interpret them differently from the declaration parser. Local modes
+retain their existing URL compatibility; they do not attest a deployed target.
 
 Local live mode retains the existing OpenAI default endpoint. A configured
 DeepSeek endpoint is recognized locally; an explicitly contradictory provider is

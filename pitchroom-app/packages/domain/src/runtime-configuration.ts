@@ -35,13 +35,16 @@ function databaseTarget(value: string, deployed: boolean): string | undefined {
   try {
     const url = new URL(value);
     if (!["postgres:", "postgresql:"].includes(url.protocol) || !url.hostname || url.pathname.length < 2 || url.hash) return;
+    const databasePath = decodeURIComponent(url.pathname);
     if (deployed) {
+      // Keep the raw URL unambiguous for the installed driver's independent parser.
+      if (url.href !== value || !url.port || !/^[a-zA-Z0-9.-]+$/.test(url.hostname) || databasePath !== url.pathname || databasePath.slice(1).includes("/")) return;
       const allowedParameters = new Set(["sslmode", "channel_binding", "application_name"]);
       const parameters = [...url.searchParams.keys()];
       if (!url.username || !url.password || parameters.some((key) => !allowedParameters.has(key)) || new Set(parameters).size !== parameters.length) return;
       if (!["require", "verify-full"].includes(url.searchParams.get("sslmode") ?? "")) return;
     }
-    return `${url.hostname}:${url.port || "5432"}${decodeURIComponent(url.pathname)}`;
+    return `${url.hostname}:${url.port || "5432"}${databasePath}`;
   } catch { return; }
 }
 
