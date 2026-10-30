@@ -162,6 +162,41 @@ class Controller:
                     active.add(issue["identifier"])
         return active
 
+    def routing(self, issue):
+        metadata = issue.get("metadata", {})
+        route = metadata.get("developer_route", "default")
+        supplement = metadata.get("supplemental_review", "off")
+        options = self.c.get("optional_roles", {})
+        if route not in ("default", "small") or supplement not in ("off", "on"):
+            raise Hold("Unknown developer route or supplemental review selection")
+        actors = {r: self.c[r] for r in ROLES}
+        if route == "small":
+            if options.get("small_tasks_enabled") is not True:
+                raise Hold("Small-task routing disabled")
+            actors["developer"] = options.get("small_tasks_agent")
+        if supplement == "on":
+            if options.get("supplemental_enabled") is not True:
+                raise Hold("Supplemental review disabled")
+            actors["supplemental"] = options.get("supplemental_agent")
+        if any(not isinstance(a, str) or not a.strip() for a in actors.values()) or len(set(actors.values())) != len(actors):
+            raise Hold("Distinct configured role actors required")
+        return {"developer_route": route, "supplemental_review": supplement, "actors": actors}
+
+    def role_actor(self, lane, role):
+        # Legacy artifacts retain their recorded actors, never a newly selected route.
+        actors = lane.get("routing", {}).get("actors", lane.get("artifact", {}).get("actors", {}))
+        actor = actors.get(role) if actors else self.c.get(role)
+        if not actor:
+            raise Hold("Role is not enrolled for this task")
+        return actor
+
+    def verify_routing(self, lane, issue):
+        if "routing" in lane and self.routing(issue) != lane["routing"]:
+            raise Hold("Frozen task routing changed; explicit operator reconciliation required")
+        if "routing" not in lane and (issue.get("metadata", {}).get("developer_route", "default") != "default"
+                                     or issue.get("metadata", {}).get("supplemental_review", "off") != "off"):
+            raise Hold("Legacy task cannot adopt a new route")
+
     def dispatch(self, apply=False):
         issues, lanes = self.issues(), self.lanes()
         active = self.active_issues(issues)
@@ -177,7 +212,8 @@ class Controller:
                     raise Hold("summary/deferred/not enrolled")
                 if key in self.c.get("decision_holds", {}):
                     raise Hold(self.c["decision_holds"][key])
-                if item.get("assignee_id") not in (None, self.c["developer"]):
+                routing = self.routing(item)
+                if item.get("assignee_id") not in (None, routing["actors"]["developer"]):
                     raise Hold("owned by another handler")
                 if key in lanes:
                     raise Hold("lane already reserved; no duplicate start")
@@ -194,14 +230,14 @@ class Controller:
                 continue
             self.reserve("start:" + item["id"])
             fresh = self.issue(key)
-            if fresh["status"] != "backlog" or fresh.get("description") != item.get("description"):
+            if fresh["status"] != "backlog" or fresh.get("description") != item.get("description") or fresh.get("assignee_id") != item.get("assignee_id") or self.routing(fresh) != routing:
                 raise Hold("task changed before dispatch")
             self.dependencies(fresh, self.issues())
             lane = {"issue": key, "id": item["id"], "generation": 1, "phase": "developer",
                     "description": item.get("description") or "", "requirements": required,
-                    "description_sha256": digest(item.get("description") or ""), "repairs": 0}
+                    "description_sha256": digest(item.get("description") or ""), "repairs": 0, "routing": routing}
             self.save(lane)
-            self.call(["issue", "assign", item["id"], "--to-id", self.c["developer"], "--no-start"])
+            self.call(["issue", "assign", item["id"], "--to-id", self.role_actor(lane, "developer"), "--no-start"])
             self.call(["issue", "update", item["id"], "--status", "todo", "--output", "json"])
             self.finish("start:" + item["id"])
             result["started"].append(key)
@@ -218,7 +254,7 @@ class Controller:
         if not isinstance(runs, list):
             raise Hold("unknown preserved runtime history")
         matches = [r for r in runs if r.get("id") == source["run_id"] and r.get("issue_id") == issue["id"]
-                   and r.get("agent_id") == self.c["developer"] and r.get("status") == "completed"]
+                   and r.get("agent_id") == self.role_actor(lane, "developer") and r.get("status") == "completed"]
         if len(matches) != 1:
             raise Hold("source checkpoint is not bound to a completed developer run of this issue")
         branch = (matches[0].get("result") or {}).get("branch_name")
@@ -242,7 +278,7 @@ class Controller:
             parents = record.splitlines()[0].split()
             if len(parents) != 2 or parents[1] != tip:
                 raise Hold("native branch record does not bind the saved source tip")
-            for name, value in (("Workspace", self.c["workspace"]), ("Agent", self.c["developer"]), ("Conversation", issue["id"])):
+            for name, value in (("Workspace", self.c["workspace"]), ("Agent", self.role_actor(lane, "developer")), ("Conversation", issue["id"])):
                 if "Multica-" + name + ": " + value not in record.splitlines():
                     raise Hold("native source record belongs to another runtime identity")
             if git(repo, "rev-parse", source["commit"] + "^") != source["base"]:
@@ -300,6 +336,7 @@ class Controller:
                         active.add(row["identifier"])
             if key in active or len(active) >= self.c.get("max_lanes", 2):
                 raise Hold("target still running or no issue lane available")
+            self.verify_routing(lane, issue)
             self.dependencies(issue, issues)
             preserved = self.preserved_runtime_source(lane, issue, approval)
             prior_commit = (preserved or {}).get("commit") or lane.get("artifact", {}).get("commit") or lane.get("rework_base_commit")
@@ -322,32 +359,33 @@ class Controller:
                 updated["rework_base_commit"] = prior_commit
             if preserved:
                 updated["preserved_source"] = preserved
-            for name in ("artifact", "receipts", "checkouts", "contract", "developer_workspace", "dependencies"):
+            for name in ("artifact", "receipts", "checkouts", "contract", "developer_workspace", "dependencies", "supplemental_bundle", "supplemental_receipt"):
                 updated.pop(name, None)
             self.save(updated)
             # A human comment itself wakes the handler. The approval is already
             # in the saved contract; only the status transition starts this run.
-            self.call(["issue", "assign", issue["id"], "--to-id", self.c["developer"], "--no-start"])
+            self.call(["issue", "assign", issue["id"], "--to-id", self.role_actor(lane, "developer"), "--no-start"])
             fresh = self.issue(key)
-            if fresh["status"] != issue["status"] or fresh.get("assignee_id") != self.c["developer"] or digest(fresh.get("description") or "") != digest(description):
+            if fresh["status"] != issue["status"] or fresh.get("assignee_id") != self.role_actor(lane, "developer") or digest(fresh.get("description") or "") != digest(description):
                 raise Hold("task changed during resolution")
             self.dependencies(fresh, self.issues())
             self.call(["issue", "update", issue["id"], "--status", "todo", "--output", "json"])
             self.finish(token)
             return {"issue": key, "status": "todo", "generation": generation, "resolved": True}
 
-    def actor(self, role):
+    def actor(self, role, lane=None):
         actor, run = os.environ.get("MULTICA_AGENT_ID"), os.environ.get("MULTICA_TASK_ID")
-        if actor != self.c[role] or not run:
+        if actor != (self.role_actor(lane, role) if lane is not None else self.c[role]) or not run:
             raise Hold("this operation requires the assigned role's actual runtime identity")
         return actor, run
 
     def current(self, key, role):
-        actor, run = self.actor(role)
         lane = self.lanes().get(key)
         if not lane or lane["phase"] != role:
             raise Hold("wrong or stale lane stage")
+        actor, run = self.actor(role, lane)
         issue = self.issue(key)
+        self.verify_routing(lane, issue)
         runs = self.call(["issue", "runs", issue["id"], "--output", "json"])
         matches = [r for r in runs if r.get("id") == run and r.get("issue_id") == issue["id"] and r.get("agent_id") == actor and r.get("status") == "running"]
         if len(matches) != 1 or not matches[0].get("work_dir"):
@@ -355,13 +393,16 @@ class Controller:
         native = Path(matches[0]["work_dir"]).resolve()
         if Path.cwd().resolve() != native:
             raise Hold("execute from the actual native runtime workspace")
-        expected_status = {"developer": {"todo", "in_progress"}, "reviewer": {self.c["review_status"]}, "qa": {self.c["qa_status"]}}[role]
+        expected_status = {"developer": {"todo", "in_progress"}, "reviewer": {self.c["review_status"]}, "qa": {self.c["qa_status"]}, "supplemental": {self.c["review_status"]}}[role]
         if issue["status"] not in expected_status:
             raise Hold("issue is no longer in this role's current workflow step")
-        if issue.get("assignee_id") != self.c[role] or digest(issue.get("description") or "") != lane["description_sha256"]:
+        if issue.get("assignee_id") != self.role_actor(lane, role) or digest(issue.get("description") or "") != lane["description_sha256"]:
             raise Hold("handler or acceptance source changed")
         base = lane.get("artifact", {}).get("commit") or git(native, "rev-parse", "HEAD")
-        if lane.get("rework_base_commit") and not has_ancestor(self.c["repository"], lane["rework_base_commit"], base):
+        prior = lane.get("rework_base_commit")
+        if lane.get("artifact"):
+            prior = lane.get("rework_public_commit", prior)
+        if prior and not has_ancestor(self.c["repository"], prior, base):
             raise Hold("rework workspace omits prior delivery; explicit integration required")
         self.dependencies(issue, self.issues(), base)
         return lane, issue
@@ -416,7 +457,7 @@ class Controller:
         common = git(workdir, "rev-parse", "--path-format=absolute", "--git-common-dir")
         if common != git(self.c["repository"], "rev-parse", "--path-format=absolute", "--git-common-dir"):
             raise Hold("native worktree belongs to another repository")
-        _, run = self.actor(role)
+        _, run = self.actor(role, lane)
         destination = workdir / ".pipeline-artifact" / (key + "-" + run)
         if destination.exists():
             verify_clean_tree(destination, artifact["tree"])
@@ -430,7 +471,128 @@ class Controller:
                 raise Hold("installed dependencies changed since developer workspace preparation")
         lane.setdefault("checkouts", {})[role] = str(destination)
         self.save(lane)
-        return {"checkout": str(destination), "artifact": artifact, "contract": lane["contract"]}
+        return {"checkout": str(destination), "artifact": artifact, "contract": lane["contract"],
+                "supplemental_review": lane.get("supplemental_receipt")}
+
+    def reserve_evidence(self, token, size):
+        """Consume an operator allocation from the global cap; never refund on deletion."""
+        with lock(self.root, name='evidence-budget', wait=45):
+            grant_path=self.root/'evidence-budget.json'
+            try:
+                grant=json.loads(grant_path.read_text())
+                if (grant.get('cap_bytes')!=320000000
+                    or type(grant.get('accounted_bytes')) is not int or grant['accounted_bytes']<0
+                    or type(grant.get('allocation_bytes')) is not int or grant['allocation_bytes']<=0
+                    or grant['accounted_bytes']+grant['allocation_bytes']>320000000
+                    or not re.fullmatch(r'[0-9a-f]{64}',grant.get('accounting_sha256',''))):
+                    raise Hold('Invalid global evidence allocation')
+                allocation=digest(grant_path.read_text())
+                path=self.root/'evidence-reservations.json'
+                ledger=json.loads(path.read_text()) if path.exists() else {'allocation':allocation,'reservations':{}}
+                if ledger['allocation']!=allocation:raise Hold('Allocation changed; preserve prior reservations')
+                reservations=ledger['reservations']
+                if token in reservations:raise Hold('Evidence reservation exists; never replay or overwrite')
+                if any(type(v) is not int or v<0 for v in reservations.values()):raise Hold('Invalid evidence reservations')
+                if sum(reservations.values())+size>grant['allocation_bytes']:raise Hold('Evidence allocation exhausted')
+                reservations[token]=size
+                write_json(path,ledger)
+            except (OSError,KeyError,TypeError,ValueError) as error:
+                raise Hold('Evidence budget missing, invalid or exhausted; operator accounting required') from error
+
+    def retain_role_evidence(self, lane, role, report, workdir, actor, run):
+        """Persist explicitly declared files before any verdict/return, including failures."""
+        if role not in (*ROLES, "supplemental") or actor!=self.role_actor(lane, role) or not re.fullmatch(r'[A-Za-z0-9_-]{1,128}',run):
+            raise Hold('Invalid evidence identity')
+        if not re.fullmatch(r'PIT-[1-9][0-9]*',lane['issue']) or type(lane['generation']) is not int or lane['generation']<1:
+            raise Hold('Invalid evidence task identity')
+        workspace=Path(workdir).absolute()
+        base=workspace.resolve()
+        report=Path(report).absolute()
+        relative=None
+        for prefix in (workspace,base):
+            try:relative=report.relative_to(prefix);break
+            except ValueError:pass
+        if relative is None or '..' in relative.parts:
+            raise Hold('Report must be inside the actual runtime workspace')
+        report=base
+        for part in relative.parts:
+            report=report/part
+            if report.is_symlink():raise Hold('Report path symlink refused')
+        if not report.is_file() or not report.resolve().is_relative_to(base):
+            raise Hold('Missing or outside role report')
+        report_data=report.read_bytes()
+        if len(report_data)>1000000:raise Hold('Oversized role report')
+        note=json.loads(report_data)
+        if not isinstance(note,dict):raise Hold('Role report must be an object')
+        names=note.get('evidence_files',[])
+        if not isinstance(names,list) or len(names)>100 or any(not isinstance(n,str) for n in names) or len(set(names))!=len(names):
+            raise Hold('Declare unique relative evidence_files')
+        base=Path(workdir).resolve()
+        files=[('report.json',str(report.resolve()),report_data)]
+        for name in names:
+            if not isinstance(name,str) or len(name)>300:
+                raise Hold('Invalid evidence path')
+            relative=Path(name)
+            if relative.is_absolute() or '..' in relative.parts or not relative.parts or relative.parts[0]!='.pipeline-local':
+                raise Hold('Evidence must be inside this run workspace .pipeline-local')
+            current=base
+            for part in relative.parts:
+                current=current/part
+                if current.is_symlink():raise Hold('Evidence symlink refused')
+            if not current.is_file() or not current.resolve().is_relative_to(base):raise Hold('Missing or outside evidence')
+            with current.open('rb') as stream:
+                before=os.fstat(stream.fileno());data=stream.read(2000001);after=os.fstat(stream.fileno())
+            if len(data)>2000000:raise Hold('Oversized declared evidence')
+            if (before.st_size,before.st_mtime_ns)!=(after.st_size,after.st_mtime_ns) or len(data)!=after.st_size:
+                raise Hold('Evidence changed while read')
+            files.append(('files/'+name,str(current),data))
+        artifact=lane.get('artifact',{})
+        binding={'issue':lane['issue'],'generation':lane['generation'],'role':role,'actor_id':actor,'run_id':run,
+                 'commit':artifact.get('commit') or git(workdir,'rev-parse','HEAD'),
+                 'contract_sha256':artifact.get('contract_sha256') or contract_digest(lane['contract']),
+                 'description_sha256':lane['description_sha256']}
+        root=self.root/'role-evidence'/lane['issue']/str(lane['generation'])/role/run
+        if root.exists() or root.is_symlink():raise Hold('Role evidence already exists; no overwrite')
+        token='role:'+lane['issue']+':'+str(lane['generation'])+':'+role+':'+run
+        intent={'schema_version':1,'binding':binding,'files':[
+            {'path':name,'original_path':source,'bytes':len(data),'sha256':hashlib.sha256(data).hexdigest()}
+            for name,source,data in files]}
+        size=sum(len(data) for _,_,data in files)+2*len(json.dumps(intent,indent=2).encode())+1024
+        intent['reserved_bytes']=size
+        self.reserve_evidence(token,size)
+        root.mkdir(parents=True,exist_ok=False)
+        with (root/'intent.json').open('x') as stream:json.dump(intent,stream,indent=2)
+        for name,_,data in files:
+            target=root/name;target.parent.mkdir(parents=True,exist_ok=True)
+            with target.open('xb') as stream:stream.write(data)
+        if report.read_bytes()!=report_data:raise Hold('Report changed during retention')
+        with (root/'manifest.json').open('x') as stream:json.dump({**intent,'complete':True},stream,indent=2)
+        self.verify_role_evidence(root,binding)
+        return str(root/'manifest.json')
+
+    def verify_role_evidence(self, root, binding):
+        root=Path(root)
+        try:
+            if any(p.is_symlink() for p in (root,root/'manifest.json',root/'intent.json')):raise Hold('Evidence manifest symlink')
+            manifest=json.loads((root/'manifest.json').read_text())
+            if manifest.get('complete') is not True or manifest.get('binding')!=binding:
+                raise Hold('Evidence identity/completion mismatch')
+            expected={'manifest.json','intent.json'}
+            for item in manifest['files']:
+                path=Path(item['path'])
+                if path.is_absolute() or '..' in path.parts:raise Hold('Invalid retained evidence path')
+                target=root/path
+                if any(p.is_symlink() for p in [target,*target.parents] if p==root or root in p.parents):
+                    raise Hold('Retained evidence symlink')
+                data=target.read_bytes()
+                if len(data)!=item['bytes'] or hashlib.sha256(data).hexdigest()!=item['sha256']:
+                    raise Hold('Retained evidence damaged')
+                expected.add(str(path))
+            actual={str(p.relative_to(root)) for p in root.rglob('*') if p.is_file()}
+            if actual!=expected:raise Hold('Unexpected or missing retained evidence')
+            return manifest
+        except (OSError,KeyError,TypeError,ValueError) as error:
+            raise Hold('Retained role evidence incomplete or invalid') from error
 
     def checks(self, lane, role, checkout_path, run_id="unbound"):
         if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", run_id):
@@ -452,15 +614,18 @@ class Controller:
                 code, stdout, stderr = proc.returncode, proc.stdout, proc.stderr
             except subprocess.TimeoutExpired as e:
                 code, stdout, stderr = 124, "", "approved check timed out"
+            payload = {**{k: artifact[k] for k in ("issue", "commit", "tree", "generation", "contract_sha256", "description_sha256")},
+                "schema_version": 1, "producer": "controller", "check_id": key, "argv": check["argv"], "cwd": check["cwd"], "exit_code": code,
+                "dirty": False, "assertion_passed": code == 0 and evaluate_proof(check["proof"], stdout), "stdout_log": "logs/" + key + ".stdout", "stdout_sha256": digest(stdout)}
+            token = ':'.join(('check',lane['issue'],str(lane['generation']),role,run_id,key))
+            self.reserve_evidence(token, len(stdout.encode())+len(stderr.encode())+len(json.dumps(payload,ensure_ascii=False,indent=2).encode())+1)
             logs = root / "logs"
             logs.mkdir(exist_ok=True)
             (logs / (key + ".stdout")).write_text(stdout)
             (logs / (key + ".stderr")).write_text(stderr)
             verify_clean_tree(checkout_path, artifact["tree"])
             verify_dependencies(checkout_path, lane["dependencies"])
-            write_json(root / "checks" / (key + ".json"), {**{k: artifact[k] for k in ("issue", "commit", "tree", "generation", "contract_sha256", "description_sha256")},
-                "schema_version": 1, "producer": "controller", "check_id": key, "argv": check["argv"], "cwd": check["cwd"], "exit_code": code,
-                "dirty": False, "assertion_passed": code == 0 and evaluate_proof(check["proof"], stdout), "stdout_log": "logs/" + key + ".stdout", "stdout_sha256": digest(stdout)})
+            write_json(root / "checks" / (key + ".json"), payload)
         return root
 
     def transition(self, lane, issue, target, report):
@@ -497,7 +662,7 @@ class Controller:
         if target == "todo":
             lane["rework_base_commit"] = lane["artifact"]["commit"]
             lane.update(generation=lane["generation"] + 1, repairs=lane["repairs"] + 1, phase="developer")
-            for name in ("artifact", "receipts", "checkouts", "contract", "developer_workspace", "dependencies"):
+            for name in ("artifact", "receipts", "checkouts", "contract", "developer_workspace", "dependencies", "supplemental_bundle", "supplemental_receipt"):
                 lane.pop(name, None)
         else:
             lane["phase"] = "held"
@@ -509,9 +674,10 @@ class Controller:
         return checkpoint(Path(workdir), key, lane["generation"], lane["contract"]["allowed_paths"], repository=self.c["repository"])
 
     def stage(self, key, role, report, workdir):
+        if role not in ROLES:
+            raise Hold("Supplemental review cannot submit formal stage receipts")
         lane, issue = self.current(key, role)
-        note = json.loads(Path(report).read_text())
-        actor, run = self.actor(role)
+        actor, run = self.actor(role, lane)
         if role == "developer":
             if "contract" not in lane:
                 raise Hold("register a complete executable plan first")
@@ -522,7 +688,7 @@ class Controller:
             commit = self.publish_checkpoint(lane, workdir, key)
             self.dependencies(issue, self.issues(), commit["commit"])
             lane["artifact"] = {**commit, "issue": key, "generation": lane["generation"], "description_sha256": lane["description_sha256"],
-                "contract_sha256": contract_digest(lane["contract"]), "actors": {r: self.c[r] for r in ROLES}}
+                "contract_sha256": contract_digest(lane["contract"]), "actors": {r: self.role_actor(lane, r) for r in ROLES}}
             self.save(lane)  # Published before native workflow starts the next role.
             checkout_path = Path(lane.get("published_checkout", workdir))
         else:
@@ -532,10 +698,12 @@ class Controller:
             checkout_path = Path(registered_path)
             if not checkout_path.is_dir():
                 raise Hold("materialize the exact artifact first")
+        manifest = self.retain_role_evidence(lane, role, report, Path.cwd(), actor, run)
+        note = json.loads((Path(manifest).parent/"report.json").read_text())
         root = self.checks(lane, role, checkout_path, run_id=run)
         artifact = lane["artifact"]
         receipt = {**note, **{k: artifact[k] for k in ("issue", "commit", "tree", "generation", "contract_sha256", "description_sha256")},
-                   "role": role, "actor_id": actor, "run_id": run, "dirty": False}
+                   "role": role, "actor_id": actor, "run_id": run, "dirty": False, "retained_evidence": manifest}
         lane.setdefault("receipts", {})[role] = receipt
         self.save(lane)
         gaps = list(note.get("gaps", [])) + list(note.get("decisions", []))
@@ -556,8 +724,10 @@ class Controller:
             target = "in_review"
         receipt["gaps"] = gaps
         output = root / "handoff.json"
-        write_json(output, {"outcome": note.get("outcome", ""), "evidence": receipt, "gaps": gaps,
-            "choices": "Automatic engineering artifact acceptance; no merge or deployment." if target == "done" else "Resolve gaps on original ticket; no criteria waived.", "next_status": target})
+        handoff = {"outcome": note.get("outcome", ""), "evidence": receipt, "gaps": gaps,
+            "choices": "Automatic engineering artifact acceptance; no merge or deployment." if target == "done" else "Resolve gaps on original ticket; no criteria waived.", "next_status": target}
+        self.reserve_evidence(':'.join(('handoff',key,str(lane['generation']),role,run)), len(json.dumps(handoff,ensure_ascii=False,indent=2).encode())+1)
+        write_json(output, handoff)
         self.transition(lane, issue, target, output)
         lane["phase"] = "done" if target == "done" else "held" if gaps else "reviewer" if role == "developer" else "qa"
         self.save(lane)

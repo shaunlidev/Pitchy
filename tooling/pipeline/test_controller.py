@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from controller import Controller, Hold, requirements, lock
+from controller import Controller, Hold, requirements, lock, digest
 
 
 DESCRIPTION = "### 7. Observable acceptance\n- [ ] normal / deterministic. source must return its issue-specific value.\n### 8. Verification\n"
@@ -18,6 +18,13 @@ def item(number, status="backlog", deps=None):
     return {"id": "id-" + str(number), "identifier": "PIT-" + str(number), "number": number,
             "project_id": "project", "status": status, "assignee_id": None, "description": DESCRIPTION,
             "metadata": {"automation_mode": "dependency_queue", "depends_on": json.dumps(deps or [])}}
+
+
+def bound_report(workdir, source):
+    path=Path(workdir).resolve()/'.pipeline-artifact/role-report.json'
+    path.parent.mkdir(parents=True,exist_ok=True)
+    path.write_bytes(Path(source).read_bytes())
+    return path
 
 
 class Fake:
@@ -51,7 +58,7 @@ class Fake:
 class Tests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.root = Path(self.tmp.name)
+        self.root = Path(self.tmp.name).resolve()
         self.repo = self.root / "repo"
         self.repo.mkdir()
         self.g("init", "-q")
@@ -67,6 +74,7 @@ class Tests(unittest.TestCase):
         self.c = {"project": "project", "repository": str(self.repo), "developer": "dev", "reviewer": "review", "qa": "qa", "max_lanes": 2, "review_status": "started_2", "qa_status": "started_3"}
         self.fake = Fake([item(1), item(2), item(3)], self.c)
         self.ctl = Controller(self.c, self.fake, self.root / "state")
+        (self.root/"state/evidence-budget.json").write_text(json.dumps({"cap_bytes":320000000,"accounted_bytes":300000000,"allocation_bytes":20000000,"accounting_sha256":"a"*64}))
 
     def tearDown(self):
         self.ctl.close(); self.tmp.cleanup()
@@ -130,6 +138,54 @@ class Tests(unittest.TestCase):
     def test_chinese_contract_freezes_all_four_original_scenarios(self):
         rows = requirements("## 7. 验收草案\n正常：observable outcome\n拒绝：preserve state\n失败：retain failure\n恢复：restore version\n## 8. 验证与未决\nNot an extra criterion")
         self.assertEqual([x["text"] for x in rows], ["正常：observable outcome", "拒绝：preserve state", "失败：retain failure", "恢复：restore version"])
+
+    def test_rework_checks_native_and_public_ancestry_separately(self):
+        baseline = self.g("rev-parse", "HEAD")
+        self.g("checkout", "-qb", "native-history")
+        (self.repo / "native-only.txt").write_text("private runtime history")
+        self.g("add", "native-only.txt"); self.g("commit", "-qm", "native prior")
+        native_prior = self.g("rev-parse", "HEAD")
+        (self.repo / "source.txt").write_text("native repaired")
+        self.g("commit", "-qam", "native repair")
+        native_fixed = self.g("rev-parse", "HEAD")
+        self.g("checkout", "-qb", "public-history", baseline)
+        (self.repo / "source.txt").write_text("public prior")
+        self.g("commit", "-qam", "public prior")
+        public_prior = self.g("rev-parse", "HEAD")
+        (self.repo / "source.txt").write_text("public repaired")
+        self.g("commit", "-qam", "public repair")
+        public_fixed = self.g("rev-parse", "HEAD")
+        row = self.fake.rows[0]
+        original = {"issue": "PIT-1", "id": "id-1", "generation": 2,
+                    "description_sha256": digest(row["description"]),
+                    "rework_base_commit": native_prior,
+                    "rework_public_commit": public_prior}
+        for role in ("reviewer", "qa"):
+            row.update(status=self.c["review_status" if role == "reviewer" else "qa_status"],
+                       assignee_id=self.c[role])
+            lane = {**original, "phase": role, "artifact": {"commit": public_fixed}}
+            self.ctl.save(lane)
+            with self.runtime(role, self.repo):
+                self.ctl.current("PIT-1", role)
+                lane["artifact"] = {"commit": native_fixed}
+                self.ctl.save(lane)
+                with self.assertRaisesRegex(Hold, "prior delivery"):
+                    self.ctl.current("PIT-1", role)
+                lane.pop("rework_public_commit")
+                self.ctl.save(lane)
+                self.ctl.current("PIT-1", role)
+                lane["artifact"] = {"commit": public_fixed}
+                self.ctl.save(lane)
+                with self.assertRaisesRegex(Hold, "prior delivery"):
+                    self.ctl.current("PIT-1", role)
+        row.update(status="in_progress", assignee_id=self.c["developer"])
+        self.ctl.save({**original, "phase": "developer"})
+        self.g("checkout", "native-history")
+        with self.runtime("developer", self.repo):
+            self.ctl.current("PIT-1", "developer")
+            self.g("checkout", "public-history")
+            with self.assertRaisesRegex(Hold, "prior delivery"):
+                self.ctl.current("PIT-1", "developer")
 
     def test_runtime_identity_required(self):
         self.ctl.dispatch(True)
@@ -231,7 +287,7 @@ class Tests(unittest.TestCase):
         with self.runtime("developer", native, "dev-run"):
             self.ctl.workspace("PIT-1", native)
             self.ctl.plan("PIT-1", plan_path)
-            self.assertEqual(self.ctl.stage("PIT-1", "developer", report_path, native)["status"], "started_2")
+            self.assertEqual(self.ctl.stage("PIT-1", "developer", bound_report(native,report_path), native)["status"], "started_2")
         commit = self.ctl.lanes()["PIT-1"]["artifact"]["commit"]
         for role, actor in (("reviewer", "review"), ("qa", "qa")):
             root = self.root / role
@@ -241,7 +297,7 @@ class Tests(unittest.TestCase):
                 checkout = self.ctl.checkout("PIT-1", role, root)
                 self.assertEqual(subprocess.check_output(["git", "-C", checkout["checkout"], "rev-parse", "HEAD"], text=True).strip(), commit)
                 report_path.write_text(json.dumps({**report, "complete_contract_review": True}))
-                output = self.ctl.stage("PIT-1", role, report_path, root)
+                output = self.ctl.stage("PIT-1", role, bound_report(root,report_path), root)
             self.assertEqual(subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD"], text=True).strip(), native_before)
         self.assertEqual(output["status"], "done")
         self.assertEqual(self.g("rev-parse", "HEAD"), main_before)
@@ -251,5 +307,179 @@ class Tests(unittest.TestCase):
         self.assertIn("--no-start", done[0])
 
 
+class RegisteredProductPrerequisite(unittest.TestCase):
+    def test_pit25_consumes_only_the_accepted_integrated_pit24_delivery(self):
+        from artifacts import has_ancestor
+        source=Path(__file__).resolve().parents[2]
+        config=json.loads((source/'tooling/pipeline/runtime.json').read_text())
+        accepted=config['legacy_dependencies']['PIT-24']
+        self.assertEqual(accepted,'061895deca069bf63fd9d40c2e1451b1b97e1fbc')
+        self.assertTrue(has_ancestor(source,'8a2cd7a8837b782ac6f1dd3e8d7ea56ae1897579',accepted))
+        head=subprocess.check_output(['git','-C',str(source),'rev-parse','HEAD'],text=True).strip()
+        old_base=subprocess.check_output(['git','-C',str(source),'rev-parse',accepted+'^1'],text=True).strip()
+        config['repository']=str(source)
+        calls=[]
+        with tempfile.TemporaryDirectory(prefix='pit25-prerequisite-check-') as folder:
+            controller=Controller(config,lambda args:calls.append(args),Path(folder)/'isolated-state')
+            target={'identifier':'PIT-25','metadata':{'depends_on':'["PIT-24"]'}}
+            prior={'identifier':'PIT-24','status':'done'}
+            try:
+                controller.dependencies(target,[target,prior],base=head)
+                with self.assertRaisesRegex(Hold,'not integrated'):
+                    controller.dependencies(target,[target,prior],base=old_base)
+                with self.assertRaisesRegex(Hold,'unaccepted prerequisite'):
+                    controller.dependencies(target,[target,{**prior,'status':'in_review'}],base=head)
+                saved=config['legacy_dependencies'].pop('PIT-24')
+                with self.assertRaisesRegex(Hold,'artifact unavailable'):
+                    controller.dependencies(target,[target,prior],base=head)
+                config['legacy_dependencies']['PIT-24']=saved
+            finally:
+                controller.close()
+        self.assertEqual(calls,[])
+
+
 if __name__ == "__main__":
     unittest.main()
+
+class DurableRoleEvidence(unittest.TestCase):
+    setUp=Tests.setUp
+    tearDown=Tests.tearDown
+    g=Tests.g
+
+    def prepare(self, run='review-run', role='reviewer', outcome='pass'):
+        self.local=self.repo/'.pipeline-local';self.local.mkdir(exist_ok=True)
+        self.probe=self.local/'probe.py';self.probe.write_text('print("independent check")')
+        self.raw=self.local/'output.log';self.raw.write_text('actual result: '+outcome)
+        self.report=self.local/'report.json'
+        self.report.write_text(json.dumps({'outcome':outcome,'evidence_files':['.pipeline-local/probe.py','.pipeline-local/output.log']}))
+        self.lane={'issue':'PIT-1','generation':3,'description_sha256':'description',
+                   'artifact':{'commit':self.g('rev-parse','HEAD'),'contract_sha256':'contract'}}
+        self.role,self.run=role,run
+
+    def retain(self):
+        return Path(self.ctl.retain_role_evidence(self.lane,self.role,self.report,self.repo,self.c[self.role],self.run))
+
+    def test_declared_evidence_survives_source_cleanup_with_bound_hashes(self):
+        self.prepare();manifest=self.retain();data=json.loads(manifest.read_text())
+        import shutil
+        shutil.rmtree(self.local)
+        verified=self.ctl.verify_role_evidence(manifest.parent,data['binding'])
+        self.assertEqual(verified['binding']['run_id'],'review-run')
+        self.assertEqual(len(verified['files']),3)
+        self.assertEqual((manifest.parent/'files/.pipeline-local/output.log').read_text(),'actual result: pass')
+        self.assertLessEqual(sum(p.stat().st_size for p in manifest.parent.rglob('*') if p.is_file()),verified['reserved_bytes'])
+
+    def test_failure_success_and_roles_are_separate_never_overwritten(self):
+        self.prepare(run='failure',outcome='fail');first=self.retain();original=first.read_bytes()
+        with self.assertRaises(Hold):self.retain()
+        self.prepare(run='success',role='qa');second=self.retain()
+        self.assertNotEqual(first,second);self.assertEqual(first.read_bytes(),original)
+        self.assertEqual(json.loads((first.parent/'report.json').read_text())['outcome'],'fail')
+
+    def test_missing_symlink_escape_and_malformed_declarations_refuse(self):
+        self.prepare();outside=self.root/'private';outside.write_text('must not be copied')
+        (self.local/'link').symlink_to(outside)
+        for name in ['../private',str(outside),'.pipeline-local/missing','.pipeline-local/link']:
+            self.report.write_text(json.dumps({'evidence_files':[name]}))
+            with self.subTest(name=name):
+                with self.assertRaises(Hold):self.retain()
+        for names in [{},[{}],['.pipeline-local/probe.py','.pipeline-local/probe.py']]:
+            self.report.write_text(json.dumps({'evidence_files':names}))
+            with self.assertRaises(Hold):self.retain()
+        self.assertFalse((self.ctl.root/'role-evidence').exists())
+
+    def test_corruption_wrong_identity_and_partial_copy_never_verify(self):
+        self.prepare();manifest=self.retain();data=json.loads(manifest.read_text())
+        with self.assertRaises(Hold):self.ctl.verify_role_evidence(manifest.parent,{**data['binding'],'role':'qa'})
+        (manifest.parent/'files/.pipeline-local/output.log').write_text('tampered')
+        with self.assertRaises(Hold):self.ctl.verify_role_evidence(manifest.parent,data['binding'])
+        manifest.unlink()
+        with self.assertRaises(Hold):self.ctl.verify_role_evidence(manifest.parent,data['binding'])
+        with self.assertRaises(Hold):self.retain()
+
+    def test_budget_cap_and_deleted_output_do_not_refund(self):
+        self.prepare()
+        grant=self.ctl.root/'evidence-budget.json';original=grant.read_text()
+        value=json.loads(original);value['allocation_bytes']=320000000;grant.write_text(json.dumps(value))
+        with self.assertRaises(Hold):self.retain()
+        value['allocation_bytes']=1;grant.write_text(json.dumps(value))
+        with self.assertRaises(Hold):self.retain()
+        grant.write_text(original);manifest=self.retain()
+        before=(self.ctl.root/'evidence-reservations.json').read_bytes()
+        import shutil
+        shutil.rmtree(manifest.parent)
+        with self.assertRaises(Hold):self.retain()
+        self.assertEqual((self.ctl.root/'evidence-reservations.json').read_bytes(),before)
+
+    def test_copy_interruption_keeps_intent_reservation_and_partial_files(self):
+        self.prepare();original=Path.open
+        def opened(path,*args,**kwargs):
+            if str(path).endswith('files/.pipeline-local/output.log') and args and args[0]=='xb':
+                raise OSError('synthetic copy interruption')
+            return original(path,*args,**kwargs)
+        with patch.object(Path,'open',opened):
+            with self.assertRaises(OSError):self.retain()
+        target=self.ctl.root/'role-evidence/PIT-1/3/reviewer/review-run'
+        self.assertTrue((target/'intent.json').exists())
+        self.assertTrue((target/'report.json').exists())
+        self.assertFalse((target/'manifest.json').exists())
+        with self.assertRaises(Hold):self.retain()
+
+    def test_report_outside_workspace_or_through_parent_symlink_is_refused(self):
+        self.prepare();original=self.report
+        outside=self.root/'outside-report.json';outside.write_text(original.read_text())
+        self.report=outside
+        with self.assertRaisesRegex(Hold,'inside'):self.retain()
+        linked=self.local/'linked-parent';linked.symlink_to(self.local,target_is_directory=True)
+        self.report=linked/'report.json'
+        with self.assertRaisesRegex(Hold,'symlink'):self.retain()
+        self.assertFalse((self.ctl.root/'role-evidence').exists())
+        self.assertFalse((self.ctl.root/'evidence-reservations.json').exists())
+        self.report=original;self.assertTrue(self.retain().is_file())
+
+    def serial_return_fixture(self):
+        import serial
+        from unittest.mock import Mock
+        self.prepare()
+        note=json.loads(self.report.read_text());note.update(gaps=['defect'],details='x'*20000)
+        self.report.write_text(json.dumps(note))
+        lane={**self.lane,'repairs':0,'phase':'reviewer'}
+        ctl=serial.Serial.__new__(serial.Serial);ctl.c=self.c;ctl.root=self.ctl.root
+        ctl.current=lambda key,role:(lane,{'status':'started_2'})
+        ctl.actor=lambda role, lane=None:('review','review-run')
+        ctl.save=Mock()
+        def transition(lane,issue,target,report):lane['pending']={}
+        ctl.transition=Mock(side_effect=transition)
+        return ctl
+
+    def test_serial_return_reserves_duplicate_before_transition(self):
+        ctl=self.serial_return_fixture()
+        note=json.loads(self.report.read_text());note['details']='预算'*10000
+        self.report.write_text(json.dumps(note))
+        with patch('pathlib.Path.cwd',return_value=self.repo):
+            result=ctl.return_to_owner('PIT-1','reviewer',self.report,rework=True)
+        self.assertEqual(result['status'],'queued_until_runtime_exit')
+        ledger=json.loads((ctl.root/'evidence-reservations.json').read_text())
+        returned=ctl.root/'returns/PIT-1-g3-reviewer-review-run.json';original=returned.read_bytes()
+        self.assertEqual(ledger['reservations']['return:PIT-1:3:reviewer:review-run'],len(original))
+        total=sum(p.stat().st_size for name in ('returns','role-evidence') for p in (ctl.root/name).rglob('*') if p.is_file())
+        self.assertLessEqual(total,sum(ledger['reservations'].values()))
+        with patch('pathlib.Path.cwd',return_value=self.repo):
+            with self.assertRaises(Hold):ctl.return_to_owner('PIT-1','reviewer',self.report,rework=True)
+        self.assertEqual(returned.read_bytes(),original);ctl.transition.assert_called_once()
+
+    def test_serial_return_exhaustion_preserves_report_without_transition(self):
+        ctl=self.serial_return_fixture()
+        grant=ctl.root/'evidence-budget.json';value=json.loads(grant.read_text())
+        value['allocation_bytes']=30000;grant.write_text(json.dumps(value))
+        with patch('pathlib.Path.cwd',return_value=self.repo):
+            with self.assertRaisesRegex(Hold,'Evidence budget missing, invalid or exhausted'):
+                ctl.return_to_owner('PIT-1','reviewer',self.report,rework=True)
+        ctl.transition.assert_not_called();ctl.save.assert_not_called()
+        self.assertFalse((ctl.root/'returns').exists())
+        retained=ctl.root/'role-evidence/PIT-1/3/reviewer/review-run'
+        self.assertEqual(json.loads((retained/'report.json').read_text())['gaps'],['defect'])
+        ledger=(ctl.root/'evidence-reservations.json').read_bytes()
+        with patch('pathlib.Path.cwd',return_value=self.repo):
+            with self.assertRaises(Hold):ctl.return_to_owner('PIT-1','reviewer',self.report,rework=True)
+        self.assertEqual((ctl.root/'evidence-reservations.json').read_bytes(),ledger)

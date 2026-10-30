@@ -6,6 +6,30 @@ from unittest.mock import patch
 import delivery
 
 class PushSafety(unittest.TestCase):
+    def test_manual_merge_sources_are_exact_and_still_content_scanned(self):
+        for path in ['tooling/pipeline/operator_merge.py', 'tooling/pipeline/test_operator_merge.py']:
+            self.assertTrue(delivery.allowed_path(path), path)
+            with self.assertRaises(ValueError):
+                delivery.check(path, ('sk-' + 'a' * 32).encode())
+        for path in ['tooling/pipeline/operator_merge.py.bak',
+                     'tooling/pipeline/test_operator_merge.py.json',
+                     'tooling/pipeline/operator_merge_private.py',
+                     'tooling/pipeline/operator_merge/receipt.json',
+                     'tooling/pipeline/manual-merges/PIT-53.json',
+                     '.state/pipeline/manual-merges/PIT-53.json',
+                     'tooling/pipeline/unreviewed.py']:
+            self.assertFalse(delivery.allowed_path(path), path)
+
+    def test_qa_skill_source_paths_are_exact_and_runtime_evidence_stays_blocked(self):
+        for path in ['docs/development/QA_SKILLS.md', 'tooling/pipeline/agent_instructions.py', 'tooling/pipeline/test_agent_instructions.py', 'tooling/pipeline/skills/pitchroom-qa-pstack/SKILL.md']:
+            self.assertTrue(delivery.allowed_path(path), path)
+        for path in ['docs/development/QA_SKILLS-private.md',
+                     'tooling/pipeline/skills/pitchroom-qa-pstack/raw-qa.json',
+                     'tooling/pipeline/skills/other/SKILL.md',
+                     'tooling/pipeline/agent_instructions.py.bak',
+                     'tooling/pipeline/.pipeline-local/qa.json']:
+            self.assertFalse(delivery.allowed_path(path), path)
+
     def test_main_deletion_and_non_task_destinations_refused(self):
         for sha, ref in [('a'*40,'refs/heads/main'),('0'*40,'refs/heads/codex/pit-47-safe'),('a'*40,'refs/tags/release'),('a'*40,'refs/heads/feature')]:
             with self.assertRaises(ValueError): delivery.safe_destination(sha,ref)

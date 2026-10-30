@@ -1,18 +1,23 @@
 #!/usr/bin/env python3
 """Canonical single-lane polling controller. No automatic merge or deployment."""
 import argparse
+from datetime import datetime, timezone
 import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
+import sqlite3
 import subprocess
 import sys
 import time
 
+from acceptance import contract_digest
 from controller import Controller, Hold, RUNNING, ACTIVE, digest, git, lock, write_json
 from artifacts import ArtifactError, verify_squash_merge, _path, checkpoint, has_ancestor, materialize, prepare_dependencies, verify_clean_tree
 from github_sync import GitHub, SyncError, all_issues, cli, sync, invalidate
+from status import load_config, fingerprint, activation_state, control_state, FINGERPRINT_FILES, CONTROL_MODES
 
 SOURCE = Path(__file__).resolve().parents[2]
 
@@ -21,16 +26,20 @@ def canonical(root=SOURCE):
     return Path(git(root, 'rev-parse', '--path-format=absolute', '--git-common-dir')).parent
 
 
-def fingerprint(root):
-    digestor = hashlib.sha256()
-    for name in ('serial.py', 'controller.py', 'acceptance.py', 'artifacts.py', 'github_sync.py', 'runtime.json', 'policy.json'):
-        digestor.update(name.encode() + b'\0' + (Path(root) / 'tooling/pipeline' / name).read_bytes())
-    return digestor.hexdigest()
-
-
 def configured(root):
-    value = json.loads((root / 'tooling/pipeline/runtime.json').read_text())
-    value['repository'] = str(root)
+    return load_config(root)[1]
+
+
+def bundle_digest(value):
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode()).hexdigest()
+
+def runtime_identity(run):
+    # Freeze provenance too: an unchanged ID/status cannot hide reassignment.
+    result=run.get('result')
+    if result is not None and not isinstance(result,dict):raise Hold('Unknown runtime result')
+    fields=('id','status','agent_id','issue_id','created_at','work_dir','branch_name')
+    value={key:run.get(key) for key in fields}
+    value['result_branch']=(result or {}).get('branch_name')
     return value
 
 
@@ -48,13 +57,137 @@ class Serial(Controller):
     def issues(self):
         return all_issues(self.call, self.c['project'])
 
+    def supplemental_inputs(self, lane):
+        artifact = lane['artifact']
+        if artifact['contract_sha256'] != contract_digest(lane['contract']):
+            raise Hold('Supplemental contract changed')
+        if artifact['description_sha256'] != hashlib.sha256(lane['description'].encode()).hexdigest():
+            raise Hold('Supplemental requirements changed')
+        repo = self.c['repository']
+        base = git(repo, 'rev-parse', artifact['commit'] + '^')
+        if git(repo, 'rev-parse', artifact['commit'] + '^{tree}') != artifact['tree']:
+            raise Hold('Supplemental source tree differs')
+        run = lane['receipts']['developer']['run_id']
+        if not re.fullmatch(r'[A-Za-z0-9_-]{1,128}', run):
+            raise Hold('Invalid developer evidence run')
+        retained_path = lane['receipts']['developer'].get('retained_evidence')
+        if not retained_path:
+            raise Hold('Developer retained evidence manifest missing')
+        retained = Path(retained_path)
+        binding = {'issue':lane['issue'], 'generation':lane['generation'], 'role':'developer',
+                   'actor_id':self.role_actor(lane,'developer'), 'run_id':run, 'commit':artifact['commit'],
+                   'contract_sha256':artifact['contract_sha256'], 'description_sha256':artifact['description_sha256']}
+        declared = self.verify_role_evidence(retained.parent, binding)
+        root = self.root / 'evidence' / lane['issue'] / str(lane['generation']) / 'developer' / run
+        files = {}
+        for check in lane['contract']['checks']:
+            for relative in ('checks/' + check + '.json', 'logs/' + check + '.stdout', 'logs/' + check + '.stderr'):
+                path = root / relative
+                if not path.is_file() or any((root / Path(*Path(relative).parts[:i])).is_symlink() for i in range(len(Path(relative).parts)+1)):
+                    raise Hold('Missing or linked supplemental evidence')
+                path.resolve().relative_to(root.resolve())
+                files[relative] = {'path': str(path.resolve()), 'sha256': hashlib.sha256(path.read_bytes()).hexdigest()}
+        return {'issue': lane['issue'], 'generation': lane['generation'], 'base': base,
+                'head': artifact['commit'], 'tree': artifact['tree'],
+                'description_sha256': artifact['description_sha256'], 'contract_sha256': artifact['contract_sha256'],
+                'requirements': lane['description'], 'contract': lane['contract'],
+                'diff': git(repo, 'diff', '--no-ext-diff', '--no-textconv', base, artifact['commit'], '--'),
+                'developer_receipt': lane['receipts']['developer'], 'evidence': files,
+                'declared_developer_evidence': {'root':str(retained.parent), 'manifest':declared}}
+
+    def supplemental_source(self):
+        # A tracked-source guard, not an OS sandbox. Runtime-created local report
+        # files are permitted; changes to tracked source or HEAD are refused.
+        return {'head': git(Path.cwd(), 'rev-parse', 'HEAD'),
+                'diff_sha256': digest(git(Path.cwd(), 'diff', '--binary', '--no-ext-diff', '--no-textconv', 'HEAD', '--'))}
+
+    def supplemental_bundle(self, key):
+        lane, _ = self.current(key, 'supplemental')
+        actor, run = self.actor('supplemental', lane)
+        if not re.fullmatch(r'[A-Za-z0-9_-]{1,128}', run):
+            raise Hold('Invalid supplemental run')
+        inputs = self.supplemental_inputs(lane)
+        value = {'inputs': inputs, 'inputs_sha256': bundle_digest(inputs), 'actor_id': actor, 'run_id': run, 'native_source': self.supplemental_source()}
+        path = self.root / 'supplemental' / key / str(lane['generation']) / run / 'bundle.json'
+        if path.exists():
+            if json.loads(path.read_text()) != value or lane.get('supplemental_bundle') != str(path):
+                raise Hold('Supplemental bundle changed or unregistered')
+        else:
+            if lane.get('supplemental_bundle'):
+                raise Hold('Supplemental run already bound; explicit reconciliation required')
+            self.reserve_evidence('supplemental-bundle:'+key+':'+str(lane['generation'])+':'+run, len(json.dumps(value,ensure_ascii=False,indent=2).encode())+1)
+            write_json(path, value)
+            lane['supplemental_bundle'] = str(path)
+            self.save(lane)
+        return {'bundle': str(path), **value}
+
+    def verify_supplemental(self, lane):
+        path = lane.get('supplemental_bundle')
+        if not path:
+            raise Hold('Supplemental evidence bundle missing')
+        bundle = json.loads(Path(path).read_text())
+        if bundle['inputs'] != self.supplemental_inputs(lane) or bundle['inputs_sha256'] != bundle_digest(bundle['inputs']):
+            raise Hold('Supplemental evidence is stale or changed')
+        receipt = lane.get('supplemental_receipt')
+        if not receipt or receipt['inputs_sha256'] != bundle['inputs_sha256'] or receipt['actor_id'] != bundle['actor_id'] or receipt['run_id'] != bundle['run_id']:
+            raise Hold('Completed supplemental receipt missing or mismatched')
+        retained = Path(receipt['retained_evidence'])
+        expected = {'issue':lane['issue'], 'generation':lane['generation'], 'role':'supplemental',
+                    'actor_id':receipt['actor_id'], 'run_id':receipt['run_id'], 'commit':lane['artifact']['commit'],
+                    'contract_sha256':lane['artifact']['contract_sha256'], 'description_sha256':lane['description_sha256']}
+        self.verify_role_evidence(retained.parent, expected)
+        if json.loads(Path(receipt['report_path']).read_text()) != receipt['report']:
+            raise Hold('Supplemental report changed')
+        return bundle
+
+    def supplemental_submit(self, key, report):
+        lane, issue = self.current(key, 'supplemental')
+        actor, run = self.actor('supplemental', lane)
+        if lane.get('supplemental_receipt'):
+            raise Hold('Supplemental report already submitted')
+        if not lane.get('supplemental_bundle'):
+            raise Hold('Read the registered supplemental bundle first')
+        bundle = json.loads(Path(lane['supplemental_bundle']).read_text())
+        if bundle['inputs'] != self.supplemental_inputs(lane) or bundle['inputs_sha256'] != bundle_digest(bundle['inputs']):
+            raise Hold('Supplemental evidence is stale or changed')
+        if bundle.get('native_source') != self.supplemental_source():
+            raise Hold('Supplemental tracked source changed during read-only review')
+        note = json.loads(Path(report).read_text())
+        if (not isinstance(note, dict) or note.get('completed') is not True
+                or note.get('inputs_sha256') != bundle['inputs_sha256']
+                or bundle['actor_id'] != actor or bundle['run_id'] != run
+                or any(note.get(k) != [] for k in ('gaps', 'failures', 'not_run'))
+                or any(note.get(k, []) != [] for k in ('skipped', 'decisions'))
+                or not isinstance(note.get('findings'), list)
+                or any(k in note for k in ('verdict', 'criterion_results', 'complete_contract_review'))):
+            raise Hold('Incomplete, stale or formal-gate supplemental report')
+        for finding in note['findings']:
+            if not isinstance(finding, dict) or any(not isinstance(finding.get(k), str) or not finding[k].strip() for k in ('location', 'trigger', 'impact', 'evidence')):
+                raise Hold('Supplemental finding needs location, trigger, impact and evidence')
+        manifest = self.retain_role_evidence(lane, 'supplemental', report, Path.cwd(), actor, run)
+        path = Path(manifest).parent/'report.json'
+        if json.loads(path.read_text()) != note:
+            raise Hold('Supplemental report changed during retention')
+        lane['supplemental_receipt'] = {'actor_id': actor, 'run_id': run, 'inputs_sha256': bundle['inputs_sha256'],
+                                       'report_path': str(path), 'report': note, 'retained_evidence': manifest}
+        lane['pending'] = {'target': self.c['review_status'], 'role': 'supplemental', 'run': run, 'actor': actor,
+                           'issue_status': issue['status'], 'assignee': actor, 'report': str(path),
+                           'source_description': lane['description_sha256'], 'engineering_verified': False}
+        lane['phase'] = 'awaiting_role_exit'
+        self.save(lane)
+        return {'status': 'queued_until_runtime_exit', 'advisory_only': True, 'report': str(path)}
+
+    def current(self, key, role):
+        lane, issue = super().current(key, role)
+        if role in ('reviewer', 'qa') and 'supplemental' in lane.get('routing', {}).get('actors', {}):
+            self.verify_supplemental(lane)
+        return lane, issue
+
     def require_enabled(self):
-        path = self.root / 'activation.json'
-        if not path.exists():
-            raise Hold('Runtime not activated; sync alone is allowed')
-        value = json.loads(path.read_text())
-        if value.get('source_fingerprint') != fingerprint(self.c['repository']) or value.get('task_lanes') != 1 or value.get('verified') is not True:
-            raise Hold('Activation stale or unverified; no scheduling')
+        if activation_state(self.c['repository'], self.root)['state'] != 'valid':
+            raise Hold('Activation missing, stale or unverified; no scheduling')
+        if control_state(self.c['repository'], self.root, self.policy)['mode'] == 'maintenance':
+            raise Hold('Maintenance pause; no controlled transition')
 
     def require_fresh(self):
         if not self.observation or time.monotonic()>=self.observation.get('deadline_monotonic',0):
@@ -115,7 +248,7 @@ class Serial(Controller):
         existing=lane.get('rework_pr_number')
         if existing:
             pr=self.github.api('pulls/'+str(existing))
-            if pr['state']!='open' or pr['base']['ref']!='main' or pr['head']['sha']!=lane['rework_public_commit'] or pr['head']['ref']!=branch:
+            if pr['state']!='open' or pr['base']['ref']!='main' or pr['head']['sha']!=lane.get('rework_expected_pr_head',lane['rework_public_commit']) or pr['head']['ref']!=branch:
                 raise Hold('Original PR changed/closed; no automatic replacement')
         token = 'publish:' + key + ':' + str(lane['generation'])
         self.reserve(token)
@@ -134,6 +267,7 @@ class Serial(Controller):
         if not url.startswith(expected) or not url[len(expected):].isdigit():
             raise Hold('Unexpected PR identity')
         lane['pr_number'], lane['branch'] = int(url[len(expected):]), branch
+        lane.pop('rework_expected_pr_head',None)
         self.save(lane); self.finish(token)
         for name, value in {'pr_url':url,'pr_number':str(lane['pr_number']),'artifact_sha':artifact['commit']}.items():
             self.call(['issue','metadata','set',lane['id'],'--key',name,'--value',value])
@@ -143,7 +277,7 @@ class Serial(Controller):
         role = lane['phase']
         if role not in ('developer','reviewer','qa'):
             raise Hold('Only active role can queue a transition')
-        actor, run = self.actor(role)
+        actor, run = self.actor(role, lane)
         pending = {'target': 'in_review' if role == 'qa' and target == 'done' else target,
                    'role':role,'run':run,'actor':actor,'issue_status':issue['status'],
                    'assignee':issue.get('assignee_id'),'report':str(Path(report).resolve()),
@@ -163,10 +297,17 @@ class Serial(Controller):
 
     def return_to_owner(self, key, role, report, rework=False):
         lane, issue = self.current(key, role)
-        note=json.loads(Path(report).read_text())
-        if not note.get('gaps') and not note.get('decisions'):raise Hold('Concrete gap/decision required')
+        actor,run=self.actor(role, lane)
+        manifest=self.retain_role_evidence(lane,role,report,Path.cwd(),actor,run)
+        note=json.loads((Path(manifest).parent/'report.json').read_text())
+        if not note.get('gaps') and not note.get('decisions'):raise Hold('Retained report has no gap or decision')
+        note['retained_evidence']=manifest
         repair=rework and role in ('reviewer','qa') and lane['repairs']<2
-        path=self.root/'returns'/f'{key}-g{lane["generation"]}-{role}.json';write_json(path,note)
+        path=self.root/'returns'/f'{key}-g{lane["generation"]}-{role}-{run}.json'
+        payload=json.dumps(note,ensure_ascii=False,indent=2)+'\n'
+        self.reserve_evidence(':'.join(('return',key,str(lane['generation']),role,run)),len(payload.encode()))
+        path.parent.mkdir(parents=True,exist_ok=True)
+        with path.open('xb') as stream:stream.write(payload.encode())
         self.transition(lane,issue,'todo' if repair else 'in_review',path)
         lane['pending']['rework']=repair;lane['phase']='awaiting_role_exit';self.save(lane)
         return {'issue':key,'status':'queued_until_runtime_exit'}
@@ -183,27 +324,30 @@ class Serial(Controller):
         return super().workspace(key,workdir)
 
     def _transition(self, lane, issue, target, report):
-        token='transition:'+lane['issue']+':'+str(lane['generation'])+':'+lane['phase']
+        token='transition:'+lane['issue']+':'+str(lane['generation'])+':'+lane['phase']+':'+lane['pending']['run']
         self.reserve(token)
         fresh=self.issue(lane['issue'])
         if fresh['status']!=issue['status'] or fresh.get('assignee_id')!=issue.get('assignee_id') or digest(fresh.get('description') or '')!=lane['description_sha256']:
             raise Hold('Issue changed before transition')
+        self.verify_routing(lane,fresh)
         self.dependencies(fresh,self.issues(),lane.get('artifact',{}).get('commit'))
         # Metadata is inert. Do not comment/mention an old handler during handoff.
         self.call(['issue','metadata','set',lane['id'],'--key','pipeline_status','--value',target])
-        role={self.c['review_status']:'reviewer',self.c['qa_status']:'qa','todo':'developer'}.get(target)
-        args=['issue','update',lane['id'],'--status',target,'--assignee-id',self.c[role] if role else self.c['owner'],'--output','json']
+        role={self.c['review_status']:'reviewer',self.c['qa_status']:'qa','todo':'developer','supplemental':'supplemental'}.get(target)
+        remote_target=self.c['review_status'] if target=='supplemental' else target
+        args=['issue','update',lane['id'],'--status',remote_target,'--assignee-id',self.role_actor(lane,role) if role else self.c['owner'],'--output','json']
         if not role:args+=['--no-start']
         pending=lane['pending']
         next_lane=json.loads(json.dumps(lane));next_lane.pop('pending')
         if pending['engineering_verified']:next_lane['phase']='awaiting_merge'
+        elif target=='supplemental':next_lane['phase']='supplemental'
         elif target==self.c['review_status']:next_lane['phase']='reviewer'
         elif target==self.c['qa_status']:next_lane['phase']='qa'
         elif target=='todo':
             next_lane.update(phase='developer',generation=lane['generation']+1,repairs=lane['repairs']+1,
                              rework_base_commit=lane['native_head'],rework_public_commit=lane['artifact']['commit'],rework_paths=lane['contract']['allowed_paths'],
                              rework_pr_number=lane.get('pr_number'),rework_branch=lane.get('branch'))
-            for name in ('artifact','receipts','checkouts','contract','developer_workspace','dependencies','published_checkout','pr_number','branch'):
+            for name in ('artifact','receipts','checkouts','contract','developer_workspace','dependencies','published_checkout','pr_number','branch','supplemental_bundle','supplemental_receipt'):
                 next_lane.pop(name,None)
         else:next_lane['phase']='held'
         self.save(next_lane)  # A newly started runtime must see its own stage already published.
@@ -267,6 +411,7 @@ class Serial(Controller):
             if len(match)!=1 or match[0]['status']!='completed':
                 results.append({'issue':lane['issue'],'waiting':'preceding runtime not successfully terminal'});continue
             issue=self.issue(lane['issue'])
+            self.verify_routing(lane,issue)
             if issue['status']!=pending['issue_status'] or issue.get('assignee_id')!=pending['assignee'] or digest(issue.get('description') or '')!=pending['source_description']:
                 raise Hold('Issue/owner/contract changed while role exited')
             if lane.get('pr_number') and pending['target'] not in ('in_review','todo'):
@@ -275,12 +420,258 @@ class Serial(Controller):
                     raise Hold('Forward handoff requires active PR on main')
                 if pr['ci']['state']!='success' and pending['target']!='in_review':
                     results.append({'issue':lane['issue'],'waiting':'exact-head CI not successful'});continue
-            if not apply:results.append({'issue':lane['issue'],'would_transition':pending['target']});continue
+            target=pending['target']
+            if pending['role']=='developer' and target==self.c['review_status'] and 'supplemental' in lane.get('routing',{}).get('actors',{}):
+                target='supplemental'
+            if pending['role']=='supplemental':self.verify_supplemental(lane)
+            if not apply:results.append({'issue':lane['issue'],'would_transition':target});continue
             # Preserve old phase in durable transition identity; never replay uncertain writes.
             lane['phase']='exit-'+pending['role']+'-g'+str(lane['generation'])
-            self._transition(lane,issue,pending['target'],pending['report'])
-            results.append({'issue':lane['issue'],'status':pending['target']})
+            self._transition(lane,issue,target,pending['report'])
+            results.append({'issue':lane['issue'],'status':target})
         return results
+
+    def recover_developer(self, key, generation, head, main, run_id, source, reason):
+        if os.environ.get('MULTICA_TASK_ID'):
+            raise Hold('Developer recovery requires an explicit operator')
+        self.require_fresh()
+        if not isinstance(source,str) or len(source)!=40 or any(c not in '0123456789abcdef' for c in source):
+            raise Hold('Full immutable native source commit required')
+        if not reason.strip():raise Hold('Concrete recovery reason required')
+        if self.db.execute("SELECT 1 FROM operations WHERE state='uncertain'").fetchone():
+            raise Hold('Uncertain operation requires reconciliation')
+        lane=self.lanes().get(key)
+        if (not lane or lane['phase']!='developer' or lane['generation']!=generation
+                or lane.get('artifact') or lane.get('pending') or lane.get('developer_recoveries',0)):
+            raise Hold('Only one unsubmitted Developer recovery in the exact generation is allowed')
+        if head!=lane.get('rework_public_commit') or not lane.get('contract') or not lane.get('developer_workspace'):
+            raise Hold('Preserved original rework and frozen contract required')
+        issue=self.issue(key)
+        self.verify_routing(lane,issue)
+        if (type(issue.get('revision')) is not int or issue['status'] not in ('todo','in_progress') or issue.get('assignee_id')!=self.role_actor(lane,'developer')
+                or digest(issue.get('description') or '')!=lane['description_sha256']):
+            raise Hold('Developer ownership or original contract changed')
+        def idle_inventory():
+            histories={}
+            for row in self.issues():
+                runs=self.call(['issue','runs',row['id'],'--output','json'])
+                if not isinstance(runs,list) or any(not isinstance(r,dict) or not isinstance(r.get('id'),str) or not r['id'].strip() or not isinstance(r.get('status'),str) or r['status'] not in RUNNING | {'completed','failed','cancelled'} for r in runs):
+                    raise Hold('Unknown runtime history')
+                if len({r['id'] for r in runs})!=len(runs):raise Hold('Duplicate runtime identity')
+                if any(r['status'] in RUNNING for r in runs):raise Hold('Live runtime prevents recovery')
+                histories[row['id']]=runs
+            return histories
+        def inventory_identity(histories):
+            return {key:{r['id']:runtime_identity(r) for r in runs} for key,runs in histories.items()}
+        histories=idle_inventory()
+        initial_inventory=inventory_identity(histories)
+        matches=[r for r in histories.get(lane['id'],[]) if r.get('id')==run_id and r.get('agent_id')==self.role_actor(lane,'developer') and r['status']=='completed']
+        if len(matches)!=1 or matches[0].get('work_dir')!=lane['developer_workspace']:
+            raise Hold('Completed bound Developer runtime required')
+        branch=matches[0].get('branch_name') or (matches[0].get('result') or {}).get('branch_name')
+        if not isinstance(branch,str) or not branch.startswith('agent/'):
+            raise Hold('Preserved native branch provenance missing')
+        repo=Path(self.c['repository'])
+        if git(repo,'branch','--show-current')!='main' or git(repo,'status','--porcelain'):
+            raise Hold('Canonical main must be clean')
+        if git(repo,'rev-parse','HEAD')!=main or self.github.api('commits/main')['sha']!=main or self.github.ci(main,'push')['state']!='success':
+            raise Hold('Exact successful current main required')
+        if git(repo,'rev-parse',source+'^{commit}')!=source or git(repo,'rev-parse','refs/heads/'+branch)!=source:
+            raise Hold('Preserved native source changed')
+        if 'branch refs/heads/'+branch+'\n' in git(repo,'worktree','list','--porcelain')+'\n':
+            raise Hold('Native branch still checked out')
+        paths=lane['contract']['allowed_paths']
+        if 'AGENTS.md' in paths:raise Hold('Recovery cannot publish governance instructions')
+        if not has_ancestor(repo,lane.get('native_head',''),source):raise Hold('Native source lost prior delivery')
+        changed=set(git(repo,'diff','--no-renames','--name-only',lane['native_head'],source).splitlines())
+        if not changed or changed-set(paths):raise Hold('Preserved native changes exceed declared source')
+        if has_ancestor(repo,main,head):raise Hold('No advanced-main integration to recover')
+        common=git(repo,'merge-base',main,head)
+        if set(git(repo,'diff','--no-renames','--name-only',common,main).splitlines()) & set(paths):
+            raise Hold('Main changed task paths; explicit source conflict resolution required')
+        prs=self.observation['issues'].get(key,{}).get('prs',[])
+        current=[p for p in prs if p['number']==lane.get('rework_pr_number') and p['head']==head]
+        if len(current)!=1 or current[0]['state'] not in ('OPEN','DRAFT') or current[0]['base']!='main' or current[0]['ci']['state']!='success':
+            raise Hold('Original active PR and exact-head CI required')
+        archive=self.root/'developer-recoveries'/f'{key}-g{generation}.json'
+        if archive.exists():raise Hold('Prior recovery exists; reconcile without replay')
+        token=f'recover-developer:{key}:{generation}:{run_id}'
+        self.reserve(token)
+        write_json(archive,{'original_lane':lane,'reason':reason,'runtime':run_id,'native_source':source,'public_head':head,'main':main})
+        def commit_tree(tree, parents, message):
+            argv=['git','-C',str(repo),'commit-tree',tree]
+            for parent in parents:argv+=['-p',parent]
+            result=subprocess.run(argv,input=message+'\n',capture_output=True,text=True,check=True,timeout=45)
+            return result.stdout.strip()
+        tree=git(repo,'merge-tree','--write-tree',head,main)
+        base=commit_tree(tree,[head,main],f'{key}: explicit recovery integration generation {generation}')
+        folder=archive.with_suffix('')
+        if folder.exists() or folder.is_symlink():raise Hold('Recovery workspace already exists')
+        folder=folder.parent.resolve()/folder.name;folder.mkdir()
+        native=folder/'native-source';public=folder/'public-source'
+        materialize(repo,source,native);materialize(repo,base,public)
+        for name in paths:
+            _path(native,name);_path(public,name)
+            src,dst=native/name,public/name
+            if src.exists():
+                if src.stat().st_size>2000000:raise Hold('Oversized recovered source')
+                dst.parent.mkdir(parents=True,exist_ok=True);shutil.copy2(src,dst)
+            elif dst.exists():dst.unlink()
+        recovered=checkpoint(public,key,generation,paths,repository=repo)['commit']
+        if set(git(repo,'diff','--no-renames','--name-only',main,recovered).splitlines())-set(paths):
+            raise Hold('Recovery public tree exceeds task scope')
+        native_tree=git(repo,'merge-tree','--write-tree',source,recovered)
+        native_head=commit_tree(native_tree,[source,recovered],f'{key}: preserve native recovery generation {generation}')
+        self.require_fresh()
+        fresh=self.issue(key)
+        if fresh.get('revision')!=issue.get('revision') or fresh.get('description')!=issue.get('description') or fresh.get('assignee_id')!=self.role_actor(lane,'developer'):
+            raise Hold('Issue changed during recovery')
+        if self.github.api('commits/main')['sha']!=main:raise Hold('Main changed during recovery')
+        pr=self.github.api('pulls/'+str(lane['rework_pr_number']))
+        if pr['state']!='open' or pr['base']['ref']!='main' or pr['head']['sha']!=head or pr['head']['ref']!=lane['rework_branch']:
+            raise Hold('Original PR changed during recovery')
+        if inventory_identity(idle_inventory())!=initial_inventory:
+            raise Hold('Project runtime history changed during recovery')
+        if 'branch refs/heads/'+branch+'\n' in git(repo,'worktree','list','--porcelain')+'\n':
+            raise Hold('Native branch acquired a live checkout during recovery')
+        self.require_fresh()
+        git(repo,'update-ref','refs/heads/'+branch,native_head,source)
+        updated=json.loads(json.dumps(lane))
+        updated.update(rework_base_commit=native_head,rework_public_commit=recovered,rework_expected_pr_head=head,
+                       developer_recoveries=1,developer_recovery=str(archive))
+        for name in ('developer_workspace','dependencies'):updated.pop(name,None)
+        self.save(updated)
+        write_json(folder/'mapping.json',{'native_source':source,'native_head':native_head,'public_head':head,'public_recovered':recovered,'main':main})
+        self.require_fresh()
+        if self.github.api('commits/main')['sha']!=main:raise Hold('Main changed before recovery enqueue')
+        pr=self.github.api('pulls/'+str(lane['rework_pr_number']))
+        if pr['state']!='open' or pr['base']['ref']!='main' or pr['head']['sha']!=head or pr['head']['ref']!=lane['rework_branch']:
+            raise Hold('Original PR changed before recovery enqueue')
+        if inventory_identity(idle_inventory())!=initial_inventory:
+            raise Hold('Project runtime history changed before recovery enqueue')
+        fresh=self.issue(key)
+        if (fresh.get('revision')!=issue.get('revision') or fresh['status']!=issue['status']
+                or fresh.get('assignee_id')!=self.role_actor(lane,'developer') or fresh.get('description')!=issue.get('description')):
+            raise Hold('Developer assignment changed before recovery enqueue')
+        self.require_fresh()
+        start = {'schema_version':1, 'token':token, 'issue':key, 'id':lane['id'],
+                 'generation':generation, 'repairs':lane['repairs'], 'actor':self.role_actor(lane,'developer'),
+                 'description_sha256':lane['description_sha256'], 'revision':issue['revision'],
+                 'inventory':initial_inventory, 'mapping':json.loads((folder/'mapping.json').read_text()),
+                 'branch':branch, 'pr_number':lane['rework_pr_number'], 'pr_branch':lane['rework_branch']}
+        write_json(folder/'start.json', start)
+        self.recovery_event(folder, 'parking_intent')
+        self.call(['issue','update',lane['id'],'--status','backlog','--assignee-id',self.role_actor(lane,'developer'),'--no-start','--output','json'])
+        parked=self.issue(key)
+        if (parked.get('status')!='backlog' or parked.get('assignee_id')!=self.role_actor(lane,'developer')
+                or digest(parked.get('description') or '')!=lane['description_sha256']
+                or parked.get('revision')!=issue['revision']+1
+                or inventory_identity(idle_inventory())!=initial_inventory):
+            raise Hold('Parking acknowledgement changed; reconcile without replay')
+        self.recovery_event(folder, 'parked', revision=parked['revision'])
+        if self.github.api('commits/main')['sha']!=main or git(repo,'rev-parse','refs/heads/'+branch)!=native_head:
+            raise Hold('Source changed after parking; no enqueue')
+        pr=self.github.api('pulls/'+str(lane['rework_pr_number']))
+        if pr['state']!='open' or pr['base']['ref']!='main' or pr['head']['sha']!=head or pr['head']['ref']!=lane['rework_branch']:
+            raise Hold('PR changed after parking; no enqueue')
+        latest=self.issue(key)
+        if latest!=parked or inventory_identity(idle_inventory())!=initial_inventory:
+            raise Hold('Task/runtime changed after parking; no enqueue')
+        self.require_fresh()
+        self.recovery_event(folder, 'enqueue_intent')
+        self.call(['issue','update',lane['id'],'--status','todo','--assignee-id',self.role_actor(lane,'developer'),'--output','json'])
+        result=self.inspect_recovery(key)
+        if result['state']=='unique_run_observed':
+            self.recovery_event(folder, 'confirmed', run_id=result['run_id'])
+            self.finish(token)
+        return {'issue':key,'generation':generation,'repairs':lane['repairs'],'recovered_source':recovered,
+                'status':result['state'],'run_id':result.get('run_id'),'archive':str(archive)}
+
+    def recovery_event(self, folder, state, **fields):
+        events=folder/'start-events';events.mkdir(exist_ok=True)
+        number=len(list(events.glob('*.json')))
+        with (events/f'{number:04d}.json').open('x') as stream:
+            json.dump({'state':state,'at':datetime.now(timezone.utc).isoformat(),**fields},stream,indent=2)
+            stream.write('\n')
+
+    def inspect_recovery(self, key):
+        """Read-only observation; no refresh/publication or journal writes."""
+        if os.environ.get('MULTICA_TASK_ID'):raise Hold('Recovery reconciliation is operator-only')
+        lane=self.lanes().get(key)
+        if not lane or not lane.get('developer_recovery'):raise Hold('No recorded recovery')
+        folder=Path(lane['developer_recovery']).with_suffix('')
+        try:
+            start=json.loads((folder/'start.json').read_text())
+            original=json.loads(Path(lane['developer_recovery']).read_text())
+            expected='recover-developer:'+key+':'+str(lane['generation'])+':'+original['runtime']
+            operation=self.db.execute('SELECT state FROM operations WHERE token=?',(expected,)).fetchone()
+            if start.get('token')!=expected or not operation or operation[0] not in ('uncertain','confirmed'):
+                raise Hold('Recovery operation identity missing or changed')
+            events=[json.loads(p.read_text()) for p in sorted((folder/'start-events').glob('*.json'))]
+            intent=[e for e in events if e['state']=='enqueue_intent']
+            if not intent:return {'state':'not_enqueued_or_unknown','run_id':None}
+            if len(intent)!=1:raise Hold('Ambiguous enqueue journal')
+            if (start['issue']!=key or start['id']!=lane['id'] or start['actor']!=self.role_actor(lane,'developer')
+                    or start['generation']!=lane['generation'] or start['repairs']!=lane['repairs']
+                    or start['description_sha256']!=lane['description_sha256']
+                    or start['mapping']!=json.loads((folder/'mapping.json').read_text())
+                    or lane['rework_base_commit']!=start['mapping']['native_head']
+                    or lane['rework_public_commit']!=start['mapping']['public_recovered']):
+                raise Hold('Recovery mapping changed')
+            issue=self.issue(key)
+            if (issue.get('assignee_id')!=start['actor'] or issue.get('status') not in ('todo','in_progress')
+                    or type(issue.get('revision')) is not int or issue['revision']<start['revision']+2
+                    or digest(issue.get('description') or '')!=start['description_sha256']):
+                raise Hold('Recovery task changed or enqueue unacknowledged')
+            if self.github.api('commits/main')['sha']!=start['mapping']['main']:
+                raise Hold('Recovery base changed')
+            pr=self.github.api('pulls/'+str(start['pr_number']))
+            if pr['state']!='open' or pr['base']['ref']!='main' or pr['head']['sha']!=start['mapping']['public_head'] or pr['head']['ref']!=start['pr_branch']:
+                raise Hold('Recovery PR changed')
+            if not has_ancestor(self.c['repository'],start['mapping']['native_head'],git(self.c['repository'],'rev-parse','refs/heads/'+start['branch'])):
+                raise Hold('Recovery source lost')
+            histories={}
+            for row in self.issues():
+                runs=self.call(['issue','runs',row['id'],'--output','json'])
+                if not isinstance(runs,list) or any(not isinstance(r,dict) or not isinstance(r.get('id'),str) or not r['id'].strip()
+                    or not isinstance(r.get('status'),str) or r['status'] not in RUNNING | {'completed','failed','cancelled'} for r in runs):
+                    raise Hold('Unknown runtime history')
+                if len({r['id'] for r in runs})!=len(runs):raise Hold('Duplicate runtime identity')
+                histories[row['id']]=runs
+            if set(histories)!=set(start['inventory']):raise Hold('Project inventory changed')
+            added=[]
+            for issue_id,runs in histories.items():
+                before=start['inventory'][issue_id];current={r['id']:runtime_identity(r) for r in runs}
+                if not isinstance(before,dict):raise Hold('Legacy inventory lacks provenance; explicit reconciliation required')
+                if any(current.get(r)!=v for r,v in before.items()):raise Hold('Prior run history changed')
+                new=[r for r in runs if r['id'] not in before]
+                if issue_id!=start['id'] and new:raise Hold('Other issue runtime changed')
+                if issue_id==start['id']:added=new
+            if not added:return {'state':'enqueue_unconfirmed','run_id':None}
+            if len(added)!=1:raise Hold('Multiple new runs; cannot identify recovery')
+            run=added[0]
+            if run.get('issue_id')!=start['id'] or run.get('agent_id')!=start['actor']:
+                raise Hold('New run belongs to another issue or role')
+            created=datetime.fromisoformat(run['created_at'].replace('Z','+00:00'))
+            requested=datetime.fromisoformat(intent[0]['at']).replace(microsecond=0)
+            if created.tzinfo is None or created<requested:raise Hold('New run predates enqueue intent')
+            if run['status'] in ('failed','cancelled'):return {'state':'observed_run_failed','run_id':run['id']}
+            confirmed=[e for e in events if e['state']=='confirmed']
+            if confirmed and (len(confirmed)!=1 or confirmed[0]['run_id']!=run['id']):raise Hold('Confirmation conflict')
+            return {'state':'unique_run_observed','run_id':run['id']}
+        except (AttributeError,KeyError,TypeError,ValueError,OSError,subprocess.SubprocessError):
+            return {'state':'conflict_or_unavailable','run_id':None}
+
+    def confirm_recovery(self, key, run_id):
+        result=self.inspect_recovery(key)
+        if result['state']!='unique_run_observed' or result['run_id']!=run_id:
+            raise Hold('Exact unique recovery run not observed; no acknowledgement')
+        lane=self.lanes()[key];folder=Path(lane['developer_recovery']).with_suffix('')
+        start=json.loads((folder/'start.json').read_text())
+        events=[json.loads(p.read_text()) for p in (folder/'start-events').glob('*.json')]
+        if not any(e['state']=='confirmed' for e in events):self.recovery_event(folder,'confirmed',run_id=run_id)
+        self.finish(start['token'])
+        return result
 
     def retry_qa(self, key, head, reason):
         if os.environ.get('MULTICA_TASK_ID'):
@@ -332,6 +723,7 @@ class Serial(Controller):
 
     def active_issues(self, issues):
         actors = {self.c[role] for role in ('developer', 'reviewer', 'qa')}
+        actors.update(a for lane in self.lanes().values() for a in lane.get('routing',{}).get('actors',{}).values())
         active = {lane['issue'] for lane in self.lanes().values()
                   if lane['phase'] not in ('done', 'held')}
         for issue in issues:
@@ -347,6 +739,9 @@ class Serial(Controller):
         return active
 
     def dispatch(self, apply=False):
+        control = control_state(self.c['repository'], self.root, self.policy)
+        if control['mode'] != 'open':
+            return {'active': [], 'started': [], 'held': {'admission': control['mode']}}
         active=[x['issue'] for x in self.lanes().values() if x['phase'] not in ('done','held')]
         if active:return {'active':active,'started':[],'held':{'single_lane':'Existing artifact owns the lane through merge'}}
         self.require_fresh()
@@ -357,6 +752,9 @@ class Serial(Controller):
         return super().dispatch(apply)
 
     def tick(self, apply=False):
+        control = control_state(self.c['repository'], self.root, self.policy)
+        if control['mode'] == 'maintenance':
+            return {'held': 'Maintenance pause; no synchronization, transition or dispatch'}
         self.refresh(apply)
         if self.db.execute("SELECT 1 FROM operations WHERE state='uncertain'").fetchone():raise Hold('Uncertain write requires explicit reconciliation')
         if apply:self.require_enabled()
@@ -385,7 +783,7 @@ def activate(root, config, state, github, call, receipt_path):
             if not has_ancestor(root,merged,head):raise Hold('Reviewed squash integration is absent from main')
             verify_squash_merge(root,sha,merged,receipt.get('reviewed_integration_base',''))
             if github.ci(merged,'push')['state']!='success':raise Hold('Reviewed squash integration CI must pass')
-        for name in ('serial.py','controller.py','artifacts.py','acceptance.py','github_sync.py','runtime.json','policy.json'):
+        for name in FINGERPRINT_FILES:
             actual=(root/'tooling/pipeline'/name).read_bytes()
             approved=subprocess.check_output(['git','-C',str(root),'show',sha+':tooling/pipeline/'+name])
             if approved!=actual:raise Hold('Controller changed after independent review')
@@ -407,32 +805,68 @@ def activate(root, config, state, github, call, receipt_path):
 def main():
     p=argparse.ArgumentParser(description=__doc__);sub=p.add_subparsers(dest='command',required=True)
     q=sub.add_parser('tick');q.add_argument('--apply',action='store_true')
+    q=sub.add_parser('inspect-recovery');q.add_argument('issue')
+    q=sub.add_parser('confirm-recovery');q.add_argument('issue');q.add_argument('--run',required=True)
+    q=sub.add_parser('control');q.add_argument('--mode',choices=sorted(CONTROL_MODES),required=True)
     q=sub.add_parser('activate');q.add_argument('--receipt',type=Path,required=True)
     q=sub.add_parser('approve-merge');q.add_argument('issue');q.add_argument('--approved-head',required=True)
+    for name in ('approve-manual-merge','verify-manual-merge'):
+        q=sub.add_parser(name);q.add_argument('issue');q.add_argument('--approved-head',required=True);q.add_argument('--manifest',type=Path,required=True)
     q=sub.add_parser('retry-qa');q.add_argument('issue');q.add_argument('--head',required=True);q.add_argument('--reason',required=True)
+    q=sub.add_parser('recover-developer');q.add_argument('issue');q.add_argument('--generation',type=int,required=True)
+    for field in ('head','main','run','source','reason'):q.add_argument('--'+field,required=True)
     for name in ('workspace','plan','checkout','stage','return'):
         q=sub.add_parser(name);q.add_argument('issue');q.add_argument('--workdir',type=Path,default=Path.cwd())
         if name in ('checkout','stage','return'):q.add_argument('--role',choices=['developer','reviewer','qa'],required=True)
         if name in ('plan','stage','return'):q.add_argument('--report',type=Path,required=True)
         if name=='return':q.add_argument('--rework',action='store_true')
-    args=p.parse_args();root=canonical()
+    for name in ('supplemental-bundle','supplemental-submit'):
+        q=sub.add_parser(name);q.add_argument('issue')
+        if name=='supplemental-submit':q.add_argument('--report',type=Path,required=True)
+    args=p.parse_args()
+    if args.command=='control' and os.environ.get('MULTICA_TASK_ID'):raise Hold('Control is operator-only')
+    root=canonical()
     if SOURCE!=root:raise Hold('Execute the integrated canonical controller, never a task copy')
-    config=configured(root);policy=json.loads((root/'tooling/pipeline/policy.json').read_text());state=root/'.state/pipeline'
+    policy,config=load_config(root);state=root/'.state/pipeline'
     def call(a):return cli(['multica','--profile',config['profile'],'--workspace-id',config['workspace'],*a])
-    name='controller' if args.command in ('tick','activate','approve-merge','retry-qa') else 'issue-'+args.issue
+    if args.command in ('approve-manual-merge','verify-manual-merge'):
+        from operator_merge import execute
+        with lock(state,name='controller',wait=45):
+            try:result=execute(args.command,root,state,config,GitHub(policy['repository']),call,args.issue,args.approved_head,args.manifest)
+            except (KeyError,TypeError,AttributeError,sqlite3.Error) as error:raise Hold('Malformed or unavailable manual delivery evidence') from error
+        print(json.dumps(result,ensure_ascii=False,indent=2));return
+    name='controller' if args.command in ('tick','activate','control','approve-merge','retry-qa','recover-developer','inspect-recovery','confirm-recovery') else 'issue-'+args.issue
     if '/' in name or '..' in name:raise Hold('Invalid issue identity')
+    if args.command=='inspect-recovery':
+        c=Serial.__new__(Serial);c.c=config;c.call=call;c.root=state;c.github=GitHub(policy['repository'])
+        c.db=sqlite3.connect((state/'ledger.sqlite3').as_uri()+'?mode=ro',uri=True)
+        c.db.execute('PRAGMA query_only=ON')
+        try:print(json.dumps(c.inspect_recovery(args.issue),ensure_ascii=False,indent=2))
+        finally:c.close()
+        return
     with lock(state,name=name,wait=45):
         c=Serial(config,call,state,GitHub(policy['repository']),policy)
         try:
-            if args.command=='activate':result=activate(root,config,state,c.github,call,args.receipt)
+            if args.command=='confirm-recovery':
+                c.require_enabled();result=c.confirm_recovery(args.issue,args.run)
+            elif args.command=='control':
+                if args.mode != 'maintenance' and activation_state(root,state)['state'] != 'valid':
+                    raise Hold('Verified activation required before lifting maintenance')
+                result={'mode':args.mode,'source_fingerprint':fingerprint(root)}
+                write_json(state/'control.json',result)
+            elif args.command=='activate':result=activate(root,config,state,c.github,call,args.receipt)
             elif args.command=='tick':result=c.tick(args.apply)
+            elif args.command=='recover-developer':
+                c.require_enabled();c.refresh(False);result=c.recover_developer(args.issue,args.generation,args.head,args.main,args.run,args.source,args.reason)
             elif args.command=='retry-qa':
                 c.require_enabled();c.refresh(False);result=c.retry_qa(args.issue,args.head,args.reason)
             elif args.command=='approve-merge':
                 c.require_enabled();c.refresh(False);result=c.record_merge_approval(args.issue,args.approved_head)
             else:
                 c.require_enabled()
-                if args.command=='workspace':result=c.workspace(args.issue,args.workdir)
+                if args.command=='supplemental-bundle':result=c.supplemental_bundle(args.issue)
+                elif args.command=='supplemental-submit':result=c.supplemental_submit(args.issue,args.report)
+                elif args.command=='workspace':result=c.workspace(args.issue,args.workdir)
                 elif args.command=='plan':result=c.plan(args.issue,args.report)
                 elif args.command=='checkout':result=c.checkout(args.issue,args.role,args.workdir)
                 elif args.command=='stage':result=c.stage(args.issue,args.role,args.report,args.workdir)
