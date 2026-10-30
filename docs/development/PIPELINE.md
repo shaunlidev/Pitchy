@@ -106,6 +106,86 @@ that merge, exactly one parent equal to the captured base, exact expected tree,
 and successful merge-commit push CI. It prints verification evidence only;
 human-authorized acceptance and downstream work remain separate actions.
 
+### Bounded recovery of a failed main (operator only)
+
+PIT-84 adds an explicitly authorized `red-main-repair` mode to the manual
+manifest. Absence of `recovery` retains the normal successful-main requirement;
+null, unknown modes and incomplete contracts hold. This changes neither
+`approve-merge` nor scheduling. The operator must attest that this is a bounded
+repair of the pinned failed main, with a separately approved recovery rule:
+
+```json
+"recovery": {
+  "mode": "red-main-repair",
+  "rule_authorization": "",
+  "failed_base": "FULL_LIVE_MAIN_SHA",
+  "failed_run_id": 123,
+  "failed_run_attempt": 2,
+  "known": "Evidence-supported diagnosis and bounded repair",
+  "unknown": ["Unresolved diagnostic uncertainty, if any"]
+}
+```
+
+The empty placeholder is intentionally invalid; the operator fills the actual
+approved rule reference before use.
+
+All ordinary manifest/report, operator identity, canonical-root, shared-lock,
+read-only-ledger, containment, stability-window and immutable-write gates remain.
+The approval reference and rule authorization are distinct attestations. Their
+authenticity and diagnosis relevance remain the operator's responsibility;
+a nonempty string is not independent proof of human authorization.
+
+Only approval may substitute a completed `failure` for successful base CI.
+The actual latest selected `pr-ci.yml` push run must match the live base, pinned
+run ID and attempt. Missing, pending, cancelled, timed-out and unknown results
+hold. The candidate must have exactly one parent, equal to that live main,
+and the actual `git merge-tree` result must equal the successful candidate tree.
+Conflicts, unavailable objects, another parent or a recombined tree hold.
+
+Recovery CI receipts bind actual repository, event, workflow path, SHA, run ID,
+attempt, terminal status/conclusion and attempt-specific required jobs. Every
+required job must occur once and succeed. Job inventories over 100 or incomplete
+responses hold. Recovery additionally requires each current Application checks
+step exactly once and successful: Typecheck, Unit tests, Offline evaluations,
+Database target guard, Production build, All isolated database suites serially,
+and Synthetic browser checks without recording. The names match `pr-ci.yml`;
+renaming the workflow steps requires a separately reviewed contract update, not
+a fallback to job labels. Normal manifests retain their existing job-level CI
+requirements, receipt shape and verification behavior. Attempts are reread around job collection and at the final fresh
+observation; a rerun with the same run ID still changes the binding and holds.
+
+The immutable intent retains the failed attempt as failed, diagnosis, unknowns,
+rule authorization, successful head CI and expected tree. Idempotent approval
+requires identical evidence and attempts. Later attempts never overwrite this
+history. Verification does **not** reuse the failed-base exception: it requires
+unchanged approved head CI, actual squash ancestry/tree and successful exact
+merged-main CI (including recovery steps), and retains the original failure.
+No receipt itself marks a task done or authorizes retries.
+
+#### Bootstrap before this entry is integrated
+
+After complete same-head independent Reviewer and QA and normal full CI pass,
+an explicitly authorized operator may load only the frozen reviewed
+`operator_merge.py` into the canonical `serial.py` process for the approved
+recovery intent. Before execution, preserve a separate local bootstrap receipt
+binding the reviewed commit, module SHA256, exact three role reports and hashes,
+CI run/attempt, canonical source root and state directory, and intended issue,
+head and manifest hash. Verify the module bytes against that commit and receipt.
+Verify every shared imported dependency against the reviewed commit and canonical
+bytes; any difference requires explicit independent verification before use.
+
+A bounded operator wrapper may register that exact module under `operator_merge`
+and then execute canonical `serial.py`; it must not add an untrusted import
+search path or shadow other modules. Canonical source identity checks, config,
+state, shared controller lock and read-only ledger are unchanged. Record the
+resulting immutable intent path/hash in the bootstrap receipt. The wrapper must
+fail closed on source/report/CI drift. This is an operator trust boundary, not
+an OS sandbox or automatic authenticity check. Do not replace installed code,
+edit activation, fabricate lanes, or run a task-copy serial controller. The
+bootstrap is limited to the approved recovery entry itself or the approved
+PIT-54 PR30 repair; it is not general permission for other deliveries. No
+bootstrap execution is part of implementing or testing PIT-84.
+
 ## Historical migration notes — not current operating instructions
 
 The following text is preserved for provenance. Its old rollout states and commands do not override the current rules above.
