@@ -14,7 +14,7 @@ import time
 import unittest
 from unittest.mock import patch
 
-from capacity import Capacity, authorized_lanes, inventory, read_status, scope
+from capacity import Capacity, authorized_lanes, inventory, read_status, scope, task_page
 from controller import Hold
 import serial
 import status
@@ -219,6 +219,8 @@ class InventoryTests(unittest.TestCase):
     def call(self,args):
         self.calls.append(args)
         if args[:2]==['runtime','list']: return self.runtimes
+        if args[:2]==['agent','list']: return [{'id':'actor'}]
+        if args[:2]==['agent','tasks']: return {'tasks':[r for rows in self.runs.values() for r in rows], 'next_cursor':None}
         if args[:2]==['issue','list']:
             offset=int(args[args.index('--offset')+1]); return {'issues':self.rows[offset:offset+100],'has_more':offset+100<len(self.rows)}
         return self.runs.get(args[2],[])
@@ -238,6 +240,60 @@ class InventoryTests(unittest.TestCase):
         with self.assertRaises(Hold): inventory(self.call,'machine')
         self.rows=self.rows[:1];self.runs={'id-0':[{'id':'run','issue_id':'id-0','status':'mystery'}]}
         with self.assertRaises(Hold): inventory(self.call,'machine')
+
+
+class StandaloneInventoryTests(unittest.TestCase):
+    def setUp(self):
+        self.now=datetime.now(timezone.utc).isoformat()
+        self.rows=[{'id':f'run-{n}','issue_id':'','agent_id':'dispatcher','runtime_id':'runtime','status':'running','kind':'autopilot'} for n in range(5)]
+        self.pages={None:{'tasks':self.rows,'next_cursor':None}}
+        self.issues=[];self.history=[];self.calls=[]
+    def call(self,args):
+        self.calls.append(args)
+        if args[:2]==['runtime','list']:return [{'id':'runtime','daemon_id':'machine','status':'online','last_seen_at':self.now}]
+        if args[:2]==['issue','list']:return self.issues
+        if args[:2]==['issue','runs']:return self.history
+        if args[:2]==['agent','list']:return [{'id':'dispatcher','status':'archived'}]
+        return self.pages[args[args.index('--before')+1] if '--before' in args else None]
+    def test_five_standalone_autopilot_runs_count_and_block_admission(self):
+        result=inventory(self.call,'machine');self.assertEqual(len(result['runs']),5)
+        self.assertTrue(all(r['issue_id'] is None for r in result['runs']))
+        self.assertIn('--include-archived',next(a for a in self.calls if a[:2]==['agent','list']))
+        with tempfile.TemporaryDirectory() as temp:
+            cap=Capacity(Path(temp).resolve())
+            try:
+                with self.assertRaisesRegex(Hold,'five'):cap.admit(issue(1),BASE,result,1)
+            finally:cap.close()
+    def test_actor_pages_preserve_opaque_cursor_and_deduplicate_issue_projection(self):
+        row={**self.rows[0],'issue_id':'ticket'};self.issues=[{'id':'ticket'}];self.history=[row]
+        cursor='2026-10-27T07:40:13.630945Z|opaque-run'
+        self.pages={None:{'tasks':[row],'next_cursor':cursor},cursor:{'tasks':self.rows[1:],'next_cursor':None}}
+        self.assertEqual(len(inventory(self.call,'machine')['runs']),5)
+        self.assertTrue(any(cursor in a for a in self.calls))
+    def test_changed_projection_repeated_cursor_and_unknown_page_hold(self):
+        self.issues=[{'id':'ticket'}];self.history=[{**self.rows[0],'issue_id':'ticket'}]
+        with self.assertRaisesRegex(Hold,'projections'):inventory(self.call,'machine')
+        self.issues=[];self.history=[];self.pages={None:{'tasks':[self.rows[0]],'next_cursor':'repeat'},'repeat':{'tasks':[self.rows[1]],'next_cursor':'repeat'}}
+        with self.assertRaisesRegex(Hold,'pagination'):inventory(self.call,'machine')
+        self.pages={None:[]}
+        with self.assertRaises(Hold):inventory(self.call,'machine')
+    def test_terminal_standalone_runs_do_not_consume_slots(self):
+        for row in self.rows:row['status']='completed'
+        self.assertEqual(inventory(self.call,'machine')['runs'],[])
+    def test_cli_cursor_retains_subsecond_precision(self):
+        row={'id':'task-id','created_at':'2026-10-27T07:40:13Z'}
+        cursor='2026-10-27T07:40:13.630945Z|task-id'
+        completed=subprocess.CompletedProcess([],0,json.dumps([row]),f'More runs available; use --before "{cursor}" to fetch the next page.\n')
+        with patch('capacity.subprocess.run',return_value=completed):
+            self.assertEqual(task_page(['synthetic'])['next_cursor'],cursor)
+        for hint in ('unknown warning', 'More runs available; use --before "2026-10-27T07:40:12Z|task-id" to fetch the next page.', 'More runs available; use --before "2026-10-27T07:40:13.6Z|other" to fetch the next page.'):
+            completed.stderr=hint
+            with patch('capacity.subprocess.run',return_value=completed),self.assertRaises(Hold):task_page(['synthetic'])
+    def test_cli_final_page_and_malformed_stdout(self):
+        completed=subprocess.CompletedProcess([],0,'[]','')
+        with patch('capacity.subprocess.run',return_value=completed):self.assertEqual(task_page(['synthetic']),{'tasks':[],'next_cursor':None})
+        completed.stdout='{}'
+        with patch('capacity.subprocess.run',return_value=completed),self.assertRaises(Hold):task_page(['synthetic'])
 
 
 class WiredCapacityTests(core.Tests):
@@ -299,6 +355,8 @@ class WiredCapacityTests(core.Tests):
                 if args[:2]==['runtime','list']:
                     return [{'id':'known','daemon_id':'machine','status':'online','last_seen_at':stamp},
                             {'id':'uncertain','daemon_id':daemon_value,'status':'online','last_seen_at':stamp}]
+                if args[:2]==['agent','list']:return [{'id':'other'}]
+                if args[:2]==['agent','tasks']:return {'tasks':[{'id':f'external-{n}','issue_id':'external-project-issue','agent_id':'other','runtime_id':'uncertain','status':'running'} for n in range(5)],'next_cursor':None}
                 if args[:2]==['issue','list']:return [{'id':'external-project-issue'}]
                 return [{'id':f'external-{n}','issue_id':'external-project-issue','agent_id':'other','runtime_id':'uncertain','status':'running'} for n in range(5)]
             return call
@@ -320,6 +378,27 @@ class WiredCapacityTests(core.Tests):
         self.assertEqual(result['started'], [])
         self.assertEqual(self.fake.writes, [])
         self.assertEqual(self.ctl.capacity.leases(), {})
+
+    def test_standalone_machine_limit_reaches_actual_dispatch(self):
+        fixture=StandaloneInventoryTests();fixture.setUp()
+        self.ctl.machine_inventory=lambda:inventory(fixture.call,'machine')
+        self.assertEqual(self.ctl.dispatch(True)['started'],[])
+        self.assertEqual(self.fake.writes,[])
+        for row in fixture.rows:row['status']='completed'
+        self.assertEqual(self.ctl.dispatch(True)['started'],['PIT-1','PIT-2'])
+    def test_production_inventory_adapter_uses_exact_cli_page_reader(self):
+        self.c.update(profile='local',workspace='workspace')
+        self.ctl.raw_call=lambda args: StandaloneInventoryTests.call(fixture,args)
+        fixture=StandaloneInventoryTests();fixture.setUp()
+        with patch.object(serial,'task_page',return_value={'tasks':fixture.rows,'next_cursor':None}) as page:
+            result=serial.Serial.machine_inventory(self.ctl)
+        self.assertEqual(len(result['runs']),5)
+        self.assertEqual(page.call_args.args[0][:6],['multica','--profile','local','--workspace-id','workspace','agent'])
+    def test_newly_observed_same_issue_runtime_blocks_admission(self):
+        self.ctl.machine_inventory=lambda:observed(runs=[{'id':'foreign','issue_id':'id-1'}])
+        self.fake.rows=self.fake.rows[:1]
+        self.assertEqual(self.ctl.dispatch(True)['started'],[])
+        self.assertEqual(self.fake.writes,[])
 
     def test_main_advance_invalidates_old_passing_artifact(self):
         base=self.g('rev-parse','HEAD');lane={'artifact':{'commit':base},'compatibility_base':base}

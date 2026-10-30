@@ -13,7 +13,7 @@ import subprocess
 import sys
 import time
 
-from capacity import Capacity, inventory, authorized_lanes
+from capacity import Capacity, inventory, authorized_lanes, task_page
 from acceptance import contract_digest
 from controller import Controller, Hold, RUNNING, ACTIVE, digest, git, lock, write_json
 from artifacts import ArtifactError, verify_squash_merge, _path, checkpoint, has_ancestor, materialize, prepare_dependencies, verify_clean_tree
@@ -61,7 +61,11 @@ class Serial(Controller):
         super().close()
 
     def machine_inventory(self):
-        return inventory(self.raw_call, self.c['capacity']['machine_daemon_id'])
+        def read(args):
+            if args[:2] == ['agent', 'tasks']:
+                return task_page(['multica', '--profile', self.c['profile'], '--workspace-id', self.c['workspace'], *args])
+            return self.raw_call(args)
+        return inventory(read, self.c['capacity']['machine_daemon_id'])
 
     def lane_limit(self):
         return authorized_lanes(self.c['repository'], self.root, self.c['max_lanes'], fingerprint(self.c['repository']))

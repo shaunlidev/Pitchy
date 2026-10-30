@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import re
 import sqlite3
+import subprocess
 import time
 import uuid
 
@@ -53,6 +54,28 @@ def overlap(a, b):
     return a['shared'] or b['shared'] or any(x == y or x.startswith(y + '/') or y.startswith(x + '/') for x in a['paths'] for y in b['paths'])
 
 
+def task_page(argv):
+    """Multica JSON rows omit the opaque next cursor; preserve its CLI hint."""
+    process = subprocess.run(argv, check=True, capture_output=True, text=True, timeout=90)
+    rows = json.loads(process.stdout)
+    require(isinstance(rows, list), 'Agent task page unavailable')
+    hint = process.stderr.strip()
+    match = re.fullmatch(r'More runs available; use --before "([^"\n]+)" to fetch the next page\.', hint)
+    require(not hint or match is not None, 'Unknown agent task pagination hint')
+    cursor = match.group(1) if match else None
+    if cursor:
+        require(rows and isinstance(rows[-1], dict), 'Empty continued task page')
+        parts = cursor.split('|')
+        require(len(parts) == 2 and parts[1] == rows[-1].get('id'), 'Task cursor identity changed')
+        try:
+            exact = datetime.fromisoformat(parts[0].replace('Z', '+00:00'))
+            displayed = datetime.fromisoformat(rows[-1]['created_at'].replace('Z', '+00:00'))
+            require(0 <= (exact-displayed).total_seconds() < 1, 'Task cursor timestamp changed')
+        except (KeyError, ValueError, TypeError) as error:
+            raise Hold('Invalid task pagination cursor') from error
+    return {'tasks': rows, 'next_cursor': cursor}
+
+
 def inventory(call, daemon, maximum_age=120):
     """Read every visible workspace issue/run, including other projects."""
     started = time.monotonic()
@@ -89,6 +112,19 @@ def inventory(call, daemon, maximum_age=120):
         require(rows and offset < 100000, 'Incomplete workspace issue inventory')
         offset += len(rows)
     runs, run_ids = [], set()
+    identities = {}
+    def identity(run):
+        return (run.get('issue_id') or None, run.get('agent_id'), run.get('runtime_id'), run.get('status'))
+    def active(run):
+        if run['status'] not in RUNNING: return
+        require(isinstance(run.get('runtime_id'), str) and run['runtime_id'] in known_ids, 'Active runtime has unknown machine')
+        assigned_machine = runtime_by_id[run['runtime_id']].get('daemon_id')
+        require(isinstance(assigned_machine, str) and
+                (assigned_machine == daemon or bool(re.fullmatch(r'[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}', assigned_machine))),
+                'Active runtime machine attribution unknown; no capacity exclusion')
+        if run['runtime_id'] in machine_ids:
+            require(isinstance(run.get('agent_id'), str) and run['agent_id'], 'Active runtime actor unavailable')
+            runs.append({**run, 'issue_id': run.get('issue_id') or None})
     for issue in issues:
         history = call(['issue', 'runs', issue['id'], '--output', 'json'])
         require(isinstance(history, list), 'Unknown runtime history')
@@ -96,15 +132,38 @@ def inventory(call, daemon, maximum_age=120):
             require(isinstance(run, dict) and isinstance(run.get('id'), str) and run['id'] not in run_ids
                     and run.get('issue_id') == issue['id'] and isinstance(run.get('status'), str) and run.get('status') in RUNNING | TERMINAL, 'Malformed runtime identity/history')
             run_ids.add(run['id'])
-            if run['status'] in RUNNING:
-                require(isinstance(run.get('runtime_id'), str) and run['runtime_id'] in known_ids, 'Active runtime has unknown machine')
-                assigned_machine = runtime_by_id[run['runtime_id']].get('daemon_id')
-                require(isinstance(assigned_machine, str) and
-                        (assigned_machine == daemon or bool(re.fullmatch(r'[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}', assigned_machine))),
-                        'Active runtime machine attribution unknown; no capacity exclusion')
-                if run['runtime_id'] in machine_ids:
-                    require(isinstance(run.get('agent_id'), str) and run['agent_id'], 'Active runtime actor unavailable')
-                    runs.append(run)
+            identities[run['id']] = identity(run)
+            active(run)
+    # Native Autopilot/chat tasks have no issue_id. Agent history is a second
+    # complete projection, with exact CLI cursors rather than truncated dates.
+    agents = call(['agent', 'list', '--include-archived', '--output', 'json'])
+    require(isinstance(agents, list) and all(isinstance(a, dict) and isinstance(a.get('id'), str) and a['id'] for a in agents), 'Agent inventory unavailable')
+    require(len({a['id'] for a in agents}) == len(agents), 'Duplicate agent inventory')
+    require({r['agent_id'] for r in runs} <= {a['id'] for a in agents}, 'Active actor absent from complete agent inventory')
+    agent_runs = set()
+    for agent in agents:
+        cursor, cursors = None, set()
+        while True:
+            args = ['agent', 'tasks', agent['id'], '--limit', '200', '--output', 'json']
+            if cursor: args += ['--before', cursor]
+            page = call(args)
+            require(isinstance(page, dict) and set(page) == {'tasks', 'next_cursor'} and isinstance(page['tasks'], list)
+                    and len(page['tasks']) <= 200, 'Complete agent task page required')
+            for run in page['tasks']:
+                require(isinstance(run, dict) and isinstance(run.get('id'), str) and run['id'] and run['id'] not in agent_runs
+                        and run.get('agent_id') == agent['id'] and (run.get('issue_id') is None or isinstance(run['issue_id'], str))
+                        and isinstance(run.get('status'), str) and run['status'] in RUNNING | TERMINAL, 'Malformed agent task history')
+                agent_runs.add(run['id'])
+                if run['id'] in identities:
+                    require(identities[run['id']] == identity(run), 'Runtime projections changed; reread before admission')
+                else:
+                    identities[run['id']] = identity(run)
+                    active(run)
+            cursor = page['next_cursor']
+            if cursor is None: break
+            require(isinstance(cursor, str) and cursor and cursor not in cursors and page['tasks'], 'Unknown/repeated task pagination')
+            cursors.add(cursor)
+            require(time.monotonic() - started < maximum_age, 'Machine inventory expired')
     require(time.monotonic() - started < maximum_age, 'Machine inventory expired')
     return {'runs': runs, 'deadline': started + maximum_age, 'daemon': daemon}
 
@@ -192,6 +251,7 @@ class Capacity:
         require(len(leases) < limit, 'Task lane capacity occupied')
         selected = scope(issue)
         require(not any(overlap(selected, lease['scope']) for lease in leases.values()), 'Shared source surface requires serial execution')
+        require(not any(r['issue_id'] == issue['id'] for r in observed['runs']), 'Task already has an active runtime')
         self.room(observed)
         return selected
 

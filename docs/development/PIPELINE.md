@@ -286,8 +286,12 @@ merge and resource retirement; a clock never releases it.
 
 `capacity.sqlite3` uses immediate transactions for two task slots, machine start
 reservations, native branch/workspace ownership, and one integration slot.
-Before controlled starts, every visible workspace issue/run is read, including
-other projects, and matched to `runtime.json.capacity.machine_daemon_id`.
+Before controlled starts, every visible workspace issue/run and every Agent
+(including archived Agents) with its paginated task history is read. This also
+counts native Autopilot/chat runs with no issue ID, including the dispatcher
+itself. Duplicate projections must agree and count once. The opaque pagination
+cursor comes from the CLI hint, preserving subsecond precision rather than
+reconstructing it from truncated JSON timestamps. Runs are matched to `runtime.json.capacity.machine_daemon_id`.
 Five active runs plus pending controlled starts is the ceiling. Unknown runtime
 identity, incomplete pages, offline/stale heartbeat or an expired observation
 holds. This coordinates controlled Multica starts on the configured daemon;
