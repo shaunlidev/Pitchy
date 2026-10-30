@@ -56,6 +56,8 @@ def allowed_path(path, reviewed=()):
         'tooling/pipeline/artifacts.py',
         'tooling/pipeline/serial.py',
         'tooling/pipeline/operator_merge.py',
+        'tooling/pipeline/capacity.py',
+        'tooling/pipeline/test_capacity.py',
         'tooling/pipeline/test_operator_merge.py',
         'tooling/pipeline/github_sync.py',
         'tooling/pipeline/runtime.json',

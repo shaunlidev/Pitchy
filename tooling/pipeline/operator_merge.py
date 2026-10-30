@@ -143,6 +143,12 @@ def execute(mode, root, state, config, github, call, key, head, manifest_path):
         # Local objects must already be fetched by the operator; no ref/worktree mutation.
         tree = _text(root, 'merge-tree', '--write-tree', observed['base'], head).splitlines()[0]
         require(SHA.fullmatch(tree), 'Expected integration tree unavailable')
+        if 'capacity' in config:
+            require(_text(root, 'merge-base', observed['base'], head) == observed['base'], 'Current main compatibility must be reverified')
+            require(data.get('compatibility_base') == observed['base'], 'Fresh manual compatibility base required')
+            for entry in data['reports'].values():
+                report = read_json(Path(manifest_path).parent / entry['path'])[0]
+                require(report.get('compatibility_base') == observed['base'], 'Every role must verify current main compatibility')
         binding = {**identity, 'base': observed['base'], 'expected_tree': tree, 'head_ci': observed['head_ci'], 'base_ci': observed['base_ci']}
         if old:
             require({k: v for k, v in old.items() if k != 'recorded_at'} == binding, 'Manual intent changed; explicit reconciliation required')
@@ -162,6 +168,16 @@ def execute(mode, root, state, config, github, call, key, head, manifest_path):
     latest = observe(github, number, head, mode == 'verify-manual-merge')
     require(all(latest[k] == observed[k] for k in ('base', 'head_ci', 'base_ci')) and latest['pr'].get('merge_commit_sha') == observed['pr'].get('merge_commit_sha'), 'CI or integration binding changed during observation')
     require(time.monotonic() - started < 120, 'Manual observation expired')
+    if 'capacity' in config:
+        from capacity import Capacity
+        capacity = Capacity(state, config['capacity']['port_base'])
+        try:
+            if mode == 'approve-manual-merge':
+                capacity.claim_integration(key, head, result['base'], result['expected_tree'])
+            else:
+                capacity.complete_integration(key, head, old['base'], old['expected_tree'], result['merge'])
+        finally:
+            capacity.close()
     if mode == 'approve-manual-merge' and old is None:
         atomic_receipt(path, result)
     return result

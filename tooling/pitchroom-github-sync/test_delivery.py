@@ -6,6 +6,12 @@ from unittest.mock import patch
 import delivery
 
 class PushSafety(unittest.TestCase):
+    def test_capacity_sources_exact_and_state_not_publishable(self):
+        for path in ('tooling/pipeline/capacity.py','tooling/pipeline/test_capacity.py'):
+            self.assertTrue(delivery.allowed_path(path))
+        for path in ('tooling/pipeline/capacity.sqlite3','tooling/pipeline/parallel-authorization.json','tooling/pipeline/capacity.py.bak'):
+            self.assertFalse(delivery.allowed_path(path))
+
     def test_manual_merge_sources_are_exact_and_still_content_scanned(self):
         for path in ['tooling/pipeline/operator_merge.py', 'tooling/pipeline/test_operator_merge.py']:
             self.assertTrue(delivery.allowed_path(path), path)

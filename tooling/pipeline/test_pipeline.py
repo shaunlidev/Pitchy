@@ -162,7 +162,7 @@ class OperationalStatus(unittest.TestCase):
     def test_unsupported_lane_and_completion_policy_fail_closed(self):
         p = self.root/'tooling/pipeline/policy.json'
         original = json.loads(p.read_text())
-        for key,value in [('task_lanes',2),('task_lanes',True),('engineering_done_requires',['ci']),
+        for key,value in [('task_lanes',3),('task_lanes',True),('engineering_done_requires',['ci']),
                           ('dispatch_control_default','open'),('automatic_deployment',True)]:
             p.write_text(json.dumps({**original,key:value}))
             result = status.snapshot(root=self.root,state=self.state)

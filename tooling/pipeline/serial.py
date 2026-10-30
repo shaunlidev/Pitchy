@@ -13,6 +13,7 @@ import subprocess
 import sys
 import time
 
+from capacity import Capacity, inventory, authorized_lanes
 from acceptance import contract_digest
 from controller import Controller, Hold, RUNNING, ACTIVE, digest, git, lock, write_json
 from artifacts import ArtifactError, verify_squash_merge, _path, checkpoint, has_ancestor, materialize, prepare_dependencies, verify_clean_tree
@@ -53,6 +54,83 @@ class Serial(Controller):
         super().__init__(config, checked_call, state)
         self.github, self.policy, self.execute = github, policy, execute
         self.observation = None
+        self.capacity = Capacity(state, config['capacity']['port_base']) if 'capacity' in config else None
+
+    def close(self):
+        if getattr(self, 'capacity', None): self.capacity.close()
+        super().close()
+
+    def machine_inventory(self):
+        return inventory(self.raw_call, self.c['capacity']['machine_daemon_id'])
+
+    def lane_limit(self):
+        return authorized_lanes(self.c['repository'], self.root, self.c['max_lanes'], fingerprint(self.c['repository']))
+
+    def admission_check(self, issue, issues):
+        if self.capacity:
+            unleased = self.active_issues(issues) - set(self.capacity.leases())
+            if unleased: raise Hold('Existing unleased runtime requires explicit reconciliation')
+            issue = {**issue, 'capacity_actor': self.routing(issue)['actors']['developer']}
+            self.capacity.candidate(issue, git(self.c['repository'], 'rev-parse', 'HEAD'), self.machine_inventory(), self.lane_limit())
+
+    def admit_lane(self, lane, issue):
+        if self.capacity:
+            issue = {**issue, 'capacity_actor': self.role_actor(lane, 'developer')}
+            lease = self.capacity.admit(issue, git(self.c['repository'], 'rev-parse', 'HEAD'), self.machine_inventory(), self.lane_limit())
+            lane['capacity_lease'] = lease['lease_id']
+            lane['compatibility_base'] = lease['base']
+
+    def plan(self, key, path):
+        if self.capacity:
+            plan = json.loads(Path(path).read_text())
+            paths = plan.get('allowed_paths')
+            if not isinstance(paths, list) or any(not isinstance(p, str) for p in paths) or sorted(paths) != self.capacity.get(key)['scope']['paths']:
+                raise Hold('Frozen plan differs from admitted source scope')
+        return super().plan(key, path)
+
+    def check_environment(self, lane, role, checkout_path, run_id):
+        if not self.capacity: return {}
+        actor, run = self.actor(role, lane)
+        if run != run_id: raise Hold('Check run identity differs')
+        native = Path.cwd()
+        return self.capacity.environment(lane['issue'], actor, run, native,
+                                         git(native, 'branch', '--show-current'), checkout_path)
+
+    def compatibility(self, lane, base=None):
+        if not self.capacity: return
+        base = base or self.github.api('commits/main')['sha']
+        head = lane.get('artifact', {}).get('commit')
+        if lane.get('compatibility_base') != base or not head or not has_ancestor(self.c['repository'], base, head):
+            raise Hold('Main changed; original-task rework and fresh CI/Review/QA required')
+
+    def retire_capacity(self, key, lease_id, automatic=False):
+        if not automatic and os.environ.get('MULTICA_TASK_ID'): raise Hold('Resource retirement is operator-only')
+        if not self.capacity: raise Hold('Capacity is not configured')
+        lane = self.lanes().get(key)
+        if not lane or lane['phase'] != 'done' or self.issue(key)['status'] != 'done':
+            raise Hold('Verified engineering completion required before retirement')
+        intent = lane['merge_approval']; merge = lane['integration']['commit']
+        verify_squash_merge(self.c['repository'], intent['head'], merge, intent['base'])
+        if self.github.ci(merge, 'push')['state'] != 'success': raise Hold('Retirement integration CI missing')
+        evidence = []
+        for role in ('developer', 'reviewer', 'qa'):
+            receipt = lane['receipts'][role]
+            binding = {k: receipt[k] for k in ('issue','generation','role','actor_id','run_id','commit','contract_sha256','description_sha256')}
+            path = Path(receipt['retained_evidence'])
+            expected = self.root/'role-evidence'/key/str(lane['generation'])/role/receipt['run_id']/'manifest.json'
+            if path != expected: raise Hold('Retirement evidence outside retained role root')
+            self.verify_role_evidence(path.parent, binding)
+            evidence.append(str(path))
+            checks = self.root/'evidence'/key/str(lane['generation'])/role/receipt['run_id']
+            for check_id in lane['contract']['checks']:
+                paths = [checks/'checks'/(check_id+'.json'), checks/'logs'/(check_id+'.stdout'), checks/'logs'/(check_id+'.stderr')]
+                if any(not p.is_file() or any(a.is_symlink() for a in (p,*p.parents)) for p in paths):
+                    raise Hold('Retirement check evidence missing or linked')
+                result = json.loads(paths[0].read_text())
+                if result.get('commit') != intent['head'] or result.get('generation') != lane['generation'] or result.get('assertion_passed') is not True or result.get('stdout_sha256') != hashlib.sha256(paths[1].read_bytes()).hexdigest():
+                    raise Hold('Retirement check evidence changed')
+                evidence.extend(str(p) for p in paths)
+        return self.capacity.retire(key, lease_id, self.machine_inventory(), {'merge': merge, 'evidence': evidence})
 
     def issues(self):
         return all_issues(self.call, self.c['project'])
@@ -179,6 +257,9 @@ class Serial(Controller):
 
     def current(self, key, role):
         lane, issue = super().current(key, role)
+        if self.capacity:
+            actor, run = self.actor(role, lane)
+            self.capacity.bind(key, actor, run, Path.cwd(), git(Path.cwd(), 'branch', '--show-current'))
         if role in ('reviewer', 'qa') and 'supplemental' in lane.get('routing', {}).get('actors', {}):
             self.verify_supplemental(lane)
         return lane, issue
@@ -287,7 +368,19 @@ class Serial(Controller):
         lane['pending'] = pending
         self.save(lane)
 
+    def checkout(self, key, role, workdir):
+        self.compatibility(self.lanes()[key])
+        return super().checkout(key, role, workdir)
+
     def stage(self, key, role, report, workdir):
+        if self.capacity and role != 'developer': self.compatibility(self.lanes()[key])
+        if self.capacity and role == 'developer':
+            lane = self.lanes()[key]
+            base = self.github.api('commits/main')['sha']
+            if not has_ancestor(workdir, base, git(workdir, 'rev-parse', 'HEAD')):
+                raise Hold('Developer must integrate current main before fresh checks')
+            lane['compatibility_base'] = base
+            self.save(lane)
         result = super().stage(key, role, report, workdir)
         lane = self.lanes()[key]
         lane['phase'] = 'awaiting_role_exit'
@@ -344,12 +437,19 @@ class Serial(Controller):
         elif target==self.c['review_status']:next_lane['phase']='reviewer'
         elif target==self.c['qa_status']:next_lane['phase']='qa'
         elif target=='todo':
+            archive = self.root/'generations'/f'{lane["issue"]}-g{lane["generation"]}.json'
+            from operator_merge import atomic_receipt
+            atomic_receipt(archive, lane)
+            next_lane.setdefault('prior_generations', []).append(str(archive))
             next_lane.update(phase='developer',generation=lane['generation']+1,repairs=lane['repairs']+1,
                              rework_base_commit=lane['native_head'],rework_public_commit=lane['artifact']['commit'],rework_paths=lane['contract']['allowed_paths'],
                              rework_pr_number=lane.get('pr_number'),rework_branch=lane.get('branch'))
-            for name in ('artifact','receipts','checkouts','contract','developer_workspace','dependencies','published_checkout','pr_number','branch','supplemental_bundle','supplemental_receipt'):
+            for name in ('artifact','receipts','checkouts','contract','developer_workspace','dependencies','published_checkout','pr_number','branch','supplemental_bundle','supplemental_receipt','merge_approval','integration_tree','compatibility_base'):
                 next_lane.pop(name,None)
         else:next_lane['phase']='held'
+        if self.capacity and role:
+            if role != 'developer': self.compatibility(lane)
+            self.capacity.reserve_run(lane['issue'], token, self.role_actor(lane, role), self.machine_inventory())
         self.save(next_lane)  # A newly started runtime must see its own stage already published.
         self.call(args);self.finish(token)
 
@@ -370,14 +470,26 @@ class Serial(Controller):
         if pr['state']!='OPEN' or pr.get('base')!='main' or pr.get('ci',{}).get('state')!='success':raise Hold('Approved PR must target main, be ready and current-head CI successful')
         base=self.github.api('commits/main')['sha']
         if self.github.ci(base,'push')['state']!='success':raise Hold('Current pre-merge main CI must pass')
+        self.compatibility(lane, base)
         intent={'method':'squash','head':approved_head,'base':base,'pr_number':pr['number']}
         if lane.get('merge_approval') and lane['merge_approval']!=intent:raise Hold('Merge intent changed; explicit operator reconciliation required')
+        if self.capacity:
+            tree = git(self.c['repository'], 'merge-tree', '--write-tree', base, approved_head).splitlines()[0]
+            self.capacity.claim_integration(key, approved_head, base, tree)
+            lane['integration_tree'] = tree
+        if self.capacity and self.github.api('commits/main')['sha'] != base: raise Hold('Main moved while reserving integration')
         lane['merge_approval']=intent;self.save(lane)
         return intent
 
     def drain(self, apply):
         results=[]
         for lane in self.lanes().values():
+            if self.capacity and lane['phase'] == 'done' and lane.get('capacity_lease') and lane['issue'] in self.capacity.leases():
+                if apply:
+                    result = self.retire_capacity(lane['issue'], lane['capacity_lease'], automatic=True)
+                    results.append(result)
+                else: results.append({'issue': lane['issue'], 'waiting': 'verify durable ownership before logical retirement'})
+                continue
             if lane['phase']=='awaiting_merge':
                 pr=self.pr_for(lane)
                 if pr['state']!='MERGED' or pr.get('integration_ci',{}).get('state')!='success':
@@ -395,14 +507,19 @@ class Serial(Controller):
                 if not intent or intent.get('method')!='squash' or intent.get('head')!=lane['artifact']['commit'] or intent.get('pr_number')!=pr['number']:
                     raise Hold('Recorded human-approved pre-merge base is missing or differs')
                 integration=verify_squash_merge(repo,lane['artifact']['commit'],remote,intent['base'])
+                if self.capacity and integration['tree'] != lane.get('integration_tree'): raise Hold('Integration tree differs from reserved combination')
                 if not apply:results.append({'issue':lane['issue'],'would_complete':True,'integration':integration});continue
                 if git(repo,'status','--porcelain') or git(repo,'branch','--show-current')!='main':raise Hold('Canonical checkout not clean main')
                 subprocess.run(['git','-C',repo,'merge','--ff-only','origin/main'],check=True,capture_output=True,timeout=45)
                 self.reserve('complete:'+lane['issue']+':'+str(lane['generation']))
                 issue=self.issue(lane['issue'])
                 if digest(issue.get('description') or '')!=lane['description_sha256'] or issue['status']!='in_review':raise Hold('Contract/status changed before completion')
+                if self.capacity:
+                    self.capacity.complete_integration(lane['issue'], intent['head'], intent['base'], lane['integration_tree'], remote)
                 self.call(['issue','update',lane['id'],'--status','done','--no-start','--output','json'])
                 self.finish('complete:'+lane['issue']+':'+str(lane['generation']));lane['integration']=integration;lane['phase']='done';self.save(lane)
+                if self.capacity:
+                    self.retire_capacity(lane['issue'], lane['capacity_lease'], automatic=True)
                 results.append({'issue':lane['issue'],'status':'done'});continue
             pending=lane.get('pending')
             if not pending:continue
@@ -578,6 +695,8 @@ class Serial(Controller):
         if latest!=parked or inventory_identity(idle_inventory())!=initial_inventory:
             raise Hold('Task/runtime changed after parking; no enqueue')
         self.require_fresh()
+        if self.capacity:
+            self.capacity.reserve_run(key, token, self.role_actor(lane,'developer'), self.machine_inventory())
         self.recovery_event(folder, 'enqueue_intent')
         self.call(['issue','update',lane['id'],'--status','todo','--assignee-id',self.role_actor(lane,'developer'),'--output','json'])
         result=self.inspect_recovery(key)
@@ -715,6 +834,9 @@ class Serial(Controller):
         write_json(path,{'original_lane':lane,'reason':reason,'artifact':head,'prior_run':previous['run_id']})
         next_lane=json.loads(json.dumps(lane));next_lane.pop('pending',None)
         next_lane.get('receipts',{}).pop('qa',None);next_lane.get('checkouts',{}).pop('qa',None)
+        if self.capacity:
+            self.compatibility(lane)
+            self.capacity.reserve_run(key, token, self.c['qa'], self.machine_inventory())
         next_lane.update(phase='qa',qa_retries=1)
         self.save(next_lane)
         self.call(['issue','update',lane['id'],'--status',self.c['qa_status'],'--assignee-id',self.c['qa'],'--output','json'])
@@ -743,7 +865,7 @@ class Serial(Controller):
         if control['mode'] != 'open':
             return {'active': [], 'started': [], 'held': {'admission': control['mode']}}
         active=[x['issue'] for x in self.lanes().values() if x['phase'] not in ('done','held')]
-        if active:return {'active':active,'started':[],'held':{'single_lane':'Existing artifact owns the lane through merge'}}
+        if active and (not self.capacity or len(active) >= self.lane_limit()):return {'active':active,'started':[],'held':{'single_lane':'Existing artifact owns the lane through merge'}}
         self.require_fresh()
         remote=self.github.api('commits/main')['sha']
         if git(self.c['repository'],'rev-parse','HEAD')!=remote or git(self.c['repository'],'status','--porcelain') or git(self.c['repository'],'branch','--show-current')!='main':
@@ -793,11 +915,11 @@ def activate(root, config, state, github, call, receipt_path):
         reports.append((sha,run_id))
     if reports[0][0]!=reports[1][0] or reports[0][1]==reports[1][1]:raise Hold('Role artifact/independence mismatch')
     if github.ci(head,'push')['state']!='success':raise Hold('Integrated main CI must pass before activation')
-    if config['max_lanes']!=1:raise Hold('Only one lane authorized')
+    lanes = authorized_lanes(root, state, config['max_lanes'], fingerprint(root))
     for name in ('config.json','config-v2.json'):
         legacy=root.parent/'tooling/multica-pipeline'/name
         if not legacy.exists() or json.loads(legacy.read_text()).get('enabled') is not False:raise Hold('Legacy controls must remain disabled')
-    proof={'verified':True,'task_lanes':1,'source_fingerprint':fingerprint(root),'integrated_commit':head,'role_runs':[r[1] for r in reports],'authority':receipt['authority']}
+    proof={'verified':True,'task_lanes':lanes,'source_fingerprint':fingerprint(root),'integrated_commit':head,'role_runs':[r[1] for r in reports],'authority':receipt['authority']}
     write_json(state/'activation.json',proof)
     return proof
 
@@ -808,6 +930,8 @@ def main():
     q=sub.add_parser('inspect-recovery');q.add_argument('issue')
     q=sub.add_parser('confirm-recovery');q.add_argument('issue');q.add_argument('--run',required=True)
     q=sub.add_parser('control');q.add_argument('--mode',choices=sorted(CONTROL_MODES),required=True)
+    q=sub.add_parser('retire-capacity');q.add_argument('issue');q.add_argument('--lease-id',required=True)
+    q=sub.add_parser('authorize-capacity');q.add_argument('--receipt',type=Path,required=True)
     q=sub.add_parser('activate');q.add_argument('--receipt',type=Path,required=True)
     q=sub.add_parser('approve-merge');q.add_argument('issue');q.add_argument('--approved-head',required=True)
     for name in ('approve-manual-merge','verify-manual-merge'):
@@ -835,7 +959,7 @@ def main():
             try:result=execute(args.command,root,state,config,GitHub(policy['repository']),call,args.issue,args.approved_head,args.manifest)
             except (KeyError,TypeError,AttributeError,sqlite3.Error) as error:raise Hold('Malformed or unavailable manual delivery evidence') from error
         print(json.dumps(result,ensure_ascii=False,indent=2));return
-    name='controller' if args.command in ('tick','activate','control','approve-merge','retry-qa','recover-developer','inspect-recovery','confirm-recovery') else 'issue-'+args.issue
+    name='controller' if args.command in ('tick','activate','control','approve-merge','retry-qa','recover-developer','inspect-recovery','confirm-recovery','retire-capacity','authorize-capacity') else 'issue-'+args.issue
     if '/' in name or '..' in name:raise Hold('Invalid issue identity')
     if args.command=='inspect-recovery':
         c=Serial.__new__(Serial);c.c=config;c.call=call;c.root=state;c.github=GitHub(policy['repository'])
@@ -847,7 +971,20 @@ def main():
     with lock(state,name=name,wait=45):
         c=Serial(config,call,state,GitHub(policy['repository']),policy)
         try:
-            if args.command=='confirm-recovery':
+            if args.command=='authorize-capacity':
+                if os.environ.get('MULTICA_TASK_ID'): raise Hold('Parallel authorization is operator-only')
+                receipt = json.loads(args.receipt.read_text())
+                head = git(root, 'rev-parse', 'HEAD')
+                if config['max_lanes'] != 2 or git(root, 'branch', '--show-current') != 'main' or git(root, 'status', '--porcelain') or c.github.api('commits/main')['sha'] != head or c.github.ci(head, 'push')['state'] != 'success':
+                    raise Hold('Reviewed integrated two-lane configuration and main CI required')
+                if receipt.get('authority') != 'direct_human_parallel_activation' or receipt.get('integrated_commit') != head or receipt.get('source_fingerprint') != fingerprint(root) or type(receipt.get('lanes')) is not int or receipt['lanes'] != 2 or not isinstance(receipt.get('approval_reference'), str) or not receipt['approval_reference'].strip():
+                    raise Hold('Separate exact-source human parallel authorization required')
+                from operator_merge import atomic_receipt
+                atomic_receipt(state/'parallel-authorization.json', receipt)
+                result = {'authorized_lanes': 2, 'activation_required': True, 'schedule_resumed': False}
+            elif args.command=='retire-capacity':
+                result=c.retire_capacity(args.issue,args.lease_id)
+            elif args.command=='confirm-recovery':
                 c.require_enabled();result=c.confirm_recovery(args.issue,args.run)
             elif args.command=='control':
                 if args.mode != 'maintenance' and activation_state(root,state)['state'] != 'valid':

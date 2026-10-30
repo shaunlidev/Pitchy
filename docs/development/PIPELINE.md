@@ -262,3 +262,73 @@ Role submissions now retain explicitly declared evidence before either a passing
 Before using the changed controller, the operator performs fresh global evidence accounting over the v6 manifest roots and every later workspace evidence root, preserving high-water reservations for removed/shrunk evidence. Allocate a bounded part of the remaining **320,000,000-byte total cap** in local `.state/pipeline/evidence-budget.json`: `cap_bytes`, `accounted_bytes`, `allocation_bytes`, and `accounting_sha256` (SHA256 of that local accounting receipt). The allocation is reserved from global remaining capacity immediately; it does not reset that capacity. Retention, frozen logs and handoffs debit `.state/pipeline/evidence-reservations.json` under an independent storage lock, before writes. Reservations never refund on deletion or partial failure; changing a grant with an existing reservation ledger holds. Include the reservation ledger and remaining allocation in subsequent global accounting. Other local evidence producers must continue to honor the same global accounting; this is not an OS disk quota. Allocation authorizes only the already-scoped small local engineering evidence, not recording, installation, models or raw upload.
 
 Activation stays invalid after these source changes until independent Reviewer/QA, exact-head CI, separately approved Squash integration and main CI pass. The completed stage-6 pilot remains paused. No new business task, parallel schedule, model or deployment is enabled by this repair.
+
+## Dormant two-lane capacity and serial integration (PIT-71)
+
+`policy.json` remains at one task lane, with admission paused by default. The
+existing Autopilot and optional roles stay paused/disabled. Supporting two lanes
+is not permission to run them. A future rollout requires reviewed policy with
+`task_lanes: 2`, successful integrated main CI, a separate direct human approval
+for that source fingerprint, `authorize-capacity --receipt LOCAL.json`, and a
+fresh independent activation receipt. Neither authorization nor activation
+resumes the schedule. The grant contains `authority:
+"direct_human_parallel_activation"`, `lanes: 2`, `integrated_commit`,
+`source_fingerprint`, and a nonempty `approval_reference`. A policy/source change
+invalidates it. No grant is shipped or created by this change.
+
+The canonical dispatcher reserves a task slot before any native start. Admission
+requires `metadata.capacity_scope` (object or JSON string) with exact relative
+`paths` and Boolean `shared`; the frozen contract must use exactly those paths.
+Overlapping paths, explicit shared work, migrations, configuration, core/API or
+contract changes serialize. Missing scope holds. Existing dependency integration
+checks still run first. A lane remains owned through CI, human decisions, failure,
+merge and resource retirement; a clock never releases it.
+
+`capacity.sqlite3` uses immediate transactions for two task slots, machine start
+reservations, native branch/workspace ownership, and one integration slot.
+Before controlled starts, every visible workspace issue/run is read, including
+other projects, and matched to `runtime.json.capacity.machine_daemon_id`.
+Five active runs plus pending controlled starts is the ceiling. Unknown runtime
+identity, incomplete pages, offline/stale heartbeat or an expired observation
+holds. This coordinates controlled Multica starts on the configured daemon;
+it cannot quota unrelated OS processes, invisible workspaces or external manual
+starts. Those require infrastructure outside this controller. Existing unleased
+live work must be explicitly reconciled before new admission.
+
+Native actor/run, branch and workspace bindings are immutable. Controlled checks
+receive a per-lane port, per-run synthetic database name and localhost URLs,
+per-run browser-state location, checkout-local build output and lease identity.
+Source, checkouts and evidence remain separate. Check commands must consume the
+provided isolation environment; commands with hard-coded shared resources are
+not eligible for parallel admission. This is ownership and controlled execution,
+not an OS sandbox or database provisioner. It does not create a database, install
+a browser or fall back to a user's live environment. Native Agent commands are
+not automatically isolated by these variables.
+
+Both scheduled `approve-merge` and manual `approve-manual-merge` share the single
+persistent integration slot. The exact head must include current main; the
+controlled delivery's compatibility base (or all three manual role reports and
+manual manifest's `compatibility_base`) must equal it. After one PR integrates,
+another PR with the old base holds for original-task integration and fresh
+CI/Reviewer/QA. Old passing receipts cannot make it mergeable. A failed or unknown
+merge keeps its reservation for explicit reconciliation. Verified exact Squash
+tree and merge CI release the slot, retaining an immutable completion record;
+a repeated completion cannot release a newer task's reservation. No merge is
+automatic, and GitHub branch protection limitations still apply.
+
+`status.py` reads leases and the integration slot without modifying SQLite and
+shows unknown/corrupt/in-flight storage as a hold. Admission pause blocks only
+new tasks; maintenance blocks all controlled transitions. Existing role handoff
+still requires its predecessor to exit and a reserved machine slot. Recovery and
+QA retry also reserve capacity; an unresolved start never permits blind replay.
+Old generations and failed evidence remain retained.
+
+After verified engineering completion, the controller verifies safe logical
+retirement before reusing a slot; an interrupted retirement remains owned and is
+rechecked on the next tick. An operator may also invoke
+`serial.py retire-capacity PIT-N --lease-id EXACT_ID`. It checks the actual merge,
+main CI, all retained role manifests and a fresh idle runtime inventory. It
+retires only that logical lease, preserving ownership history and every source,
+evidence, workspace and database file. No bulk cleanup or deletion is provided.
+Uncertain starts, missing proof or a live owner hold retirement. Manual infra
+work is not silently enrolled into automatic lanes.
