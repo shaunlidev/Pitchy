@@ -8,6 +8,8 @@ from pathlib import Path
 import re
 import subprocess
 import tempfile
+import threading
+import time
 
 ROOT = Path(__file__).resolve().parents[2]
 APP = ROOT / 'pitchroom-app'
@@ -43,6 +45,45 @@ def unit_reports(directory):
         if report.exists():
             raise ValueError('report_already_exists')
     return ['pnpm', '-r', '--if-present', 'run', 'test', '--reporter=json', f'--outputFile={relative.as_posix()}'], workspaces
+
+
+def offline_reports(directory):
+    """Append JSON to the existing offline script without replacing its reporters."""
+    workspace = APP / 'packages/evals'
+    root = json.loads((APP / 'package.json').read_text())
+    package = json.loads((workspace / 'package.json').read_text())
+    if (root.get('scripts', {}).get('eval:offline') != 'pnpm --filter @pitchroom/evals eval:offline'
+            or package.get('name') != '@pitchroom/evals'
+            or package.get('scripts', {}).get('eval:offline') != 'vitest run --no-file-parallelism --reporter=verbose'):
+        raise ValueError('unsupported_offline_script')
+    relative = Path('node_modules/.cache/pitchroom-ci') / (directory.name + '.json')
+    report = workspace / relative
+    assert_report_path(workspace, report)
+    if report.exists():
+        raise ValueError('report_already_exists')
+    return ['pnpm', '--filter', '@pitchroom/evals', 'run', 'eval:offline', '--reporter=json',
+            f'--outputFile.json={relative.as_posix()}'], [(workspace, report)]
+
+
+def offline_progress(event, started):
+    # This is wrapper liveness, never test progress or an execution deadline.
+    if event not in ('start', 'alive', 'end'):
+        raise ValueError('unknown_progress_event')
+    try:
+        print('offline-liveness: ' + json.dumps({'event': event,
+              'elapsed_seconds': max(0, int(time.monotonic() - started))}), flush=True)
+    except OSError:
+        pass  # A diagnostic sink failure must not replace the command result.
+
+
+def offline_heartbeat(stop, started):
+    for _ in range(30):
+        remaining = 900 - (time.monotonic() - started)
+        if remaining <= 0 or stop.wait(min(30, remaining)):
+            return
+        if time.monotonic() - started >= 900 or stop.is_set():
+            return
+        offline_progress('alive', started)
 
 
 def assert_report_path(workspace, report):
@@ -175,17 +216,18 @@ def summarize_unit(workspaces, tracked, code, context):
     return summary
 
 
-def print_unit_summary(summary):
+def print_unit_summary(summary, stage='unit'):
+    prefix = {'unit': 'unit-diagnostics: ', 'offline-eval': 'offline-diagnostics: '}[stage]
     while True:
         encoded = json.dumps(summary, ensure_ascii=True, separators=(',', ':'))
         if len(encoded.encode()) <= SUMMARY_LIMIT:
-            print('unit-diagnostics: ' + encoded)
+            print(prefix + encoded, flush=True)
             return
         if summary['failures']:
             summary['failures'].pop()
             summary['omitted_failures'] += 1
         else:
-            print('unit-diagnostics: {"status":"diagnostics_unavailable","reason":"summary_limit"}')
+            print(prefix + '{"status":"diagnostics_unavailable","reason":"summary_limit"}', flush=True)
             return
 
 
@@ -200,14 +242,34 @@ def environment(stage, source):
 
 
 def run_stage(stage):
+    if stage != 'offline-eval':
+        return execute_stage(stage)
+    started = time.monotonic()
+    stop = threading.Event()
+    heartbeat = threading.Thread(target=offline_heartbeat, args=(stop, started), daemon=True)
+    offline_progress('start', started)
+    try:
+        try:
+            heartbeat.start()
+        except RuntimeError:
+            pass  # Optional liveness must not prevent the original command.
+        return execute_stage(stage)
+    finally:
+        stop.set()
+        if heartbeat.ident is not None:
+            heartbeat.join(timeout=1)
+        offline_progress('end', started)
+
+
+def execute_stage(stage):
     directory = Path(tempfile.mkdtemp(prefix='pitchroom-ci-', dir=os.environ.get('RUNNER_TEMP')))
     log = directory / (stage + '.log')
     env = environment(stage, os.environ)
     command, workspaces, tracked, context = STAGES[stage], [], {}, {}
-    if stage == 'unit':
+    if stage in ('unit', 'offline-eval'):
         context = diagnostic_context(env)
         try:
-            command, workspaces = unit_reports(directory)
+            command, workspaces = (unit_reports if stage == 'unit' else offline_reports)(directory)
             tracked = tracked_tests(env, context['head'])
         except (OSError, ValueError, TypeError, AttributeError, RuntimeError, subprocess.TimeoutExpired):
             command, workspaces = STAGES[stage], []
@@ -218,12 +280,16 @@ def run_stage(stage):
     except (OSError, subprocess.TimeoutExpired):
         code = 124
     print(f'{stage}: {"PASS" if code == 0 else "FAIL"}; exit={code}; raw output retained only in runner temporary directory.')
-    if stage == 'unit':
+    if stage in ('unit', 'offline-eval'):
         try:
             summary = summarize_unit(workspaces, tracked, code, context) if workspaces else {'status': 'diagnostics_unavailable', 'exit': code, 'context': context, 'failures': [], 'omitted_failures': 0}
-            print_unit_summary(summary)
+            print_unit_summary(summary, stage)
         except (OSError, ValueError, TypeError, AttributeError, RuntimeError):
-            print('unit-diagnostics: {"status":"diagnostics_unavailable"}')
+            try:
+                print_unit_summary({'status': 'diagnostics_unavailable', 'failures': [], 'omitted_failures': 0}, stage)
+            except OSError:
+                if stage != 'offline-eval':
+                    raise
     summary = os.environ.get('GITHUB_STEP_SUMMARY')
     if summary:
         with open(summary, 'a') as stream:
