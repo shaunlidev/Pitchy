@@ -1,8 +1,17 @@
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { parseRuntimeConfiguration, configurationSummary } from "../packages/domain/src/runtime-configuration.ts";
+
+const flags = new Set(process.argv.slice(2));
+if ([...flags].some((flag) => !["--production", "--worker", "--live"].includes(flag)) || (flags.has("--live") && !flags.has("--worker"))) {
+  process.stderr.write("INVALID_CONFIGURATION: unsupported configuration-check option.\n");
+  process.exit(1);
+}
+const environment = { ...process.env, ...(flags.has("--production") ? { NODE_ENV: "production" } : {}) };
 
 const localEnvPath = resolve(process.cwd(), "apps/web/.env.local");
-if (existsSync(localEnvPath)) {
+const localFilesAllowed = environment.NODE_ENV !== "production" && [undefined, "local"].includes(environment.PITCHROOM_DEPLOYMENT_ENV);
+if (localFilesAllowed && existsSync(localEnvPath)) {
   for (const rawLine of readFileSync(localEnvPath, "utf8").split(/\r?\n/)) {
     const line = rawLine.trim();
     if (!line || line.startsWith("#")) continue;
@@ -11,23 +20,17 @@ if (existsSync(localEnvPath)) {
     const key = line.slice(0, separator).trim();
     let value = line.slice(separator + 1).trim();
     if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) value = value.slice(1, -1);
-    process.env[key] ??= value;
+    if ((key === "PITCHROOM_DEPLOYMENT_ENV" && value !== "local") || (key === "NODE_ENV" && value === "production")) {
+      process.stderr.write("INVALID_CONFIGURATION: deployment identity must be supplied by the process environment.\n");
+      process.exit(1);
+    }
+    environment[key] ??= value;
   }
 }
 
-const runtime = process.env.PITCHROOM_RUNTIME ?? "fixture";
-const allowed = new Set(["fixture", "postgres-fake", "live"]);
-if (!allowed.has(runtime)) {
-  console.error(`INVALID_INPUT: PITCHROOM_RUNTIME must be one of ${[...allowed].join(", ")}.`);
+const result = parseRuntimeConfiguration(environment, { component: flags.has("--worker") ? "worker" : "web", liveFlag: flags.has("--live") });
+if (!result.success) {
+  process.stderr.write(`INVALID_CONFIGURATION: ${result.fields.join(", ")}.\n`);
   process.exit(1);
 }
-const missing = [];
-if (runtime !== "fixture" && !process.env.DATABASE_URL) missing.push("DATABASE_URL");
-if (runtime === "live" && !process.env.OPENAI_API_KEY) missing.push("OPENAI_API_KEY");
-if (runtime === "live" && !process.env.OPENAI_MODEL) missing.push("OPENAI_MODEL");
-if (runtime === "live" && process.env.PITCHROOM_LIVE_TRANSFER_ACK !== "authorized") missing.push("PITCHROOM_LIVE_TRANSFER_ACK=authorized");
-if (missing.length > 0) {
-  console.error(`INVALID_INPUT: ${missing.join(", ")} ${missing.length === 1 ? "is" : "are"} required for ${runtime} mode.`);
-  process.exit(1);
-}
-console.log(JSON.stringify({ status: "PASS", runtime, externalModelEnabled: runtime === "live" }));
+process.stdout.write(`${JSON.stringify({ status: "CONFIGURATION_VALID", ...configurationSummary(result.config) })}\n`);

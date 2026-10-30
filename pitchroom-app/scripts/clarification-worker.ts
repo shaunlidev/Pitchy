@@ -1,17 +1,20 @@
 import { createDatabase, ClarificationRepository } from "../packages/persistence/src/index";
 import { DeterministicClarificationRunner, createModelClarificationRunner, evaluateClarification, classifyClarificationFailure } from "../packages/agent/src/index";
+import { parseRuntimeConfiguration } from "../packages/domain/src/runtime-configuration";
 
 async function main() {
-  const live = process.argv.includes("--live");
-  if (live && (process.env.PITCHROOM_LIVE_TRANSFER_ACK !== "authorized" || !process.env.OPENAI_API_KEY || !process.env.OPENAI_MODEL)) throw new Error("Live worker requires explicit transfer acknowledgement, key and pinned model.");
-  if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL is required. Worker environment must be supplied explicitly.");
-  const database = createDatabase(process.env.DATABASE_URL);
+  if (process.argv.slice(2).some((flag) => !["--live", "--once"].includes(flag))) throw new Error("Unsupported worker option.");
+  const configured = parseRuntimeConfiguration(process.env, { component: "worker", liveFlag: process.argv.includes("--live") });
+  if (!configured.success || configured.config.runtime.mode === "fixture") throw new Error("Worker runtime configuration is invalid.");
+  const runtime = configured.config.runtime;
+  const live = runtime.mode === "live";
+  const database = createDatabase(runtime.databaseUrl);
   const store = new ClarificationRepository(database.db);
-  const runner = live ? createModelClarificationRunner({ apiKey:process.env.OPENAI_API_KEY!,baseURL:process.env.OPENAI_BASE_URL,model:process.env.OPENAI_MODEL! }) : new DeterministicClarificationRunner();
+  const runner = runtime.mode === "live" ? createModelClarificationRunner(runtime) : new DeterministicClarificationRunner();
   let stopping = false; process.on("SIGINT",()=>{stopping=true;}); process.on("SIGTERM",()=>{stopping=true;});
   try {
     do {
-      const task = await store.claim(live ? process.env.OPENAI_MODEL! : "deterministic-local", live ? "live" : "synthetic");
+      const task = await store.claim(runtime.mode === "live" ? runtime.model : "deterministic-local", live ? "live" : "synthetic");
       if (task) {
         try { await store.finish(task,await evaluateClarification(task,runner)); }
         catch (error) { await store.finish(task,undefined,classifyClarificationFailure(error).code,classifyClarificationFailure(error)); }

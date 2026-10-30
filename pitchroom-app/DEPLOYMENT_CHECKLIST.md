@@ -1,5 +1,23 @@
 # Deployment readiness checklist
 
+## Current configuration increment — PIT-34
+
+The [runtime configuration contract](RUNBOOK.md#runtime-configuration)
+now separates local configuration validity from deployment readiness. Declared
+deployments refuse readiness until actual target, schema, worker and authorization
+checks are verified. Production startup does not silently fall back to fixture.
+
+This is a bounded configuration change, not deployment authorization or completion
+of PIT-34. The original acceptance gates, independent review/QA, integration and
+human release approval remain required. No live database, provider or hosted
+environment was exercised for this increment.
+
+## Historical baseline — not current deployment acceptance
+
+The record below is retained as historical evidence. Its dated permissions and
+PASS labels do not authorize a new deployment or establish the current trial's
+readiness; use current explicit authorization and version-bound evidence.
+
 Status values are `PASS`, `FAIL`, or `NOT RUN`. Deployment was authorized by the
 user on 2026-10-14; this checklist determines whether that authorized action is
 safe to execute.

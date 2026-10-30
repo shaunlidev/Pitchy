@@ -19,3 +19,4 @@ export * from "./brief";
 export * from "./topic-material";
 
 export * from "./workspace";
+export * from "./runtime-configuration";
