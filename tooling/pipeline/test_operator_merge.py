@@ -96,7 +96,7 @@ class ManualMergeTests(unittest.TestCase):
         control = self.root / 'tooling/pipeline'; control.mkdir(parents=True)
         (control / 'policy.json').write_text(json.dumps({'repository': self.remote.repo}))
         args = ['serial.py', 'approve-manual-merge', 'PIT-53', '--approved-head', self.head, '--manifest', str(self.manifest)]
-        with patch.object(serial, 'SOURCE', self.root), patch.object(serial, 'canonical', return_value=self.root), patch.object(serial, 'configured', return_value={}), patch.object(serial, 'Serial', side_effect=AssertionError('controller must not initialize')), patch.object(m, 'execute', return_value={'ok': True}) as execute, patch('sys.argv', args), contextlib.redirect_stdout(io.StringIO()):
+        with patch.object(serial, 'SOURCE', self.root), patch.object(serial, 'canonical', return_value=self.root), patch.object(serial, 'load_config', return_value=({'repository': self.remote.repo}, {})), patch.object(serial, 'Serial', side_effect=AssertionError('controller must not initialize')), patch.object(m, 'execute', return_value={'ok': True}) as execute, patch('sys.argv', args), contextlib.redirect_stdout(io.StringIO()):
             serial.main()
             self.assertEqual(execute.call_args.args[0], 'approve-manual-merge')
         self.assertEqual((self.state / 'activation.json').read_text(), 'original activation')
@@ -115,14 +115,14 @@ class ManualMergeTests(unittest.TestCase):
         with self.assertRaisesRegex(Hold, 'Main moved'): self.run_mode('verify-manual-merge')
 
     def test_module_changes_invalidate_activation_without_reactivation(self):
-        from serial import Serial, fingerprint
+        from serial import Serial, fingerprint, FINGERPRINT_FILES
         control = self.root / 'tooling/pipeline'; control.mkdir(parents=True)
-        for name in ('serial.py', 'controller.py', 'acceptance.py', 'artifacts.py', 'github_sync.py', 'runtime.json', 'policy.json', 'operator_merge.py'):
+        for name in FINGERPRINT_FILES:
             (control / name).write_text('synthetic identity')
         activation = self.state / 'activation.json'
-        activation.write_text(json.dumps({'verified': True, 'task_lanes': 1, 'source_fingerprint': fingerprint(self.root)}))
+        activation.write_text(json.dumps({'verified': True, 'task_lanes': 1, 'source_fingerprint': fingerprint(self.root), 'integrated_commit': self.head}))
         before = activation.read_bytes()
-        controller = Serial.__new__(Serial); controller.root = self.state; controller.c = {'repository': self.root}
+        controller = Serial.__new__(Serial); controller.root = self.state; controller.c = {'repository': self.root}; controller.policy = {'dispatch_control_default': 'admission_paused'}
         controller.require_enabled()
         (control / 'operator_merge.py').write_text('changed identity')
         with self.assertRaisesRegex(Hold, 'stale'): controller.require_enabled()

@@ -1,5 +1,117 @@
 # Current Pitchroom delivery pipeline
 
+This section and the [role protocol](../../tooling/pipeline/ROLE_GUIDE.md) are the current operating instructions. Earlier migration notes are preserved below as history. Product requirements remain governed by v6.
+
+## One configuration path
+
+Both the controller and status command use `status.load_config`. [policy.json](../../tooling/pipeline/policy.json) owns repository/project, main baseline, one task lane, machine cap 5, merge/completion rules, observation lifetime and the safe pause default. [runtime.json](../../tooling/pipeline/runtime.json) owns local identities, the existing Autopilot ID and task routing. Repeating policy fields in runtime, unknown switches or unsupported values fails closed; changing either file never authorizes dispatch.
+
+Runtime also owns PIT-72 optional developer routing and supplemental review. Both enable flags remain `false`. The shared loader validates these switches and distinct actor identities; the status view labels admitted optional roles and holds when task routing changes or becomes disabled. This integration does not enable optional roles or additional lanes. The current optional-role protocol is in [ROLE_GUIDE.md](../../tooling/pipeline/ROLE_GUIDE.md#optional-roles-dormant-until-separately-enabled).
+
+## Read actual state
+
+Run from the canonical engineering checkout:
+
+```sh
+python3 tooling/pipeline/status.py
+python3 tooling/pipeline/status.py --live --issue PIT-70
+python3 tooling/pipeline/status.py --live
+```
+
+The offline view reads the canonical ledger and local activation/control/sync records; it cannot certify current CI, roles or completion. Live mode reads Multica and GitHub without writes or dispatch. It reports tracker status separately from controller phase, actual role/run, branch/PR/current head, same-head CI and bound role receipts, squash/merge checks, activation fingerprint, scheduler status, polling age/error, blocked reasons, next action and human decision. Manual infra PRs can be displayed from their task association, but lack of a controlled lane remains explicit and never fabricates automatic completion. No raw report/log, credential or product database is read into the output.
+
+Missing, malformed, stale, changed-head or incomplete observations are unknown/held. A completed runtime or green CI alone is insufficient. Ready-to-merge requires current independent Reviewer and QA receipts. Engineering completion additionally requires the actual squash mapping and passing merge-commit CI. Product acceptance and deployment stay separate. Read errors exit nonzero, revoke ready/done claims and leave evidence untouched. A WAL or changing ledger is refused rather than opening writable journal state.
+
+## Pause and activation
+
+There is one controller and one existing schedule. Source defaults to `admission_paused`; actual scheduling remains paused until explicitly authorized. The operator may set one of these modes in the canonical checkout:
+
+```sh
+python3 tooling/pipeline/serial.py control --mode admission_paused
+python3 tooling/pipeline/serial.py control --mode maintenance
+```
+
+`admission_paused` stops new task claims while allowing already authorized in-flight handoffs. `maintenance` stops sync, handoffs and dispatch; it does not cancel running Agents. A missing control record uses the safe default. An invalid or fingerprint-mismatched record holds in maintenance. `open` permits new claims only with verified activation and a separately enabled existing schedule; it is not authorized by installing this change. No command here enables two lanes. Control is operator-only, and lifting maintenance requires a valid activation.
+
+After an approved merge, activation requires a clean current main, independent terminal Reviewer and QA on the same source, passing main-push CI, disabled legacy controls and `serial.py activate --receipt LOCAL.json`. Source/config/status changes invalidate the activation fingerprint. Activation does not resume the Autopilot or change control mode. Never create a second scheduler. `tick` without `--apply` is a non-dispatching diagnostic; inconsistent snapshots hold. Inspect results before any separately authorized real scheduling.
+
+## Delivery, recovery and evidence
+
+The per-task sequence is Developer → exact-head CI → independent Reviewer → independent QA → human-approved Squash → main CI → engineering completion. Every new head invalidates old role acceptance. Defects return to the original task with the existing two-repair cap; missing decisions stay explicit. Roles submit then exit; the controller alone hands off after terminal runtime evidence. See [ROLE_GUIDE.md](../../tooling/pipeline/ROLE_GUIDE.md) and [QA_SKILLS.md](QA_SKILLS.md).
+
+Manual infra deliveries use the integrated PIT-83 operator-only `approve-manual-merge` and `verify-manual-merge` commands with complete same-head reports and an immutable intent; see the [manual delivery receipt contract](#manual-delivery-receipts-operator-only) below. These commands never dispatch or merge, and remain usable while scheduling is paused. `operator_merge.py` is included in the shared activation fingerprint.
+
+Before any approved merge, read GitHub `commits/main` independently and record its actual SHA alongside the approved PR head; a PR's baseRefOid may lag main. After merging, verify the real parent and resulting tree. A mismatch preserves the old intent and requires explicit integration verification, never a rewritten pre-merge receipt. All merges need fresh exact-head human approval; no main pushes, force pushes or automatic merges.
+
+Recovery retains original task/PR/contracts, dual native/public histories, generation and repair count. `inspect-recovery` is read-only; `confirm-recovery` can acknowledge an already observed unique run, never enqueue again. Uncertain operations do not replay. The CLI lacks server-side atomic CAS and causal operation tokens; shared locks and fresh identity snapshots do not claim stronger enforcement.
+
+Role reports and declared probes are retained before verdict/return, including failures, with bound identity, hashes and byte accounting. An operator allocation from fresh global accounting is required under the 320000000-byte cap. Return copies/check logs/handoffs consume reservations; partial writes and deletion do not refund. Missing or unsafe paths, damaged evidence and exhausted allocation hold. No recordings, raw evidence uploads, installs, product-model calls or deployment are authorized by this pipeline. Historical lost evidence remains documented.
+
+### Manual delivery receipts (operator only)
+
+Manual issues have no automatic lane. Do not insert a lane, invent native runtime
+receipts, change status to simulate QA, or weaken `approve-merge`. After this
+entry is reviewed and integrated, the human operator may use:
+
+```
+python3 tooling/pipeline/serial.py approve-manual-merge PIT-N --approved-head FULL_SHA --manifest /absolute/local/manifest.json
+python3 tooling/pipeline/serial.py verify-manual-merge PIT-N --approved-head FULL_SHA --manifest /absolute/local/manifest.json
+```
+
+Only the integrated canonical checkout executes these commands. They share the
+controller lock and read its ledger without writes. Any existing issue lane or
+uncertain operation holds. They neither merge, mark PRs Ready, push, dispatch,
+change Multica status, nor activate the scheduler. Automatic `approve-merge`
+keeps its existing lane and runtime requirements. These operator commands do
+not require automatic scheduling activation. `operator_merge.py` participates
+in the activation fingerprint: integration invalidates the old activation;
+reactivation remains a separately approved operation, never an automatic step.
+
+The local JSON manifest must have schema_version 1, kind `manual_delivery`,
+repository, issue, head, pr_number, description_sha256 (exact current Multica
+UTF-8 description hash), complete_contract true, approval_reference (the direct
+human exact-head approval reference), a nonempty unique list of required
+criterion strings, and reports with exactly developer/reviewer/qa entries.
+Each entry contains a relative contained path and sha256. Each report must bind
+the same issue/head/description_sha256, role, distinct actor, verdict `pass`,
+complete_contract_review true, criterion_results mapping every manifest
+criterion to `pass`, empty failures/not_run/decisions arrays, and nonempty
+checks containing command and integer exit_code 0. Report paths and receipt
+paths reject symlink ancestors; each JSON file is capped at 1 MB.
+
+The operator is the trust boundary for identity, approval authenticity and the
+completeness of the acceptance inventory. Hashes bind bytes; they do not prove
+that a person reviewed them. Inspect the complete original criteria and actual
+reports before invoking. Never manufacture passing reports from partial or
+older evidence; this strict version requires full same-head reports. A missing
+complete report holds even when incremental tests and PR CI are green. Keep
+scope exclusions distinct from required not_run checks. Raw evidence stays local.
+
+Before recording, manually mark the reviewed PR Ready and fetch required Git
+objects using the normal approved read path. The command requires the issue's
+manual metadata and pr_number binding, exact repository/head/main target,
+Ready/open state, current-head `pr-ci.yml` CI and live-main push CI. It computes
+the expected tree using merge-tree without changing any checkout, then rereads
+PR/main, issue description and evidence within a 120-second observation window.
+A conflict, unavailable objects, changed binding or CI failure holds.
+
+Intent is atomically created under `.state/pipeline/manual-merges/PIT-N-HEAD.json`
+with exact base/head, CI run identities, expected tree, evidence hashes, approval
+reference and squash method. Identical invocation is idempotent; a different
+base, CI run or evidence holds for explicit reconciliation. Never edit or delete
+an existing intent to make it match. A pending temporary file is not a receipt.
+After recording, use the already human-approved squash command with
+`--match-head-commit`. Verification requires a merged PR, live main equal to
+that merge, exactly one parent equal to the captured base, exact expected tree,
+and successful merge-commit push CI. It prints verification evidence only;
+human-authorized acceptance and downstream work remain separate actions.
+
+## Historical migration notes — not current operating instructions
+
+The following text is preserved for provenance. Its old rollout states and commands do not override the current rules above.
+
+# Current Pitchroom delivery pipeline
+
 The only current machine policy is [policy.json](../../tooling/pipeline/policy.json). This foundation batch supersedes historical two-lane/auto-completion descriptions. It does not enable unattended dispatch. Product requirements remain governed by v6.
 
 ## Inspect current state
@@ -150,62 +262,3 @@ Role submissions now retain explicitly declared evidence before either a passing
 Before using the changed controller, the operator performs fresh global evidence accounting over the v6 manifest roots and every later workspace evidence root, preserving high-water reservations for removed/shrunk evidence. Allocate a bounded part of the remaining **320,000,000-byte total cap** in local `.state/pipeline/evidence-budget.json`: `cap_bytes`, `accounted_bytes`, `allocation_bytes`, and `accounting_sha256` (SHA256 of that local accounting receipt). The allocation is reserved from global remaining capacity immediately; it does not reset that capacity. Retention, frozen logs and handoffs debit `.state/pipeline/evidence-reservations.json` under an independent storage lock, before writes. Reservations never refund on deletion or partial failure; changing a grant with an existing reservation ledger holds. Include the reservation ledger and remaining allocation in subsequent global accounting. Other local evidence producers must continue to honor the same global accounting; this is not an OS disk quota. Allocation authorizes only the already-scoped small local engineering evidence, not recording, installation, models or raw upload.
 
 Activation stays invalid after these source changes until independent Reviewer/QA, exact-head CI, separately approved Squash integration and main CI pass. The completed stage-6 pilot remains paused. No new business task, parallel schedule, model or deployment is enabled by this repair.
-
-### Manual delivery receipts (operator only)
-
-Manual issues have no automatic lane. Do not insert a lane, invent native runtime
-receipts, change status to simulate QA, or weaken `approve-merge`. After this
-entry is reviewed and integrated, the human operator may use:
-
-```
-python3 tooling/pipeline/serial.py approve-manual-merge PIT-N --approved-head FULL_SHA --manifest /absolute/local/manifest.json
-python3 tooling/pipeline/serial.py verify-manual-merge PIT-N --approved-head FULL_SHA --manifest /absolute/local/manifest.json
-```
-
-Only the integrated canonical checkout executes these commands. They share the
-controller lock and read its ledger without writes. Any existing issue lane or
-uncertain operation holds. They neither merge, mark PRs Ready, push, dispatch,
-change Multica status, nor activate the scheduler. Automatic `approve-merge`
-keeps its existing lane and runtime requirements. These operator commands do
-not require automatic scheduling activation. `operator_merge.py` participates
-in the activation fingerprint: integration invalidates the old activation;
-reactivation remains a separately approved operation, never an automatic step.
-
-The local JSON manifest must have schema_version 1, kind `manual_delivery`,
-repository, issue, head, pr_number, description_sha256 (exact current Multica
-UTF-8 description hash), complete_contract true, approval_reference (the direct
-human exact-head approval reference), a nonempty unique list of required
-criterion strings, and reports with exactly developer/reviewer/qa entries.
-Each entry contains a relative contained path and sha256. Each report must bind
-the same issue/head/description_sha256, role, distinct actor, verdict `pass`,
-complete_contract_review true, criterion_results mapping every manifest
-criterion to `pass`, empty failures/not_run/decisions arrays, and nonempty
-checks containing command and integer exit_code 0. Report paths and receipt
-paths reject symlink ancestors; each JSON file is capped at 1 MB.
-
-The operator is the trust boundary for identity, approval authenticity and the
-completeness of the acceptance inventory. Hashes bind bytes; they do not prove
-that a person reviewed them. Inspect the complete original criteria and actual
-reports before invoking. Never manufacture passing reports from partial or
-older evidence; this strict version requires full same-head reports. A missing
-complete report holds even when incremental tests and PR CI are green. Keep
-scope exclusions distinct from required not_run checks. Raw evidence stays local.
-
-Before recording, manually mark the reviewed PR Ready and fetch required Git
-objects using the normal approved read path. The command requires the issue's
-manual metadata and pr_number binding, exact repository/head/main target,
-Ready/open state, current-head `pr-ci.yml` CI and live-main push CI. It computes
-the expected tree using merge-tree without changing any checkout, then rereads
-PR/main, issue description and evidence within a 120-second observation window.
-A conflict, unavailable objects, changed binding or CI failure holds.
-
-Intent is atomically created under `.state/pipeline/manual-merges/PIT-N-HEAD.json`
-with exact base/head, CI run identities, expected tree, evidence hashes, approval
-reference and squash method. Identical invocation is idempotent; a different
-base, CI run or evidence holds for explicit reconciliation. Never edit or delete
-an existing intent to make it match. A pending temporary file is not a receipt.
-After recording, use the already human-approved squash command with
-`--match-head-commit`. Verification requires a merged PR, live main equal to
-that merge, exactly one parent equal to the captured base, exact expected tree,
-and successful merge-commit push CI. It prints verification evidence only;
-human-authorized acceptance and downstream work remain separate actions.

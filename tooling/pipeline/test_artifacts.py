@@ -328,7 +328,7 @@ class SquashMergeTests(unittest.TestCase):
         self.git('config', 'user.name', 'Synthetic QA')
         control = self.repo / 'tooling/pipeline'
         control.mkdir(parents=True)
-        for name in ('serial.py','controller.py','artifacts.py','acceptance.py','github_sync.py','runtime.json','policy.json','operator_merge.py'):
+        for name in ('serial.py','controller.py','artifacts.py','acceptance.py','github_sync.py','runtime.json','policy.json','status.py','operator_merge.py'):
             (control/name).write_text('{}' if name.endswith('.json') else '# synthetic controller identity\n')
         self.git('add', 'tooling')
         self.write_commit('base.txt', 'base', 'base')
