@@ -158,17 +158,77 @@ const original=fs.linkSync; fs.linkSync=function(source,target,...args){ if(Stri
   expect(JSON.parse(repeated.stdout).result.recordHash).toBe(hashTaskValue(humanAuthority()));
   expect(readWorkflowReviewContext(run).records).toHaveLength(1); expect(audit(run).integrity).toBe("valid");
 }, 20000);
-it("keeps separate actors' concurrent CLI writes without dropping accepted evidence", async () => {
+it("retains accepted evidence when concurrent CLI append and anchor locks cross", async () => {
   const f = fixture(), run = prepare(f.input), roles = humanAuthority();
   roles.actors.push({ actorId: "second", personId: "person-2", role: "human", permissions: ["review"] }); recordReviewEvidence(run, roles);
   const paths = roles.actors.map(actor => {
     const input = { kind: "review_calibration", id: `calibration-${actor.actorId}`, at: "2026-10-30T00:00:00Z", actorId: actor.actorId, authorityHash: hashTaskValue(roles), bankHash: hashTaskValue(calibrationBank), answers: calibrationBank.map(item => ({ caseId: item.id, supportVerdict: item.expected, reason: "Synthetic calibration." })) };
     const path = join(f.root, `${actor.actorId}.json`); writeFileSync(path, JSON.stringify(input)); return path;
   });
-  const call = (path: string) => promisify(execFile)(process.execPath, ["--import", "tsx", "src/task-acceptance/cli.ts", "review-record", "--run", run.referenceFile, "--file", path], { timeout: 10000 });
-  const results = await Promise.allSettled(paths.map(call)); expect(results.some(result => result.status === "fulfilled")).toBe(true);
-  for (const path of paths) await call(path);
-  expect(reviewRecords(readWorkflowReviewContext(run)).filter(item => item.kind === "review_calibration")).toHaveLength(2);
+  const policy = loadEvidencePolicy(JSON.parse(readFileSync(f.input.accountingPolicyFile, "utf8")));
+  const lockPath = join(policy.controlRoot, ".write-lock");
+  const markers = { secondReady: join(f.root, "second-ready"), firstReleased: join(f.root, "first-released"), secondOwns: join(f.root, "second-owns"), firstExited: join(f.root, "first-exited") };
+  const preload = (role: "first" | "second") => {
+    const path = join(f.root, `concurrency-${role}.mjs`);
+    writeFileSync(path, `import fs from 'node:fs'; import { syncBuiltinESMExports } from 'node:module';
+const role = ${JSON.stringify(role)}, lockPath = ${JSON.stringify(lockPath)}, markers = ${JSON.stringify(markers)};
+const mkdir = fs.mkdirSync, rmdir = fs.rmdirSync;
+let firstAcquisition = true, released = false;
+function waitFor(path) {
+  const deadline = Date.now() + 8000;
+  while (!fs.existsSync(path)) {
+    if (Date.now() >= deadline) throw new Error('CONCURRENCY_HANDSHAKE_TIMEOUT');
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
+  }
+}
+fs.mkdirSync = function(path, ...args) {
+  if (String(path) === lockPath && firstAcquisition) {
+    firstAcquisition = false;
+    if (role === 'first') waitFor(markers.secondReady);
+    else {
+      fs.writeFileSync(markers.secondReady, 'ready'); waitFor(markers.firstReleased);
+      const result = mkdir.call(this, path, ...args);
+      fs.writeFileSync(markers.secondOwns, 'owned'); waitFor(markers.firstExited);
+      return result;
+    }
+  }
+  return mkdir.call(this, path, ...args);
+};
+fs.rmdirSync = function(path, ...args) {
+  const result = rmdir.call(this, path, ...args);
+  if (role === 'first' && !released && String(path) === lockPath) {
+    released = true; fs.writeFileSync(markers.firstReleased, 'released'); waitFor(markers.secondOwns);
+  }
+  return result;
+};
+syncBuiltinESMExports();`);
+    return path;
+  };
+  const failureSchema = z.object({ code: z.union([z.number(), z.string(), z.null()]), signal: z.string().nullable(), killed: z.boolean(), stdout: z.string(), stderr: z.string() });
+  const concurrent = async (path: string, role: "first" | "second") => {
+    try {
+      const result = await promisify(execFile)(process.execPath, ["--import", "tsx", "--import", preload(role), "src/task-acceptance/cli.ts", "review-record", "--run", run.referenceFile, "--file", path], { timeout: 10000 });
+      return { code: 0, signal: null, killed: false, stdout: result.stdout, stderr: result.stderr };
+    } catch (error) { return failureSchema.parse(error); }
+  };
+  const firstPath = paths[0], secondPath = paths[1]; if (!firstPath || !secondPath) throw new Error("Missing actor input");
+  const first = concurrent(firstPath, "first").finally(() => writeFileSync(markers.firstExited, "exited"));
+  const second = concurrent(secondPath, "second");
+  const [firstResult, secondResult] = await Promise.all([first, second]);
+  expect([firstResult, secondResult]).toMatchObject([{ code: 1, signal: null, killed: false }, { code: 1, signal: null, killed: false }]);
+  expect(JSON.parse(firstResult.stdout)).toEqual({ command: "review-record", errorCode: "EVIDENCE_LOCKED" });
+  expect(JSON.parse(secondResult.stdout)).toEqual({ command: "review-record", errorCode: "SESSION_HEAD_CHANGED" });
+  const beforeReplay = readWorkflowReviewContext(run), accepted = reviewRecords(beforeReplay).filter(item => item.kind === "review_calibration");
+  expect(accepted.map(item => item.id)).toEqual(["calibration-reviewer"]);
+  const acceptedHash = hashTaskValue(accepted[0]);
+  const replay = async (path: string) => JSON.parse((await promisify(execFile)(process.execPath, ["--import", "tsx", "src/task-acceptance/cli.ts", "review-record", "--run", run.referenceFile, "--file", path], { timeout: 10000 })).stdout);
+  expect((await replay(firstPath)).result.recordHash).toBe(acceptedHash);
+  expect(readWorkflowReviewContext(run).reference).toEqual(beforeReplay.reference);
+  await replay(secondPath);
+  const afterReplay = readWorkflowReviewContext(run), records = reviewRecords(afterReplay).filter(item => item.kind === "review_calibration");
+  expect(records.map(item => item.id)).toEqual(["calibration-reviewer", "calibration-second"]);
+  expect(hashTaskValue(records[0])).toBe(acceptedHash);
+  expect(afterReplay.reference.sequence).toBe(beforeReplay.reference.sequence + 1);
 }, 20000);
 
 it("exposes exact resolved retraction words without upgrading the statement to a verified fact", async () => {
