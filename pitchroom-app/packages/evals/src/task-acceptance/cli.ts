@@ -5,6 +5,8 @@ import { parseArgs } from "node:util";
 import { z } from "zod";
 import { assertUnlinkedPath } from "./capacity";
 import { advance, audit, prepare, recordDecision, report } from "./workflow";
+import { issueReviewPacket, recordReviewEvidence } from "./review";
+import { assessTask } from "./verdict";
 
 const help = `Task acceptance workflow (isolated HTTP; no semantic or user acceptance implied)
 
@@ -14,6 +16,9 @@ advance --run FILE
 record-decision --run FILE --file DECISION.json
 audit --run FILE
 report --run FILE
+review-packet --run FILE --checkpoint HASH --actor ID
+review-record --run FILE --file RECORD.json
+assess --run FILE
 
 No arguments or --help prints this help without preparing or dispatching work.
 prepare is local only. advance stops at the next human boundary and never Applies or Accepts.
@@ -21,9 +26,9 @@ record-decision requires actor, time, checkpointHash, capability, assistance and
 An awaiting_human result includes exact displayed choices and the actual product workspace.
 Live runtime/provider dispatch is unavailable here; frozen inputs do not authorize it.
 `;
-const commandSchema = z.enum(["prepare", "advance", "record-decision", "audit", "report"]);
+const commandSchema = z.enum(["prepare", "advance", "record-decision", "audit", "report", "review-packet", "review-record", "assess"]);
 const prepareOptions = ["case", "launch-receipt", "accounting-policy", "source-repository", "session-id", "maximum-bytes", "purpose"];
-const commandOptions = { prepare: prepareOptions, advance: ["run"], "record-decision": ["run", "file"], audit: ["run"], report: ["run"] };
+const commandOptions = { prepare: prepareOptions, advance: ["run"], "record-decision": ["run", "file"], audit: ["run"], report: ["run"], "review-packet": ["run", "checkpoint", "actor"], "review-record": ["run", "file"], assess: ["run"] };
 
 function decisionFile(path: string): unknown {
   assertUnlinkedPath(path);
@@ -37,7 +42,7 @@ export async function runTaskAcceptanceCLI(args: string[], output: (value: strin
     if (!args.length || args.includes("--help")) { output(help); return 0; }
     const parsed = parseArgs({ args, allowPositionals: true, strict: true, options: {
       case: { type: "string" }, "launch-receipt": { type: "string" }, "accounting-policy": { type: "string" }, "source-repository": { type: "string" },
-      "session-id": { type: "string" }, "maximum-bytes": { type: "string" }, purpose: { type: "string" }, run: { type: "string" }, file: { type: "string" },
+      "session-id": { type: "string" }, "maximum-bytes": { type: "string" }, purpose: { type: "string" }, run: { type: "string" }, file: { type: "string" }, checkpoint: { type: "string" }, actor: { type: "string" },
     } });
     if (parsed.positionals.length !== 1) throw new Error("TASK_COMMAND_REQUIRED");
     const selected = commandSchema.parse(parsed.positionals[0]); command = selected;
@@ -55,9 +60,13 @@ export async function runTaskAcceptanceCLI(args: string[], output: (value: strin
       case "record-decision": result = await recordDecision({ run: { referenceFile: path("run") }, decision: decisionFile(path("file")) }); break;
       case "audit": result = audit({ referenceFile: path("run") }); break;
       case "report": result = report({ referenceFile: path("run") }); break;
+      case "assess": result = assessTask({ referenceFile: path("run") }); break;
+      case "review-packet": result = issueReviewPacket({ referenceFile: path("run") }, { checkpointHash: values.checkpoint, actorId: values.actor }); break;
+      case "review-record": result = recordReviewEvidence({ referenceFile: path("run") }, decisionFile(path("file"))); break;
       default: { const exhaustive: never = command; return exhaustive; }
     }
     output(`${JSON.stringify({ command, result })}\n`);
+    if (z.object({ kind: z.literal("assessment_unavailable") }).safeParse(result).success) return 1;
     return z.object({ kind: z.literal("held") }).safeParse(result).success ? 2 : 0;
   } catch (error) {
     const candidate = z.object({ code: z.string() }).safeParse(error).data?.code ?? (error instanceof Error ? error.message : "");

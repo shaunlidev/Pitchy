@@ -14,6 +14,7 @@ from unittest.mock import patch
 import operator_merge as m
 from artifacts import ArtifactError
 from controller import Hold
+from capacity import Capacity, read_status
 
 
 class Remote:
@@ -23,10 +24,31 @@ class Remote:
         self.cache = {}
         self.base = base
         self.states = {}
+        self.attempts = {}
+        self.history = {}
         self.pr = {'number': 21, 'head': {'sha': head, 'repo': {'full_name': self.repo}}, 'base': {'ref': 'main', 'repo': {'full_name': self.repo}}, 'state': 'open', 'draft': False, 'merged_at': None, 'merge_commit_sha': None}
 
     def api(self, path):
-        return copy.deepcopy(self.pr) if path == 'pulls/21' else {'sha': self.base}
+        if path == 'pulls/21':
+            return copy.deepcopy(self.pr)
+        if path == 'commits/main':
+            return {'sha': self.base}
+        parts = path.split('/')
+        run_id = int(parts[2])
+        event = 'pull_request' if run_id == 1 else 'push'
+        sha = self.pr['head']['sha'] if run_id == 1 else self.base
+        attempt = self.attempts.get(run_id, 1)
+        if '/jobs?' in path:
+            jobs = [{'id': i + 1, 'name': name, 'status': 'completed', 'conclusion': 'success'} for i, name in enumerate(sorted(m.REQUIRED_JOBS))]
+            for job in jobs:
+                if job['name'] == 'Application checks':
+                    job['steps'] = [{'name': name, 'status': 'completed', 'conclusion': 'success'} for name in sorted(m.RECOVERY_STEPS)]
+            return {'total_count': len(jobs), 'jobs': jobs}
+        if '/attempts/' in path:
+            return copy.deepcopy(self.history[(run_id, int(parts[4]))])
+        run = {'repository': {'full_name': self.repo}, 'id': run_id, 'head_sha': sha, 'event': event, 'path': '.github/workflows/pr-ci.yml', 'status': 'completed', 'conclusion': self.states.get((sha, event), 'success'), 'run_attempt': attempt}
+        self.history[(run_id, attempt)] = copy.deepcopy(run)
+        return run
 
     def ci(self, sha, event):
         return {'state': self.states.get((sha, event), 'success'), 'sha': sha, 'run_id': 1 if event == 'pull_request' else 2}
@@ -119,6 +141,218 @@ class ManualMergeTests(unittest.TestCase):
             result=m.execute('verify-manual-merge',self.root,self.state,config,self.remote,self.call,'PIT-53',self.head,self.manifest)
             self.assertEqual(result['merge'],merged)
         self.assertIsNone(read_status(self.state)['integration'])
+
+    def recovery(self):
+        self.remote.states[(self.base, 'push')] = 'failure'
+        self.data['recovery'] = {'mode': 'red-main-repair', 'rule_authorization': 'test-explicit-new-rule-approval', 'failed_base': self.base, 'failed_run_id': 2, 'failed_run_attempt': 1, 'known': 'Bounded regression repair', 'unknown': ['Original subprocess exit codes unavailable']}
+        self.save()
+
+    def test_recovery_real_git_and_failed_history_survives_successful_merge(self):
+        self.recovery()
+        intent = self.run_mode(); raw = self.receipt().read_bytes()
+        self.assertEqual(intent['base_ci']['attempt']['conclusion'], 'failure')
+        self.assertEqual(intent['recovery'], self.data['recovery'])
+        self.assertEqual(self.run_mode(), intent)
+        merge = self.git('commit-tree', intent['expected_tree'], '-p', self.base, '-m', 'recovery squash')
+        self.remote.base = merge
+        self.remote.pr.update(state='closed', merged_at='now', merge_commit_sha=merge)
+        self.remote.states[(merge, 'push')] = 'failure'
+        with self.assertRaisesRegex(Hold, 'Exact main'): self.run_mode('verify-manual-merge')
+        self.remote.states[(merge, 'push')] = 'success'
+        self.assertEqual(self.run_mode('verify-manual-merge')['merge'], merge)
+        self.assertEqual(self.receipt().read_bytes(), raw)
+        self.assertEqual(json.loads(raw)['base_ci']['attempt']['conclusion'], 'failure')
+
+    def test_recovery_requires_explicit_complete_contract(self):
+        self.recovery()
+        original = copy.deepcopy(self.data['recovery'])
+        for key, value in [('mode', 'automatic'), ('rule_authorization', ''), ('failed_base', self.head), ('failed_run_id', 99), ('failed_run_attempt', 2), ('known', ''), ('unknown', None)]:
+            self.data['recovery'] = {**original, key: value}; self.save()
+            with self.subTest(key=key), self.assertRaises(Hold): self.run_mode()
+        self.data['recovery'] = None; self.save()
+        with self.assertRaises(Hold): self.run_mode()
+        self.assert_no_receipt()
+
+    def test_recovery_rejects_unknown_cancelled_pending_and_green_base(self):
+        self.recovery()
+        for state in ('missing', 'pending', 'cancelled', 'timed_out', 'unknown', 'success'):
+            self.remote.states[(self.base, 'push')] = state
+            with self.subTest(state=state), self.assertRaises(Hold): self.run_mode()
+        self.assert_no_receipt()
+
+    def test_recovery_rejects_nondirect_parent_and_wrong_expected_tree(self):
+        self.recovery()
+        original = m._text
+        def wrong(root, *args):
+            if args[0] == 'rev-list': return self.head + ' ' + self.base + ' ' + self.base
+            return original(root, *args)
+        with patch.object(m, '_text', side_effect=wrong), self.assertRaisesRegex(Hold, 'directly parent'): self.run_mode()
+        def wrong_tree(root, *args):
+            if args[0] == 'merge-tree': return self.git('rev-parse', self.base + '^{tree}')
+            return original(root, *args)
+        with patch.object(m, '_text', side_effect=wrong_tree), self.assertRaisesRegex(Hold, 'equal successful head tree'): self.run_mode()
+        self.assert_no_receipt()
+
+    def test_recovery_skipped_missing_or_duplicate_steps_refused(self):
+        self.recovery()
+        original = self.remote.api
+        for change in ('skip', 'missing', 'duplicate'):
+            def changed(path):
+                result = original(path)
+                if '/jobs?' in path:
+                    steps = next(job['steps'] for job in result['jobs'] if job['name'] == 'Application checks')
+                    if change == 'skip': steps[0]['conclusion'] = 'skipped'
+                    elif change == 'missing': steps.pop()
+                    else: steps.append(steps[0].copy())
+                return result
+            self.remote.api = changed
+            with self.subTest(change=change), self.assertRaisesRegex(Hold, 'recovery CI steps'): self.run_mode()
+        self.assert_no_receipt()
+
+    def test_recovery_actual_git_indirect_parent_refused(self):
+        self.recovery()
+        old_head = self.head
+        self.head = self.git('commit-tree', self.git('rev-parse', old_head + '^{tree}'), '-p', old_head, '-m', 'indirect')
+        self.data['head'] = self.head
+        self.remote.pr['head']['sha'] = self.head
+        for role in self.data['reports']:
+            report = json.loads((self.manifest.parent / (role + '.json')).read_text())
+            report['head'] = self.head
+            self.write_report(role, report)
+        self.save()
+        with self.assertRaisesRegex(Hold, 'directly parent'): self.run_mode()
+        self.assert_no_receipt()
+
+    def test_recovery_tampered_role_and_changed_report_cannot_replace_intent(self):
+        self.recovery()
+        self.run_mode(); raw = self.receipt().read_bytes()
+        report = json.loads((self.manifest.parent / 'qa.json').read_text())
+        report['actor'] = 'reviewer'; self.write_report('qa', report); self.save()
+        with self.assertRaisesRegex(Hold, 'Independent'): self.run_mode()
+        report['actor'] = 'new-independent-qa'; self.write_report('qa', report); self.save()
+        with self.assertRaisesRegex(Hold, 'intent changed'): self.run_mode()
+        self.assertEqual(self.receipt().read_bytes(), raw)
+
+    def test_attempt_drift_same_run_id_holds_and_preserves_intent(self):
+        self.recovery()
+        self.run_mode(); raw = self.receipt().read_bytes()
+        self.remote.attempts[2] = 2
+        with self.assertRaisesRegex(Hold, 'Pinned failed'): self.run_mode()
+        self.assertEqual(self.receipt().read_bytes(), raw)
+        self.remote.attempts[2] = 1
+        self.remote.attempts[1] = 2
+        with self.assertRaisesRegex(Hold, 'intent changed'): self.run_mode()
+        self.assertEqual(self.receipt().read_bytes(), raw)
+
+    def test_attempt_changes_inside_observation_and_incomplete_jobs_hold(self):
+        self.recovery()
+        original = self.remote.api
+        reads = 0
+        def drift(path):
+            nonlocal reads
+            result = original(path)
+            if path == 'actions/runs/1':
+                reads += 1
+                if reads > 1: result['run_attempt'] = 2
+            return result
+        self.remote.api = drift
+        with self.assertRaisesRegex(Hold, 'attempt changed'): self.run_mode()
+        def incomplete(path):
+            result = original(path)
+            if '/jobs?' in path: result['jobs'].pop()
+            return result
+        self.remote.api = incomplete
+        with self.assertRaisesRegex(Hold, 'Incomplete CI attempt jobs'): self.run_mode()
+        self.assert_no_receipt()
+
+    def test_pre_recovery_normal_receipt_shape_stays_idempotent_and_verifiable(self):
+        intent = self.run_mode()
+        self.assertEqual(set(intent['head_ci']), {'state', 'sha', 'run_id'})
+        self.assertEqual(set(intent['base_ci']), {'state', 'sha', 'run_id'})
+        self.assertNotIn('recovery', intent)
+        raw = self.receipt().read_bytes()
+        self.assertEqual(self.run_mode(), intent)
+        merge = self.git('commit-tree', intent['expected_tree'], '-p', self.base, '-m', 'legacy squash')
+        self.remote.base = merge
+        self.remote.pr.update(state='closed', merged_at='now', merge_commit_sha=merge)
+        self.assertEqual(self.run_mode('verify-manual-merge')['merge'], merge)
+        self.assertEqual(self.receipt().read_bytes(), raw)
+
+    def test_recovery_verify_rejects_tampered_failed_state_run_attempt(self):
+        self.recovery()
+        intent = self.run_mode()
+        merge = self.git('commit-tree', intent['expected_tree'], '-p', self.base, '-m', 'recovery squash')
+        self.remote.base = merge
+        self.remote.pr.update(state='closed', merged_at='now', merge_commit_sha=merge)
+        for field, value in [('state', 'success'), ('run_id', 99), ('attempt', {**intent['base_ci']['attempt'], 'run_attempt': 99})]:
+            tampered = copy.deepcopy(intent); tampered['base_ci'][field] = value
+            self.receipt().write_text(json.dumps(tampered))
+            with self.subTest(field=field), self.assertRaisesRegex(Hold, 'Retained failed CI'): self.run_mode('verify-manual-merge')
+
+    def capacity_mode(self, mode='approve-manual-merge'):
+        return m.execute(mode, self.root, self.state, {'project': 'p', 'capacity': {'port_base': 43100}}, self.remote, self.call, 'PIT-53', self.head, self.manifest)
+
+    def bind_compatibility(self):
+        self.data['compatibility_base'] = self.base
+        for role in self.data['reports']:
+            report = json.loads((self.manifest.parent / (role + '.json')).read_text())
+            report['compatibility_base'] = self.base
+            self.write_report(role, report)
+        self.save()
+
+    def test_recovery_still_requires_all_role_compatibility(self):
+        self.recovery()
+        with self.assertRaisesRegex(Hold, 'compatibility'):
+            self.capacity_mode()
+        self.bind_compatibility()
+        report = json.loads((self.manifest.parent / 'qa.json').read_text())
+        report['compatibility_base'] = 'a' * 40
+        self.write_report('qa', report)
+        self.save()
+        with self.assertRaisesRegex(Hold, 'Every role'):
+            self.capacity_mode()
+        self.assert_no_receipt()
+
+    def test_recovery_uses_same_integration_slot_and_keeps_it_on_failed_main(self):
+        self.recovery()
+        self.bind_compatibility()
+        cap = Capacity(self.state)
+        try:
+            cap.claim_integration('PIT-99', 'e' * 40, self.base, 'f' * 40)
+        finally:
+            cap.close()
+        with self.assertRaisesRegex(Hold, 'merge slot'):
+            self.capacity_mode()
+        self.assert_no_receipt()
+        cap = Capacity(self.state)
+        try:
+            cap.complete_integration('PIT-99', 'e' * 40, self.base, 'f' * 40, 'd' * 40)
+        finally:
+            cap.close()
+        intent = self.capacity_mode()
+        raw = self.receipt().read_bytes()
+        self.assertEqual(self.capacity_mode(), intent)
+        self.assertEqual(read_status(self.state)['integration']['head'], self.head)
+        merge = self.git('commit-tree', intent['expected_tree'], '-p', self.base, '-m', 'combined recovery squash')
+        self.remote.base = merge
+        self.remote.pr.update(state='closed', merged_at='now', merge_commit_sha=merge)
+        self.remote.states[(merge, 'push')] = 'failure'
+        with self.assertRaisesRegex(Hold, 'Exact main'):
+            self.capacity_mode('verify-manual-merge')
+        self.assertEqual(read_status(self.state)['integration']['head'], self.head)
+        self.remote.states[(merge, 'push')] = 'success'
+        for _ in range(2):
+            self.assertEqual(self.capacity_mode('verify-manual-merge')['merge'], merge)
+        self.assertIsNone(read_status(self.state)['integration'])
+        self.assertEqual(self.receipt().read_bytes(), raw)
+        self.assertEqual(json.loads(raw)['base_ci']['attempt']['conclusion'], 'failure')
+
+    def test_capacity_does_not_implicitly_authorize_recovery(self):
+        self.bind_compatibility()
+        self.remote.states[(self.base, 'push')] = 'failure'
+        with self.assertRaisesRegex(Hold, 'Exact main'):
+            self.capacity_mode()
+        self.assert_no_receipt()
 
     def test_cli_routes_without_initializing_or_activating_controller(self):
         import serial
