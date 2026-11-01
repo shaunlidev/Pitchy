@@ -14,6 +14,7 @@ from unittest.mock import patch
 import operator_merge as m
 from artifacts import ArtifactError
 from controller import Hold
+from capacity import Capacity, read_status
 
 
 class Remote:
@@ -111,6 +112,35 @@ class ManualMergeTests(unittest.TestCase):
         self.assertFalse(self.receipt().exists())
         self.assertEqual((self.state / 'ledger.sqlite3').read_bytes(), self.ledger)
         self.assertEqual((self.state / 'activation.json').read_text(), 'original activation')
+
+    def test_capacity_shared_slot_and_manual_compatibility_proof(self):
+        from capacity import Capacity, read_status
+        config = {'project': 'p', 'capacity': {'port_base': 43100}}
+        with self.assertRaisesRegex(Hold, 'compatibility'):
+            m.execute('approve-manual-merge', self.root, self.state, config, self.remote, self.call, 'PIT-53', self.head, self.manifest)
+        data = json.loads(self.manifest.read_text()); data['compatibility_base'] = self.base
+        for entry in data['reports'].values():
+            path = self.manifest.parent / entry['path']; report = json.loads(path.read_text())
+            report['compatibility_base'] = self.base; path.write_text(json.dumps(report))
+            entry['sha256'] = hashlib.sha256(path.read_bytes()).hexdigest()
+        self.manifest.write_text(json.dumps(data))
+        cap = Capacity(self.state)
+        try: cap.claim_integration('PIT-99', 'e'*40, self.base, 'f'*40)
+        finally: cap.close()
+        with self.assertRaisesRegex(Hold, 'merge slot'):
+            m.execute('approve-manual-merge', self.root, self.state, config, self.remote, self.call, 'PIT-53', self.head, self.manifest)
+        self.assertFalse(self.receipt().exists())
+        cap = Capacity(self.state)
+        try: cap.complete_integration('PIT-99','e'*40,self.base,'f'*40,'d'*40)
+        finally: cap.close()
+        m.execute('approve-manual-merge', self.root, self.state, config, self.remote, self.call, 'PIT-53', self.head, self.manifest)
+        self.assertEqual(read_status(self.state)['integration']['head'],self.head)
+        merged = self.git('commit-tree',self.git('rev-parse',self.head+'^{tree}'),'-p',self.base,'-m','squash')
+        self.remote.base=merged;self.remote.pr.update(state='closed',merged_at='now',merge_commit_sha=merged)
+        for _ in range(2):
+            result=m.execute('verify-manual-merge',self.root,self.state,config,self.remote,self.call,'PIT-53',self.head,self.manifest)
+            self.assertEqual(result['merge'],merged)
+        self.assertIsNone(read_status(self.state)['integration'])
 
     def recovery(self):
         self.remote.states[(self.base, 'push')] = 'failure'
@@ -259,6 +289,71 @@ class ManualMergeTests(unittest.TestCase):
             self.receipt().write_text(json.dumps(tampered))
             with self.subTest(field=field), self.assertRaisesRegex(Hold, 'Retained failed CI'): self.run_mode('verify-manual-merge')
 
+    def capacity_mode(self, mode='approve-manual-merge'):
+        return m.execute(mode, self.root, self.state, {'project': 'p', 'capacity': {'port_base': 43100}}, self.remote, self.call, 'PIT-53', self.head, self.manifest)
+
+    def bind_compatibility(self):
+        self.data['compatibility_base'] = self.base
+        for role in self.data['reports']:
+            report = json.loads((self.manifest.parent / (role + '.json')).read_text())
+            report['compatibility_base'] = self.base
+            self.write_report(role, report)
+        self.save()
+
+    def test_recovery_still_requires_all_role_compatibility(self):
+        self.recovery()
+        with self.assertRaisesRegex(Hold, 'compatibility'):
+            self.capacity_mode()
+        self.bind_compatibility()
+        report = json.loads((self.manifest.parent / 'qa.json').read_text())
+        report['compatibility_base'] = 'a' * 40
+        self.write_report('qa', report)
+        self.save()
+        with self.assertRaisesRegex(Hold, 'Every role'):
+            self.capacity_mode()
+        self.assert_no_receipt()
+
+    def test_recovery_uses_same_integration_slot_and_keeps_it_on_failed_main(self):
+        self.recovery()
+        self.bind_compatibility()
+        cap = Capacity(self.state)
+        try:
+            cap.claim_integration('PIT-99', 'e' * 40, self.base, 'f' * 40)
+        finally:
+            cap.close()
+        with self.assertRaisesRegex(Hold, 'merge slot'):
+            self.capacity_mode()
+        self.assert_no_receipt()
+        cap = Capacity(self.state)
+        try:
+            cap.complete_integration('PIT-99', 'e' * 40, self.base, 'f' * 40, 'd' * 40)
+        finally:
+            cap.close()
+        intent = self.capacity_mode()
+        raw = self.receipt().read_bytes()
+        self.assertEqual(self.capacity_mode(), intent)
+        self.assertEqual(read_status(self.state)['integration']['head'], self.head)
+        merge = self.git('commit-tree', intent['expected_tree'], '-p', self.base, '-m', 'combined recovery squash')
+        self.remote.base = merge
+        self.remote.pr.update(state='closed', merged_at='now', merge_commit_sha=merge)
+        self.remote.states[(merge, 'push')] = 'failure'
+        with self.assertRaisesRegex(Hold, 'Exact main'):
+            self.capacity_mode('verify-manual-merge')
+        self.assertEqual(read_status(self.state)['integration']['head'], self.head)
+        self.remote.states[(merge, 'push')] = 'success'
+        for _ in range(2):
+            self.assertEqual(self.capacity_mode('verify-manual-merge')['merge'], merge)
+        self.assertIsNone(read_status(self.state)['integration'])
+        self.assertEqual(self.receipt().read_bytes(), raw)
+        self.assertEqual(json.loads(raw)['base_ci']['attempt']['conclusion'], 'failure')
+
+    def test_capacity_does_not_implicitly_authorize_recovery(self):
+        self.bind_compatibility()
+        self.remote.states[(self.base, 'push')] = 'failure'
+        with self.assertRaisesRegex(Hold, 'Exact main'):
+            self.capacity_mode()
+        self.assert_no_receipt()
+
     def test_cli_routes_without_initializing_or_activating_controller(self):
         import serial
         control = self.root / 'tooling/pipeline'; control.mkdir(parents=True)
@@ -287,6 +382,7 @@ class ManualMergeTests(unittest.TestCase):
         control = self.root / 'tooling/pipeline'; control.mkdir(parents=True)
         for name in FINGERPRINT_FILES:
             (control / name).write_text('synthetic identity')
+        (control / 'policy.json').write_text(json.dumps({'task_lanes': 1}))
         activation = self.state / 'activation.json'
         activation.write_text(json.dumps({'verified': True, 'task_lanes': 1, 'source_fingerprint': fingerprint(self.root), 'integrated_commit': self.head}))
         before = activation.read_bytes()
