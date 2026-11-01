@@ -28,6 +28,7 @@ export type ProviderBudgetPolicy = z.infer<typeof providerBudgetPolicySchema>;
 export const providerBudgetOperationSchema = z.object({
   acceptanceId: z.string().uuid(), sessionId: z.string().uuid(), projectId: identifier, caseHash: hash, sourceHash: hash,
   stage: stages, commandId: identifier,
+  workerAttempt: z.object({ taskId: identifier, attemptId: identifier }).strict().optional(),
 }).strict();
 export type ProviderBudgetOperation = z.infer<typeof providerBudgetOperationSchema>;
 const textContentSchema = z.object({ type: z.enum(["input_text", "output_text"]), text: z.string(), annotations: z.array(z.unknown()).optional() }).strict();
@@ -193,6 +194,13 @@ export function inspectProviderBudget(directory: string, policyHash: string) {
   const state = load(directory, policyHash);
   return { policy: state.policy, used: state.used, calls: [...state.calls.values()], bytes: state.bytes,
     state: [...state.calls.values()].some(call => call.outcome.kind === "unknown") ? "held_unknown" : [...state.calls.values()].some(call => call.outcome.kind === "pending") ? "pending" : "ready" };
+}
+
+export function assertProviderBudgetResumable(directory: string, policyHash: string) {
+  const state = inspectProviderBudget(directory, policyHash);
+  livePolicy(state.policy, Date.now());
+  if (state.state === "pending") fail("BUDGET_BUSY");
+  if (state.state === "held_unknown") fail("BUDGET_UNRESOLVED_CALL");
 }
 
 export function budgetedProviderFetch(input: { directory: string; policyHash: string; operation: ProviderBudgetOperation; transport: typeof fetch; now?: () => number; elapsedNow?: () => number }): typeof fetch {
