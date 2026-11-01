@@ -3,14 +3,14 @@ import { chmodSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { evaluationProviderFetch } from "./evaluation-provider";
+import { evaluationProviderFetch, evaluationProviderProjectId } from "./evaluation-provider";
 import { initializeProviderBudget, inspectProviderBudget, type ProviderBudgetPolicy } from "./provider-budget";
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 function fixture() {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "pit55-reference-"))); roots.push(root);
   const policy: ProviderBudgetPolicy = {
-    schemaVersion: 1, acceptanceId: randomUUID(), projectId: "isolated-project", caseHash: "a".repeat(64), sourceHash: "b".repeat(64),
+    schemaVersion: 1, acceptanceId: randomUUID(), projectId: randomUUID(), caseHash: "a".repeat(64), sourceHash: "b".repeat(64),
     provider: "synthetic", model: "synthetic-model", observedVersion: "synthetic-version", endpoint: "https://synthetic.invalid/v1/responses",
     approval: { evidenceRef: "test-synthetic-only", approvedAt: "2026-01-01T00:00:00Z", validUntil: "2099-01-01T00:00:00Z" },
     pricing: { source: "https://synthetic.invalid/pricing", checkedAt: "2026-01-01T00:00:00Z", validUntil: "2099-01-01T00:00:00Z", inputMicroUsdPerMillion: 1_000_000, outputMicroUsdPerMillion: 2_000_000 },
@@ -47,4 +47,12 @@ it("refuses missing, public, oversized, symlinked and tampered references", () =
   const link = join(f.root, "link"); symlinkSync(f.path, link); expect(() => evaluationProviderFetch({ ...f.input, environment: { ...f.environment, PITCHROOM_EVAL_BUDGET_FILE: link } })).toThrow("BUDGET_SYMLINK");
   writeFileSync(f.path, " ".repeat(4097)); expect(() => evaluationProviderFetch(f.input)).toThrow("BUDGET_REFERENCE_PATH");
   writeFileSync(f.path, JSON.stringify({ ...f.reference, policyHash: "c".repeat(64) })); expect(() => evaluationProviderFetch(f.input)).toThrow(); expect(f.transport).not.toHaveBeenCalled();
+});
+
+it("derives the worker project only from a fully bound reference before claiming work", () => {
+  const f = fixture(); expect(evaluationProviderProjectId({})).toBeUndefined();
+  expect(evaluationProviderProjectId(f.environment)).toBe(f.policy.projectId);
+  expect(() => evaluationProviderProjectId({ ...f.environment, PITCHROOM_EVAL_SOURCE_HASH: "f".repeat(64) })).toThrow("BUDGET_REFERENCE_MISMATCH");
+  expect(() => evaluationProviderProjectId({ PITCHROOM_EVAL_INSTANCE_ID: f.reference.instanceId })).toThrow("BUDGET_EVALUATION_CONFIG");
+  expect(f.transport).not.toHaveBeenCalled();
 });

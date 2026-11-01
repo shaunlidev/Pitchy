@@ -22,11 +22,7 @@ function readReference(path: string) {
   return evaluationProviderReferenceSchema.parse(JSON.parse(readFileSync(path, "utf8")));
 }
 
-/** Only an explicit local evaluation reference can attach a cumulative budget. This does not grant model permission. */
-export function evaluationProviderFetch(input: {
-  environment: Environment; projectId: string; stage: ProviderBudgetOperation["stage"]; commandId: string; transport: typeof fetch;
-}): typeof fetch | undefined {
-  const environment = input.environment;
+function configuration(environment: Environment) {
   const values = [environment.PITCHROOM_EVAL_BUDGET_FILE, environment.PITCHROOM_EVAL_INSTANCE_ID, environment.PITCHROOM_EVAL_SOURCE_HASH, environment.PITCHROOM_EVAL_CASE_HASH];
   if (values.every(value => value === undefined)) return undefined;
   if (values.some(value => !value)) throw new ProviderBudgetError("BUDGET_EVALUATION_CONFIG");
@@ -35,7 +31,23 @@ export function evaluationProviderFetch(input: {
   if (reference.instanceId !== identity.instanceId || reference.sourceHash !== identity.sourceHash || reference.caseHash !== identity.caseHash) throw new ProviderBudgetError("BUDGET_REFERENCE_MISMATCH");
   const { policy } = inspectProviderBudget(reference.directory, reference.policyHash);
   const endpoint = `${(environment.OPENAI_BASE_URL ?? "https://api.openai.com/v1").replace(/\/+$/, "")}/responses`;
-  if (environment.PITCHROOM_LIVE_TRANSFER_ACK !== "authorized" || !environment.OPENAI_API_KEY || environment.OPENAI_MODEL !== policy.model || endpoint !== policy.endpoint || input.projectId !== policy.projectId || identity.sourceHash !== policy.sourceHash || identity.caseHash !== policy.caseHash) throw new ProviderBudgetError("BUDGET_BINDING_MISMATCH");
+  if (environment.PITCHROOM_LIVE_TRANSFER_ACK !== "authorized" || !environment.OPENAI_API_KEY || environment.OPENAI_MODEL !== policy.model || endpoint !== policy.endpoint || identity.sourceHash !== policy.sourceHash || identity.caseHash !== policy.caseHash) throw new ProviderBudgetError("BUDGET_BINDING_MISMATCH");
+  return { reference, identity, policy };
+}
+
+export function evaluationProviderProjectId(environment: Environment): string | undefined {
+  const configured = configuration(environment);
+  return configured ? z.string().uuid().parse(configured.policy.projectId) : undefined;
+}
+
+/** Only an explicit local evaluation reference can attach a cumulative budget. This does not grant model permission. */
+export function evaluationProviderFetch(input: {
+  environment: Environment; projectId: string; stage: ProviderBudgetOperation["stage"]; commandId: string; transport: typeof fetch;
+}): typeof fetch | undefined {
+  const configured = configuration(input.environment);
+  if (!configured) return undefined;
+  const { reference, identity, policy } = configured;
+  if (input.projectId !== policy.projectId) throw new ProviderBudgetError("BUDGET_BINDING_MISMATCH");
   return budgetedProviderFetch({ directory: reference.directory, policyHash: reference.policyHash, transport: input.transport,
     operation: { acceptanceId: policy.acceptanceId, sessionId: reference.sessionId, projectId: input.projectId,
       sourceHash: identity.sourceHash, caseHash: identity.caseHash, stage: input.stage, commandId: input.commandId } });
