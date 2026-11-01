@@ -233,7 +233,7 @@ it("counts active time cumulatively per stage without charging human wait time",
   const f = fixture({ stageModelActiveMs: { understanding: 1500, clarify: 10_000, positioning: 10_000, story: 10_000, legacy_deck: 10_000 } });
   let now = Date.now();
   const transport = vi.fn<typeof fetch>(async () => { now += 600; return response(); });
-  const fetcher = budgetedProviderFetch({ ...f.handle, operation: f.operation, transport, now: () => now });
+  const fetcher = budgetedProviderFetch({ ...f.handle, operation: f.operation, transport, now: () => now, elapsedNow: () => now });
   await fetcher(f.policy.endpoint, request); now += 10_000;
   await expect(fetcher(f.policy.endpoint, request)).rejects.toThrow("BUDGET_STAGE_TIME_LIMIT");
   expect(transport).toHaveBeenCalledTimes(1); expect(inspectProviderBudget(f.handle.directory, f.handle.policyHash).used.modelActiveMs).toBe(600);
@@ -298,4 +298,27 @@ it("counts and blocks the actual Understanding tool loop's second provider reque
   const runner = createLiveUnderstandingRunner(repository, { apiKey: "test-synthetic-only", model: policy.model, baseURL: "https://api.deepseek.com", fetch: controlled });
   await expect(runner.run({ projectId: source.projectId, chunks: [chunk] })).rejects.toThrow("BUDGET_REQUEST_LIMIT");
   expect(transport).toHaveBeenCalledTimes(1); expect(inspectProviderBudget(handle.directory, handle.policyHash).used.requests).toBe(1);
+});
+
+it("charges monotonic active time when the approval wall clock moves backwards", async () => {
+  const f = fixture({ requestMs: 100, modelActiveMs: 100 }); let wall = Date.now(), elapsed = 0;
+  const transport = vi.fn<typeof fetch>(async () => { wall -= 500; elapsed += 70; return response(); });
+  const controlled = budgetedProviderFetch({ ...f.handle, operation: f.operation, transport, now: () => wall, elapsedNow: () => elapsed });
+  await controlled(f.policy.endpoint, request);
+  expect(inspectProviderBudget(f.handle.directory, f.handle.policyHash).used.modelActiveMs).toBe(70);
+  await expect(controlled(f.policy.endpoint, request)).rejects.toThrow("BUDGET_LIMIT"); expect(transport).toHaveBeenCalledTimes(1);
+});
+it("holds the full reservation on an invalid monotonic timer instead of refunding runtime", async () => {
+  const f = fixture(); let elapsed = 100;
+  const controlled = budgetedProviderFetch({ ...f.handle, operation: f.operation, transport: async () => { elapsed = 50; return response(); }, elapsedNow: () => elapsed });
+  await expect(controlled(f.policy.endpoint, request)).rejects.toThrow("BUDGET_CLOCK_INVALID");
+  const state = inspectProviderBudget(f.handle.directory, f.handle.policyHash); expect(state.state).toBe("held_unknown"); expect(state.used.modelActiveMs).toBe(f.policy.limits.requestMs);
+});
+it("rejects unfrozen service tiers, hosted tools and priced modalities before reservation", async () => {
+  const f = fixture(), transport = vi.fn<typeof fetch>(async () => response());
+  const controlled = budgetedProviderFetch({ ...f.handle, operation: f.operation, transport });
+  for (const extra of [{ service_tier: "priority" }, { tools: [{ type: "web_search" }] }, { modalities: ["audio"] }, { input: [{ role: "user", content: [{ type: "input_image", image_url: "https://synthetic.invalid/image" }] }] }, { prompt_cache_retention: "24h" }]) {
+    await expect(controlled(f.policy.endpoint, { ...request, body: JSON.stringify({ model: f.policy.model, ...extra }) })).rejects.toThrow("BUDGET_UNSUPPORTED_REQUEST");
+  }
+  expect(transport).not.toHaveBeenCalled(); expect(inspectProviderBudget(f.handle.directory, f.handle.policyHash).used.requests).toBe(0);
 });
