@@ -28,7 +28,9 @@ export async function healthResponse(databaseProbe: (url: string) => Promise<boo
   const liveModelReady = runtime !== "live" || Boolean(process.env.OPENAI_API_KEY && process.env.OPENAI_MODEL && process.env.PITCHROOM_LIVE_TRANSFER_ACK === "authorized");
   const ready = configurationReady && databaseReady && liveModelReady;
   return NextResponse.json(
-    { status: ready ? "ready" : "not_ready", runtime, ...(instance.kind === "enabled" ? { evaluationInstance: instance.identity } : {}), checks: { configuration: configurationReady, database: databaseReady, liveModel: liveModelReady } },
+    { status: ready ? "ready" : "not_ready", runtime, ...(instance.kind === "enabled" ? { evaluationInstance: instance.identity } : {}),
+      ...(instance.kind === "budgeted_live" ? { evaluationBudgetInstance: instance.identity } : {}),
+      checks: { configuration: configurationReady, database: databaseReady, liveModel: liveModelReady } },
     { status: ready ? 200 : 503, headers: { "cache-control": "no-store" } },
   );
 }

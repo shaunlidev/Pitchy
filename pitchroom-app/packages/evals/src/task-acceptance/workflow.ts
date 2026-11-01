@@ -806,17 +806,7 @@ async function recordDecisionContext(context: Context, input: { run: TaskWorkflo
 }
 
 /** Local preparation only: no HTTP, provider, environment-file discovery or project reset. */
-export function prepare(raw: unknown): TaskWorkflowRun {
-  const input = prepareSchema.parse(raw), caseDirectory = realpathSync(input.caseDirectory);
-  const policyInput = z.json().parse(readJson(input.accountingPolicyFile));
-  const policy = loadEvidencePolicy(policyInput);
-  const launchReceipt = z.json().parse(parseWorkspaceBinding(readJson(input.launchReceiptFile)));
-  assertUnlinkedPath(join(caseDirectory, "materials.json"));
-  const bundle = { taskCase: readJson(join(caseDirectory, "case.json")), oracle: readJson(join(caseDirectory, "oracle.json")), materialPackageText: readFileSync(join(caseDirectory, "materials.json"), "utf8") };
-  const parsed = parseTaskBundle(bundle);
-  if (parsed.taskCase.status !== "frozen") failEvidence("CASE_NOT_FROZEN");
-  const sourceRepository = realpathSync(input.sourceRepository);
-  const source = captureTaskSourceIdentity(sourceRepository, [
+export const taskAcceptanceSourcePaths = [
     "pitchroom-app/packages/evals/src/task-acceptance/workflow.ts",
     "pitchroom-app/packages/evals/src/task-acceptance/cli.ts",
     "pitchroom-app/packages/evals/src/task-acceptance/review.ts",
@@ -831,7 +821,35 @@ export function prepare(raw: unknown): TaskWorkflowRun {
     "pitchroom-app/packages/evals/src/task-acceptance/session.ts",
     "pitchroom-app/packages/evals/src/task-acceptance/capacity.ts",
     "pitchroom-app/packages/evals/src/task-acceptance/schema.ts",
-  ]);
+    "pitchroom-app/packages/agent/src/provider-budget.ts",
+    "pitchroom-app/packages/agent/src/evaluation-provider.ts",
+    "pitchroom-app/packages/agent/src/live-runner.ts",
+    "pitchroom-app/packages/agent/src/vercel-ai-runner.ts",
+    "pitchroom-app/packages/agent/src/deepseek-runner.ts",
+    "pitchroom-app/packages/agent/src/positioning-runner.ts",
+    "pitchroom-app/packages/agent/src/story-runner.ts",
+    "pitchroom-app/packages/agent/src/deck-runner.ts",
+    "pitchroom-app/packages/agent/src/clarification-runner.ts",
+    "pitchroom-app/apps/web/lib/persistent-workspace.ts",
+    "pitchroom-app/apps/web/lib/story-service.ts",
+    "pitchroom-app/apps/web/lib/evaluation-instance.ts",
+    "pitchroom-app/apps/web/app/api/workspace/route.ts",
+    "pitchroom-app/apps/web/app/api/health/route.ts",
+    "pitchroom-app/scripts/clarification-worker.ts",
+    "pitchroom-app/packages/evals/src/task-acceptance/provider-budget-audit.ts",
+] as const;
+
+export function prepare(raw: unknown): TaskWorkflowRun {
+  const input = prepareSchema.parse(raw), caseDirectory = realpathSync(input.caseDirectory);
+  const policyInput = z.json().parse(readJson(input.accountingPolicyFile));
+  const policy = loadEvidencePolicy(policyInput);
+  const launchReceipt = z.json().parse(parseWorkspaceBinding(readJson(input.launchReceiptFile)));
+  assertUnlinkedPath(join(caseDirectory, "materials.json"));
+  const bundle = { taskCase: readJson(join(caseDirectory, "case.json")), oracle: readJson(join(caseDirectory, "oracle.json")), materialPackageText: readFileSync(join(caseDirectory, "materials.json"), "utf8") };
+  const parsed = parseTaskBundle(bundle);
+  if (parsed.taskCase.status !== "frozen") failEvidence("CASE_NOT_FROZEN");
+  const sourceRepository = realpathSync(input.sourceRepository);
+  const source = captureTaskSourceIdentity(sourceRepository, taskAcceptanceSourcePaths);
   const initialReference = createTaskSession(policy, {
     sessionId: input.sessionId, purpose: input.purpose, maximumBytes: input.maximumBytes - METADATA_BYTES, bundle,
     identity: { source, runtime: {
