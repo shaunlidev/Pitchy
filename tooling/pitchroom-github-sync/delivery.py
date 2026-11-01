@@ -27,6 +27,19 @@ REVIEWED_EVAL_SOURCES = {
 }
 
 
+# PIT-89: exact portfolio text approved on 2026-11-01; no directory wildcard.
+REVIEWED_PORTFOLIO_SOURCES = {
+    'docs/portfolio/README.md': 'f571d28d40daceafa15b1ac338a9085e31285856ca66181b650d4c2e6e193856',
+    'docs/portfolio/architecture.md': 'd25586af6ca120cca2693b709fbcdee87dc1e61fe7884d96a85f29125cd20670',
+    'docs/portfolio/case-study.md': '390f0e995316e788155f990c9e147856e0474cb0fafd4bb3ef5ecc1a75cb5f21',
+    'docs/portfolio/contribution-and-interview.md': '159dabb21f31dafdb270e2a79f53a40db01ce925423d4c05cfc0e3e4ec53806d',
+    'docs/portfolio/demo.md': '76105a0d105675d451be13766e624f27a54204b51a6d62b297987457f1fb2308',
+    'docs/portfolio/evidence-index.json': '805e932a55000715eb3effccec74ff14aeb7f931e8e27fef427ddd04a9df8e4e',
+    'docs/portfolio/failure-analysis.md': '45066f396d7c817048ce2e389125095a950458d1809f9a26df62350d058878ef',
+    'docs/portfolio/verification.md': 'c96e15150059f157394130d6ad4e637efcf39b490b83f975ca5617d8c1d965ef',
+}
+
+
 def git(*args):
     return subprocess.check_output(['git', *args], text=True).strip()
 
@@ -71,7 +84,7 @@ def allowed_path(path, reviewed=()):
         'tooling/pipeline-status/test_view.py',
 
     }
-    if path in infrastructure:
+    if path in infrastructure or path in REVIEWED_PORTFOLIO_SOURCES:
         return True
     parts = [part.lower() for part in Path(path).parts]
     if any(part in RUNTIME_PARTS or part.startswith(".next") for part in parts) or any(part.startswith(".") for part in parts[:-1]):
@@ -121,7 +134,7 @@ def audit(commits):
             if int(git('cat-file', '-s', oid)) > 2_000_000:
                 raise ValueError(f'Oversized committed file: {path}')
             data = subprocess.check_output(['git', 'cat-file', 'blob', oid])
-            expected = REVIEWED_EVAL_SOURCES.get(path)
+            expected = REVIEWED_EVAL_SOURCES.get(path) or REVIEWED_PORTFOLIO_SOURCES.get(path)
             if expected is not None and hashlib.sha256(data).hexdigest() != expected:
                 raise ValueError(f'Reviewed source content changed: {path}; explicit review required')
             check(path, data)
