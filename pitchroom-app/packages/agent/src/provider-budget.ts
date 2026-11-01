@@ -1,0 +1,287 @@
+import { createHash, randomUUID } from "node:crypto";
+import { appendFileSync, closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmdirSync, writeFileSync } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
+import { z } from "zod";
+
+const whole = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
+const positive = whole.refine(value => value > 0);
+const hash = z.string().regex(/^[a-f0-9]{64}$/);
+const identifier = z.string().min(1).max(160);
+const stages = z.enum(["understanding", "clarify", "positioning", "story", "legacy_deck"]);
+const endpoint = z.url().refine(value => {
+  const url = new URL(value);
+  return url.protocol === "https:" && !url.username && !url.password && !url.search && !url.hash && url.pathname.endsWith("/responses");
+});
+export const providerBudgetPolicySchema = z.object({
+  schemaVersion: z.literal(1), acceptanceId: z.string().uuid(), projectId: identifier,
+  caseHash: hash, sourceHash: hash, provider: identifier, model: identifier, observedVersion: identifier, endpoint,
+  approval: z.object({ evidenceRef: identifier, approvedAt: z.iso.datetime(), validUntil: z.iso.datetime() }).strict(),
+  pricing: z.object({ source: z.url(), checkedAt: z.iso.datetime(), validUntil: z.iso.datetime(), inputMicroUsdPerMillion: whole, outputMicroUsdPerMillion: whole }).strict(),
+  inputCeiling: z.object({ tokens: positive, source: z.url(), checkedAt: z.iso.datetime(), validUntil: z.iso.datetime() }).strict(),
+  limits: z.object({ requests: positive, inputTokens: positive, outputTokens: positive, microUsd: positive,
+    inputTokensPerRequest: positive, outputTokensPerRequest: positive,
+    requestMs: positive.max(2_147_483_647), modelActiveMs: positive, stageModelActiveMs: z.record(stages, positive),
+    requestBytes: positive.max(16_777_216), responseBytes: positive.max(16_777_216), ledgerBytes: positive.max(1_000_000),
+  }).strict(),
+}).strict();
+export type ProviderBudgetPolicy = z.infer<typeof providerBudgetPolicySchema>;
+export const providerBudgetOperationSchema = z.object({
+  acceptanceId: z.string().uuid(), sessionId: z.string().uuid(), projectId: identifier, caseHash: hash, sourceHash: hash,
+  stage: stages, commandId: identifier,
+  workerAttempt: z.object({ taskId: identifier, attemptId: identifier }).strict().optional(),
+}).strict();
+export type ProviderBudgetOperation = z.infer<typeof providerBudgetOperationSchema>;
+const textContentSchema = z.object({ type: z.enum(["input_text", "output_text"]), text: z.string(), annotations: z.array(z.unknown()).optional() }).strict();
+const inputItemSchema = z.union([
+  z.object({ type: z.literal("message").optional(), id: z.string().optional(), status: z.string().optional(), role: z.enum(["system", "developer", "user", "assistant"]), content: z.union([z.string(), z.array(textContentSchema)]) }).strict(),
+  z.object({ type: z.literal("function_call"), id: z.string().optional(), status: z.string().optional(), call_id: z.string(), name: z.string(), arguments: z.string() }).strict(),
+  z.object({ type: z.literal("function_call_output"), id: z.string().optional(), status: z.string().optional(), call_id: z.string(), output: z.string() }).strict(),
+  z.object({ type: z.literal("reasoning"), id: z.string(), status: z.string().optional(), encrypted_content: z.string().optional(), summary: z.array(z.object({ type: z.literal("summary_text"), text: z.string() }).strict()) }).strict(),
+]);
+const providerRequestSchema = z.object({
+  model: identifier, input: z.union([z.string(), z.array(inputItemSchema)]).optional(), max_output_tokens: positive.optional(),
+  stream: z.literal(false).optional(), store: z.boolean().optional(), background: z.literal(false).optional(), service_tier: z.literal("default").optional(),
+  tools: z.array(z.object({ type: z.literal("function") }).passthrough()).optional(), tool_choice: z.enum(["auto", "none", "required"]).optional(), parallel_tool_calls: z.boolean().optional(),
+  text: z.object({ format: z.unknown().optional(), verbosity: z.string().optional() }).strict().optional(), reasoning: z.object({ effort: z.string().optional(), summary: z.string().optional() }).strict().optional(),
+  temperature: z.number().optional(), top_p: z.number().optional(), instructions: z.string().optional(),
+}).strict();
+const reservationSchema = providerBudgetOperationSchema.extend({ callId: z.string().uuid(), requestHash: hash,
+  inputTokens: whole, outputTokens: whole, microUsd: whole, modelActiveMs: whole,
+}).strict();
+const settlementSchema = z.object({ callId: z.string().uuid(), inputTokens: whole, outputTokens: whole, microUsd: whole,
+  modelActiveMs: whole, observedModel: identifier, httpStatus: z.number().int().min(100).max(599),
+}).strict();
+const eventSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("initialized"), policy: providerBudgetPolicySchema }).strict(),
+  z.object({ kind: z.literal("reserved"), reservation: reservationSchema }).strict(),
+  z.object({ kind: z.literal("settled"), settlement: settlementSchema }).strict(),
+  z.object({ kind: z.literal("unknown"), callId: z.string().uuid(), reason: z.enum(["transport", "deadline", "response", "usage", "model"]) }).strict(),
+]);
+const entryBodySchema = z.object({ sequence: whole, previous: hash, at: z.iso.datetime(), event: eventSchema }).strict();
+const entrySchema = entryBodySchema.extend({ hash }).strict();
+type Entry = z.infer<typeof entrySchema>;
+type Reservation = z.infer<typeof reservationSchema>;
+type Settlement = z.infer<typeof settlementSchema>;
+type Call = { reservation: Reservation; outcome: { kind: "pending" } | { kind: "unknown" } | { kind: "settled"; value: Settlement } };
+const seed = "0".repeat(64);
+const terminalAllowance = 2048;
+const anchorAllowance = 1024;
+const anchorSchema = z.object({ policyHash: hash, sequence: whole, head: hash }).strict();
+const anchorPath = (directory: string) => join(dirname(directory), `${basename(directory)}.provider-anchor.json`);
+function flushDirectory(directory: string) {
+  const fd = openSync(directory, "r"); try { fsyncSync(fd); } finally { closeSync(fd); }
+}
+function readAnchor(directory: string) {
+  const path = anchorPath(directory); privatePath(path, false);
+  if (lstatSync(path).size > anchorAllowance / 2) fail("BUDGET_ANCHOR_LIMIT");
+  return anchorSchema.parse(JSON.parse(readFileSync(path, "utf8")));
+}
+function writeAnchor(directory: string, anchor: z.infer<typeof anchorSchema>, initialize = false) {
+  privatePath(dirname(directory), true);
+  const target = anchorPath(directory); unlinked(target);
+  const pending = initialize ? target : `${target}.pending`;
+  const fd = openSync(pending, "wx", 0o600);
+  try { writeFileSync(fd, JSON.stringify(anchor)); fsyncSync(fd); } finally { closeSync(fd); }
+  if (!initialize) renameSync(pending, target);
+  flushDirectory(dirname(directory));
+}
+
+const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
+export class ProviderBudgetError extends Error {
+  constructor(readonly code: string) { super(code); this.name = "ProviderBudgetError"; }
+}
+function fail(code: string): never { throw new ProviderBudgetError(code); }
+const errorCode = (value: unknown) => z.object({ code: z.string() }).safeParse(value).data?.code;
+
+function unlinked(path: string) {
+  for (let current = resolve(path); ; current = dirname(current)) {
+    try { if (lstatSync(current).isSymbolicLink()) fail("BUDGET_SYMLINK"); }
+    catch (error) { if (errorCode(error) !== "ENOENT") throw error; }
+    if (current === dirname(current)) break;
+  }
+}
+function privatePath(path: string, directory: boolean) {
+  unlinked(path);
+  const stat = lstatSync(path);
+  if ((directory ? !stat.isDirectory() : !stat.isFile()) || (stat.mode & 0o077) !== 0) fail("BUDGET_INSECURE_PATH");
+}
+function livePolicy(policy: ProviderBudgetPolicy, now: number) {
+  if (!Number.isSafeInteger(now) || now < Date.parse(policy.approval.approvedAt) || now >= Date.parse(policy.approval.validUntil)) fail("BUDGET_APPROVAL_EXPIRED");
+  if (policy.limits.inputTokensPerRequest < policy.inputCeiling.tokens) fail("BUDGET_INPUT_CEILING");
+  if (now < Date.parse(policy.inputCeiling.checkedAt) || now >= Date.parse(policy.inputCeiling.validUntil)) fail("BUDGET_INPUT_CEILING_EXPIRED");
+  if (now < Date.parse(policy.pricing.checkedAt) || now >= Date.parse(policy.pricing.validUntil)) fail("BUDGET_PRICING_EXPIRED");
+}
+function makeEntry(entries: Entry[], event: z.infer<typeof eventSchema>, now: number): Entry {
+  const body = entryBodySchema.parse({ sequence: entries.length, previous: entries.at(-1)?.hash ?? seed, at: new Date(now).toISOString(), event });
+  return { ...body, hash: digest(body) };
+}
+function append(path: string, entry: Entry) {
+  const directory = dirname(path), previous = readAnchor(directory);
+  if (previous.head !== entry.previous || previous.sequence + 1 !== entry.sequence) fail("BUDGET_ANCHOR_MISMATCH");
+  const fd = openSync(path, "a");
+  try { appendFileSync(fd, JSON.stringify(entry) + "\n"); fsyncSync(fd); } finally { closeSync(fd); }
+  writeAnchor(directory, { policyHash: previous.policyHash, sequence: entry.sequence, head: entry.hash });
+}
+function project(entries: Entry[]) {
+  const first = entries[0];
+  if (!first || first.event.kind !== "initialized") return fail("BUDGET_UNINITIALIZED");
+  const calls = new Map<string, Call>();
+  for (const [index, entry] of entries.entries()) {
+    const { hash: actual, ...body } = entry;
+    if (entry.sequence !== index || entry.previous !== (entries[index - 1]?.hash ?? seed) || digest(body) !== actual) fail("BUDGET_JOURNAL_CHANGED");
+    const event = entry.event;
+    if (event.kind === "initialized") { if (index !== 0) fail("BUDGET_REINITIALIZED"); continue; }
+    if (event.kind === "reserved") {
+      if (calls.has(event.reservation.callId)) fail("BUDGET_DUPLICATE_CALL");
+      calls.set(event.reservation.callId, { reservation: event.reservation, outcome: { kind: "pending" } });
+    } else {
+      const call = calls.get(event.kind === "settled" ? event.settlement.callId : event.callId);
+      if (!call || call.outcome.kind !== "pending") fail("BUDGET_INVALID_OUTCOME");
+      call.outcome = event.kind === "settled" ? { kind: "settled", value: event.settlement } : { kind: "unknown" };
+    }
+  }
+  const used = { requests: calls.size, inputTokens: 0, outputTokens: 0, microUsd: 0, modelActiveMs: 0 };
+  for (const call of calls.values()) {
+    const amount = call.outcome.kind === "settled" ? call.outcome.value : call.reservation;
+    for (const key of ["inputTokens", "outputTokens", "microUsd", "modelActiveMs"] satisfies (keyof typeof amount)[]) {
+      used[key] += amount[key]; if (!Number.isSafeInteger(used[key])) fail("BUDGET_INVALID_TOTAL");
+    }
+  }
+  return { policy: first.event.policy, calls, used };
+}
+function load(directory: string, policyHash: string) {
+  privatePath(directory, true);
+  const path = join(directory, "provider.jsonl"); privatePath(path, false);
+  if (lstatSync(path).size > 1_000_000) fail("BUDGET_LEDGER_LIMIT");
+  const bytes = readFileSync(path, "utf8");
+  if (!bytes.endsWith("\n")) fail("BUDGET_PARTIAL_WRITE");
+  const entries = bytes.slice(0, -1).split("\n").map(line => entrySchema.parse(JSON.parse(line)));
+  const state = project(entries);
+  if (digest(state.policy) !== policyHash) fail("BUDGET_POLICY_CHANGED");
+  const anchor = readAnchor(directory), last = entries.at(-1);
+  if (basename(directory) !== state.policy.acceptanceId || !last || anchor.policyHash !== policyHash || anchor.sequence !== last.sequence || anchor.head !== last.hash) fail("BUDGET_ANCHOR_MISMATCH");
+  return { ...state, entries, path, bytes: Buffer.byteLength(bytes) + anchorAllowance };
+}
+function locked<T>(directory: string, action: () => T): T {
+  privatePath(directory, true);
+  const lock = join(directory, ".provider-lock");
+  try { mkdirSync(lock, { mode: 0o700 }); }
+  catch (error) { if (errorCode(error) === "EEXIST") fail("BUDGET_BUSY"); throw error; }
+  try { return action(); } finally { rmdirSync(lock); }
+}
+function cost(policy: ProviderBudgetPolicy, input: number, output: number) {
+  const amount = (BigInt(input) * BigInt(policy.pricing.inputMicroUsdPerMillion) + BigInt(output) * BigInt(policy.pricing.outputMicroUsdPerMillion) + 999_999n) / 1_000_000n;
+  if (amount > BigInt(Number.MAX_SAFE_INTEGER)) return fail("BUDGET_INVALID_COST");
+  return Number(amount);
+}
+
+/** Operator-owned local ledger. The approval record is an auditable claim, not proof of consent. */
+export function initializeProviderBudget(root: string, rawPolicy: unknown, now = Date.now()) {
+  const policy = providerBudgetPolicySchema.parse(rawPolicy); livePolicy(policy, now);
+  privatePath(root, true);
+  const directory = join(root, policy.acceptanceId); unlinked(directory);
+  try { mkdirSync(directory, { mode: 0o700 }); }
+  catch (error) { if (errorCode(error) === "EEXIST") fail("BUDGET_ALREADY_EXISTS"); throw error; }
+  const entry = makeEntry([], { kind: "initialized", policy }, now), bytes = JSON.stringify(entry) + "\n";
+  if (Buffer.byteLength(bytes) + anchorAllowance + terminalAllowance > policy.limits.ledgerBytes) fail("BUDGET_LEDGER_LIMIT");
+  writeFileSync(join(directory, "provider.jsonl"), bytes, { flag: "wx", mode: 0o600 });
+  const fd = openSync(join(directory, "provider.jsonl"), "r"); try { fsyncSync(fd); } finally { closeSync(fd); }
+  flushDirectory(directory);
+  writeAnchor(directory, { policyHash: digest(policy), sequence: entry.sequence, head: entry.hash }, true);
+  return { directory, policyHash: digest(policy) };
+}
+export function inspectProviderBudget(directory: string, policyHash: string) {
+  const state = load(directory, policyHash);
+  return { policy: state.policy, used: state.used, calls: [...state.calls.values()], bytes: state.bytes,
+    state: [...state.calls.values()].some(call => call.outcome.kind === "unknown") ? "held_unknown" : [...state.calls.values()].some(call => call.outcome.kind === "pending") ? "pending" : "ready" };
+}
+
+export function assertProviderBudgetResumable(directory: string, policyHash: string) {
+  const state = inspectProviderBudget(directory, policyHash);
+  livePolicy(state.policy, Date.now());
+  if (state.state === "pending") fail("BUDGET_BUSY");
+  if (state.state === "held_unknown") fail("BUDGET_UNRESOLVED_CALL");
+}
+
+export function budgetedProviderFetch(input: { directory: string; policyHash: string; operation: ProviderBudgetOperation; transport: typeof fetch; now?: () => number; elapsedNow?: () => number }): typeof fetch {
+  const operation = providerBudgetOperationSchema.parse(input.operation), now = input.now ?? Date.now, elapsedNow = input.elapsedNow ?? (() => performance.now());
+  return async (url, init) => {
+    const started = now(), activeStarted = elapsedNow(), state = load(input.directory, input.policyHash), policy = state.policy;
+    livePolicy(policy, started);
+    if (!Number.isFinite(activeStarted) || activeStarted < 0) fail("BUDGET_CLOCK_INVALID");
+    if (init?.signal?.aborted) fail("BUDGET_ABORTED");
+    if (operation.acceptanceId !== policy.acceptanceId || operation.projectId !== policy.projectId || operation.caseHash !== policy.caseHash || operation.sourceHash !== policy.sourceHash) fail("BUDGET_BINDING_MISMATCH");
+    if (url instanceof Request || String(url) !== policy.endpoint || init?.method !== "POST" || typeof init.body !== "string") fail("BUDGET_UNEXPECTED_REQUEST");
+    if (Buffer.byteLength(init.body) > policy.limits.requestBytes) fail("BUDGET_REQUEST_BYTES");
+    let rawBody: unknown;
+    try { rawBody = JSON.parse(init.body); } catch { return fail("BUDGET_UNSUPPORTED_REQUEST"); }
+    const parsedRequest = providerRequestSchema.safeParse(rawBody);
+    if (!parsedRequest.success) fail("BUDGET_UNSUPPORTED_REQUEST");
+    const body = parsedRequest.data;
+    if (body.model !== policy.model || (body.max_output_tokens !== undefined && body.max_output_tokens > policy.limits.outputTokensPerRequest)) fail("BUDGET_REQUEST_MODEL_OR_OUTPUT");
+    const outputTokens = body.max_output_tokens ?? policy.limits.outputTokensPerRequest;
+    const requestBody = { ...body, max_output_tokens: outputTokens, store: false, service_tier: "default" };
+    const requestText = JSON.stringify(requestBody);
+    if (Buffer.byteLength(requestText) > policy.limits.requestBytes) fail("BUDGET_REQUEST_BYTES");
+    const reservation = reservationSchema.parse({ ...operation, callId: randomUUID(), requestHash: digest(requestBody), inputTokens: policy.limits.inputTokensPerRequest,
+      outputTokens, microUsd: cost(policy, policy.limits.inputTokensPerRequest, outputTokens), modelActiveMs: policy.limits.requestMs });
+    locked(input.directory, () => {
+      const current = load(input.directory, input.policyHash); livePolicy(current.policy, now());
+      if ([...current.calls.values()].some(call => call.outcome.kind === "unknown")) fail("BUDGET_UNKNOWN_OUTCOME");
+      if ([...current.calls.values()].some(call => call.outcome.kind === "pending")) fail("BUDGET_BUSY");
+      if (current.used.requests >= policy.limits.requests) fail("BUDGET_REQUEST_LIMIT");
+      for (const key of ["inputTokens", "outputTokens", "microUsd", "modelActiveMs"] satisfies (keyof typeof current.used)[]) {
+        if (reservation[key] > policy.limits[key] - current.used[key]) fail("BUDGET_LIMIT");
+      }
+      const stageUsed = [...current.calls.values()].filter(call => call.reservation.stage === operation.stage)
+        .reduce((total, call) => total + (call.outcome.kind === "settled" ? call.outcome.value.modelActiveMs : call.reservation.modelActiveMs), 0);
+      if (reservation.modelActiveMs > policy.limits.stageModelActiveMs[operation.stage] - stageUsed) fail("BUDGET_STAGE_TIME_LIMIT");
+      const entry = makeEntry(current.entries, { kind: "reserved", reservation }, now());
+      if (current.bytes + Buffer.byteLength(JSON.stringify(entry) + "\n") + terminalAllowance > policy.limits.ledgerBytes) fail("BUDGET_LEDGER_LIMIT");
+      append(current.path, entry);
+    });
+    const controller = new AbortController();
+    const signal = init.signal ? AbortSignal.any([controller.signal, init.signal]) : controller.signal;
+    let reason: "transport" | "deadline" | "response" | "usage" | "model" = "transport";
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => { reason = "deadline"; controller.abort(); reject(new ProviderBudgetError("BUDGET_DEADLINE")); }, policy.limits.requestMs);
+    });
+    try {
+      const received = await Promise.race([(async () => {
+        const response = await input.transport(url, { ...init, body: requestText, redirect: "error", signal });
+        reason = "response";
+        const reader = response.body?.getReader(); if (!reader) return fail("BUDGET_RESPONSE_EMPTY");
+        const chunks: Uint8Array[] = []; let bytes = 0;
+        try { for (;;) { const part = await reader.read(); if (part.done) break; bytes += part.value.byteLength; if (bytes > policy.limits.responseBytes) fail("BUDGET_RESPONSE_BYTES"); chunks.push(part.value); } }
+        finally { await reader.cancel(); }
+        const text = Buffer.concat(chunks).toString("utf8"); reason = "usage";
+        const parsed = z.object({ model: identifier, usage: z.object({ input_tokens: whole, output_tokens: whole }).passthrough() }).passthrough().parse(JSON.parse(text));
+        if (parsed.usage.input_tokens > reservation.inputTokens || parsed.usage.output_tokens > reservation.outputTokens) fail("BUDGET_USAGE_BOUND");
+        reason = "model"; if (parsed.model !== policy.observedVersion) fail("BUDGET_MODEL_MISMATCH");
+        return { response, text, parsed };
+      })(), deadline]);
+      const elapsedMs = Math.ceil(elapsedNow() - activeStarted);
+      if (!Number.isSafeInteger(elapsedMs) || elapsedMs < 0) { reason = "deadline"; fail("BUDGET_CLOCK_INVALID"); }
+      if (elapsedMs > policy.limits.requestMs) { reason = "deadline"; fail("BUDGET_DEADLINE"); }
+      const settlement = settlementSchema.parse({ callId: reservation.callId, inputTokens: received.parsed.usage.input_tokens, outputTokens: received.parsed.usage.output_tokens,
+        microUsd: cost(policy, received.parsed.usage.input_tokens, received.parsed.usage.output_tokens), modelActiveMs: elapsedMs,
+        observedModel: received.parsed.model, httpStatus: received.response.status });
+      locked(input.directory, () => {
+        const current = load(input.directory, input.policyHash);
+        const entry = makeEntry(current.entries, { kind: "settled", settlement }, now());
+        if (current.bytes + Buffer.byteLength(JSON.stringify(entry) + "\n") > policy.limits.ledgerBytes) fail("BUDGET_LEDGER_LIMIT");
+        append(current.path, entry);
+      });
+      return new Response(received.text, { status: received.response.status, headers: { "content-type": "application/json" } });
+    } catch (error) {
+      // If recording fails, the original durable pending reservation still prevents a second dispatch.
+      locked(input.directory, () => {
+        const current = load(input.directory, input.policyHash);
+        const call = current.calls.get(reservation.callId);
+        if (call?.outcome.kind === "pending") append(current.path, makeEntry(current.entries, { kind: "unknown", callId: reservation.callId, reason }, now()));
+      });
+      throw error;
+    } finally { if (timer) clearTimeout(timer); }
+  };
+}

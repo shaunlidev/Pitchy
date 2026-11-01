@@ -10,6 +10,7 @@
   },
   "include": [
     "clarification-worker.ts",
+    "qa-provider-budget.ts",
     "qa-clarification-worker.ts"
   ]
 }

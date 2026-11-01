@@ -76,8 +76,8 @@ Stay consistent with the applied direction and current Understanding. A presenta
   }
 }
 
-export function createLiveDeckRunner(config: { apiKey?: string; model?: string; baseURL?: string }) {
+export function createLiveDeckRunner(config: { apiKey?: string; model?: string; baseURL?: string; fetch?: typeof fetch }) {
   if (!config.apiKey) throw new PitchroomError("INVALID_INPUT", "OPENAI_API_KEY is required for live deck generation.");
   if (!config.model) throw new PitchroomError("INVALID_INPUT", "OPENAI_MODEL must be pinned for live deck generation.");
-  return new ResponsesDeckRunner({ apiKey: config.apiKey, model: config.model, baseURL: config.baseURL ?? "https://api.openai.com/v1" });
+  return new ResponsesDeckRunner({ apiKey: config.apiKey, model: config.model, baseURL: config.baseURL ?? "https://api.openai.com/v1", fetch: config.fetch });
 }

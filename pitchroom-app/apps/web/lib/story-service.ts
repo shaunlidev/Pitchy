@@ -1,4 +1,4 @@
-import { createLiveStoryRunner, SyntheticStoryRunner, storyPromptVersion } from "@pitchroom/agent";
+import { evaluationProviderFetch, createLiveStoryRunner, SyntheticStoryRunner, storyPromptVersion } from "@pitchroom/agent";
 import { PitchroomError, type StoryHead, type StoryRequest } from "@pitchroom/domain";
 import { StoryRepository, PitchroomRepository } from "@pitchroom/persistence";
 
@@ -12,7 +12,7 @@ export async function proposeStory(repository: PitchroomRepository, input: { pro
   try {
     await repository.appendWorkflowEvent(run.run.id,"inputs_locked","Accepted understanding, direction, sources and adopted story saved");
     const local=await stories.localCandidate(proposal);
-    const runner=local?undefined:mode==="live"?createLiveStoryRunner({apiKey:process.env.OPENAI_API_KEY,model:process.env.OPENAI_MODEL,baseURL:process.env.OPENAI_BASE_URL}):new SyntheticStoryRunner();
+    const runner=local?undefined:mode==="live"?createLiveStoryRunner({apiKey:process.env.OPENAI_API_KEY,model:process.env.OPENAI_MODEL,baseURL:process.env.OPENAI_BASE_URL,fetch:evaluationProviderFetch({environment:process.env,projectId:input.projectId,stage:"story",commandId:input.commandId,transport:fetch})}):new SyntheticStoryRunner();
     await repository.appendWorkflowEvent(run.run.id,local?"exact_candidate":"model_requested",local?"Preparing exact saved wording for review":"Developing a story proposal for explicit review");
     const result=local?{story:local,responseToJudgment:input.request.kind==="restore"?"This saved story is proposed again without another model call.":"Your exact words are preserved. Prior evidence does not endorse the edited wording."}:await runner!.run(proposal.snapshot);
     const saved=await stories.finish(proposal,result);
