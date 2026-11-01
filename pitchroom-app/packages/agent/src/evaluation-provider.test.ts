@@ -11,10 +11,11 @@ function fixture() {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "pit55-reference-"))); roots.push(root);
   const policy: ProviderBudgetPolicy = {
     schemaVersion: 1, acceptanceId: randomUUID(), projectId: randomUUID(), caseHash: "a".repeat(64), sourceHash: "b".repeat(64),
-    provider: "synthetic", model: "synthetic-model", observedVersion: "synthetic-version", endpoint: "https://synthetic.invalid/v1/responses",
+    provider: "synthetic", model: "synthetic-model", observedVersion: "synthetic-model", endpoint: "https://synthetic.invalid/v1/responses",
     approval: { evidenceRef: "test-synthetic-only", approvedAt: "2026-01-01T00:00:00Z", validUntil: "2099-01-01T00:00:00Z" },
     pricing: { source: "https://synthetic.invalid/pricing", checkedAt: "2026-01-01T00:00:00Z", validUntil: "2099-01-01T00:00:00Z", inputMicroUsdPerMillion: 1_000_000, outputMicroUsdPerMillion: 2_000_000 },
-    limits: { requests: 2, inputTokens: 1000, outputTokens: 1000, microUsd: 3000, inputTokensPerRequest: 100, outputTokensPerRequest: 50, requestMs: 1000, modelActiveMs: 10_000, requestBytes: 10_000, responseBytes: 10_000, ledgerBytes: 50_000 },
+    inputCeiling: { tokens: 100, source: "https://synthetic.invalid/context", checkedAt: "2026-01-01T00:00:00Z", validUntil: "2099-01-01T00:00:00Z" },
+    limits: { requests: 2, inputTokens: 1000, outputTokens: 1000, microUsd: 3000, inputTokensPerRequest: 100, outputTokensPerRequest: 50, requestMs: 1000, modelActiveMs: 10_000, stageModelActiveMs: { understanding: 10_000, clarify: 10_000, positioning: 10_000, story: 10_000, legacy_deck: 10_000 }, requestBytes: 10_000, responseBytes: 10_000, ledgerBytes: 50_000 },
   };
   const handle = initializeProviderBudget(root, policy);
   const reference = { schemaVersion: 1, ...handle, sessionId: randomUUID(), instanceId: randomUUID(), sourceHash: policy.sourceHash, caseHash: policy.caseHash };

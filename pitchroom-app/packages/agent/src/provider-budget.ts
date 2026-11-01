@@ -1,12 +1,13 @@
 import { createHash, randomUUID } from "node:crypto";
-import { appendFileSync, closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, rmdirSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { appendFileSync, closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmdirSync, writeFileSync } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
 import { z } from "zod";
 
 const whole = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const positive = whole.refine(value => value > 0);
 const hash = z.string().regex(/^[a-f0-9]{64}$/);
 const identifier = z.string().min(1).max(160);
+const stages = z.enum(["understanding", "clarify", "positioning", "story", "legacy_deck"]);
 const endpoint = z.url().refine(value => {
   const url = new URL(value);
   return url.protocol === "https:" && !url.username && !url.password && !url.search && !url.hash && url.pathname.endsWith("/responses");
@@ -16,16 +17,17 @@ export const providerBudgetPolicySchema = z.object({
   caseHash: hash, sourceHash: hash, provider: identifier, model: identifier, observedVersion: identifier, endpoint,
   approval: z.object({ evidenceRef: identifier, approvedAt: z.iso.datetime(), validUntil: z.iso.datetime() }).strict(),
   pricing: z.object({ source: z.url(), checkedAt: z.iso.datetime(), validUntil: z.iso.datetime(), inputMicroUsdPerMillion: whole, outputMicroUsdPerMillion: whole }).strict(),
+  inputCeiling: z.object({ tokens: positive, source: z.url(), checkedAt: z.iso.datetime(), validUntil: z.iso.datetime() }).strict(),
   limits: z.object({ requests: positive, inputTokens: positive, outputTokens: positive, microUsd: positive,
     inputTokensPerRequest: positive, outputTokensPerRequest: positive,
-    requestMs: positive.max(2_147_483_647), modelActiveMs: positive,
+    requestMs: positive.max(2_147_483_647), modelActiveMs: positive, stageModelActiveMs: z.record(stages, positive),
     requestBytes: positive.max(16_777_216), responseBytes: positive.max(16_777_216), ledgerBytes: positive.max(1_000_000),
   }).strict(),
 }).strict();
 export type ProviderBudgetPolicy = z.infer<typeof providerBudgetPolicySchema>;
 export const providerBudgetOperationSchema = z.object({
   acceptanceId: z.string().uuid(), sessionId: z.string().uuid(), projectId: identifier, caseHash: hash, sourceHash: hash,
-  stage: z.enum(["understanding", "clarify", "positioning", "story", "legacy_deck"]), commandId: identifier,
+  stage: stages, commandId: identifier,
 }).strict();
 export type ProviderBudgetOperation = z.infer<typeof providerBudgetOperationSchema>;
 const reservationSchema = providerBudgetOperationSchema.extend({ callId: z.string().uuid(), requestHash: hash,
@@ -48,6 +50,27 @@ type Settlement = z.infer<typeof settlementSchema>;
 type Call = { reservation: Reservation; outcome: { kind: "pending" } | { kind: "unknown" } | { kind: "settled"; value: Settlement } };
 const seed = "0".repeat(64);
 const terminalAllowance = 2048;
+const anchorAllowance = 1024;
+const anchorSchema = z.object({ policyHash: hash, sequence: whole, head: hash }).strict();
+const anchorPath = (directory: string) => join(dirname(directory), `${basename(directory)}.provider-anchor.json`);
+function flushDirectory(directory: string) {
+  const fd = openSync(directory, "r"); try { fsyncSync(fd); } finally { closeSync(fd); }
+}
+function readAnchor(directory: string) {
+  const path = anchorPath(directory); privatePath(path, false);
+  if (lstatSync(path).size > anchorAllowance / 2) fail("BUDGET_ANCHOR_LIMIT");
+  return anchorSchema.parse(JSON.parse(readFileSync(path, "utf8")));
+}
+function writeAnchor(directory: string, anchor: z.infer<typeof anchorSchema>, initialize = false) {
+  privatePath(dirname(directory), true);
+  const target = anchorPath(directory); unlinked(target);
+  const pending = initialize ? target : `${target}.pending`;
+  const fd = openSync(pending, "wx", 0o600);
+  try { writeFileSync(fd, JSON.stringify(anchor)); fsyncSync(fd); } finally { closeSync(fd); }
+  if (!initialize) renameSync(pending, target);
+  flushDirectory(dirname(directory));
+}
+
 const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 export class ProviderBudgetError extends Error {
   constructor(readonly code: string) { super(code); this.name = "ProviderBudgetError"; }
@@ -69,6 +92,8 @@ function privatePath(path: string, directory: boolean) {
 }
 function livePolicy(policy: ProviderBudgetPolicy, now: number) {
   if (!Number.isSafeInteger(now) || now < Date.parse(policy.approval.approvedAt) || now >= Date.parse(policy.approval.validUntil)) fail("BUDGET_APPROVAL_EXPIRED");
+  if (policy.limits.inputTokensPerRequest < policy.inputCeiling.tokens) fail("BUDGET_INPUT_CEILING");
+  if (now < Date.parse(policy.inputCeiling.checkedAt) || now >= Date.parse(policy.inputCeiling.validUntil)) fail("BUDGET_INPUT_CEILING_EXPIRED");
   if (now < Date.parse(policy.pricing.checkedAt) || now >= Date.parse(policy.pricing.validUntil)) fail("BUDGET_PRICING_EXPIRED");
 }
 function makeEntry(entries: Entry[], event: z.infer<typeof eventSchema>, now: number): Entry {
@@ -76,8 +101,11 @@ function makeEntry(entries: Entry[], event: z.infer<typeof eventSchema>, now: nu
   return { ...body, hash: digest(body) };
 }
 function append(path: string, entry: Entry) {
+  const directory = dirname(path), previous = readAnchor(directory);
+  if (previous.head !== entry.previous || previous.sequence + 1 !== entry.sequence) fail("BUDGET_ANCHOR_MISMATCH");
   const fd = openSync(path, "a");
   try { appendFileSync(fd, JSON.stringify(entry) + "\n"); fsyncSync(fd); } finally { closeSync(fd); }
+  writeAnchor(directory, { policyHash: previous.policyHash, sequence: entry.sequence, head: entry.hash });
 }
 function project(entries: Entry[]) {
   const first = entries[0];
@@ -115,7 +143,9 @@ function load(directory: string, policyHash: string) {
   const entries = bytes.slice(0, -1).split("\n").map(line => entrySchema.parse(JSON.parse(line)));
   const state = project(entries);
   if (digest(state.policy) !== policyHash) fail("BUDGET_POLICY_CHANGED");
-  return { ...state, entries, path, bytes: Buffer.byteLength(bytes) };
+  const anchor = readAnchor(directory), last = entries.at(-1);
+  if (basename(directory) !== state.policy.acceptanceId || !last || anchor.policyHash !== policyHash || anchor.sequence !== last.sequence || anchor.head !== last.hash) fail("BUDGET_ANCHOR_MISMATCH");
+  return { ...state, entries, path, bytes: Buffer.byteLength(bytes) + anchorAllowance };
 }
 function locked<T>(directory: string, action: () => T): T {
   privatePath(directory, true);
@@ -138,9 +168,11 @@ export function initializeProviderBudget(root: string, rawPolicy: unknown, now =
   try { mkdirSync(directory, { mode: 0o700 }); }
   catch (error) { if (errorCode(error) === "EEXIST") fail("BUDGET_ALREADY_EXISTS"); throw error; }
   const entry = makeEntry([], { kind: "initialized", policy }, now), bytes = JSON.stringify(entry) + "\n";
-  if (Buffer.byteLength(bytes) + terminalAllowance > policy.limits.ledgerBytes) fail("BUDGET_LEDGER_LIMIT");
+  if (Buffer.byteLength(bytes) + anchorAllowance + terminalAllowance > policy.limits.ledgerBytes) fail("BUDGET_LEDGER_LIMIT");
   writeFileSync(join(directory, "provider.jsonl"), bytes, { flag: "wx", mode: 0o600 });
   const fd = openSync(join(directory, "provider.jsonl"), "r"); try { fsyncSync(fd); } finally { closeSync(fd); }
+  flushDirectory(directory);
+  writeAnchor(directory, { policyHash: digest(policy), sequence: entry.sequence, head: entry.hash }, true);
   return { directory, policyHash: digest(policy) };
 }
 export function inspectProviderBudget(directory: string, policyHash: string) {
@@ -174,6 +206,9 @@ export function budgetedProviderFetch(input: { directory: string; policyHash: st
       for (const key of ["inputTokens", "outputTokens", "microUsd", "modelActiveMs"] satisfies (keyof typeof current.used)[]) {
         if (reservation[key] > policy.limits[key] - current.used[key]) fail("BUDGET_LIMIT");
       }
+      const stageUsed = [...current.calls.values()].filter(call => call.reservation.stage === operation.stage)
+        .reduce((total, call) => total + (call.outcome.kind === "settled" ? call.outcome.value.modelActiveMs : call.reservation.modelActiveMs), 0);
+      if (reservation.modelActiveMs > policy.limits.stageModelActiveMs[operation.stage] - stageUsed) fail("BUDGET_STAGE_TIME_LIMIT");
       const entry = makeEntry(current.entries, { kind: "reserved", reservation }, now());
       if (current.bytes + Buffer.byteLength(JSON.stringify(entry) + "\n") + terminalAllowance > policy.limits.ledgerBytes) fail("BUDGET_LEDGER_LIMIT");
       append(current.path, entry);
@@ -196,7 +231,7 @@ export function budgetedProviderFetch(input: { directory: string; policyHash: st
         const text = Buffer.concat(chunks).toString("utf8"); reason = "usage";
         const parsed = z.object({ model: identifier, usage: z.object({ input_tokens: whole, output_tokens: whole }).passthrough() }).passthrough().parse(JSON.parse(text));
         if (parsed.usage.input_tokens > reservation.inputTokens || parsed.usage.output_tokens > reservation.outputTokens) fail("BUDGET_USAGE_BOUND");
-        reason = "model"; if (parsed.model !== policy.model) fail("BUDGET_MODEL_MISMATCH");
+        reason = "model"; if (parsed.model !== policy.observedVersion) fail("BUDGET_MODEL_MISMATCH");
         return { response, text, parsed };
       })(), deadline]);
       const settlement = settlementSchema.parse({ callId: reservation.callId, inputTokens: received.parsed.usage.input_tokens, outputTokens: received.parsed.usage.output_tokens,

@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { appendFileSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync } from "node:fs";
+import { appendFileSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
@@ -19,10 +19,11 @@ function fixture(overrides: Partial<ProviderBudgetPolicy["limits"]> = {}) {
   const now = Date.now();
   const policy: ProviderBudgetPolicy = {
     schemaVersion: 1, acceptanceId: randomUUID(), projectId: "synthetic-project", caseHash: "a".repeat(64), sourceHash: "b".repeat(64),
-    provider: "synthetic", model: "synthetic-model", observedVersion: "synthetic-version", endpoint: "https://synthetic.invalid/v1/responses",
+    provider: "synthetic", model: "synthetic-model", observedVersion: "synthetic-model", endpoint: "https://synthetic.invalid/v1/responses",
     approval: { evidenceRef: "synthetic-test-only", approvedAt: new Date(now - 1000).toISOString(), validUntil: new Date(now + 60_000).toISOString() },
     pricing: { source: "https://synthetic.invalid/pricing", checkedAt: new Date(now - 1000).toISOString(), validUntil: new Date(now + 60_000).toISOString(), inputMicroUsdPerMillion: 1_000_000, outputMicroUsdPerMillion: 2_000_000 },
-    limits: { requests: 4, inputTokens: 1000, outputTokens: 1000, microUsd: 3000, inputTokensPerRequest: 100, outputTokensPerRequest: 50, requestMs: 1000, modelActiveMs: 10_000, requestBytes: 10_000, responseBytes: 10_000, ledgerBytes: 50_000, ...overrides },
+    inputCeiling: { tokens: 100, source: "https://synthetic.invalid/context", checkedAt: "2026-01-01T00:00:00Z", validUntil: "2099-01-01T00:00:00Z" },
+    limits: { requests: 4, inputTokens: 1000, outputTokens: 1000, microUsd: 3000, inputTokensPerRequest: 100, outputTokensPerRequest: 50, requestMs: 1000, modelActiveMs: 10_000, stageModelActiveMs: { understanding: 10_000, clarify: 10_000, positioning: 10_000, story: 10_000, legacy_deck: 10_000 }, requestBytes: 10_000, responseBytes: 10_000, ledgerBytes: 50_000, ...overrides },
   };
   const handle = initializeProviderBudget(root, policy);
   const operation: ProviderBudgetOperation = { acceptanceId: policy.acceptanceId, sessionId: randomUUID(), projectId: policy.projectId, caseHash: policy.caseHash, sourceHash: policy.sourceHash, stage: "understanding", commandId: "synthetic-command" };
@@ -69,7 +70,7 @@ it("rejects expired pricing independently of the still-valid approval", async ()
 });
 
 it("stops before the next dispatch when its terminal-record allowance cannot fit", async () => {
-  const f = fixture({ requests: 100, ledgerBytes: 5000 }), transport = vi.fn<typeof fetch>(async () => response());
+  const f = fixture({ requests: 100, ledgerBytes: 6500 }), transport = vi.fn<typeof fetch>(async () => response());
   const call = budgetedProviderFetch({ ...f.handle, operation: f.operation, transport });
   let refused = false;
   for (let step = 0; step < 5; step++) {
@@ -210,4 +211,91 @@ it.each(factories)("routes $name through the shared reservation and performs no 
   await expect(factory.run(controlled)).rejects.toThrow();
   expect(transport).toHaveBeenCalledTimes(1);
   expect(inspectProviderBudget(handle.directory, handle.policyHash).used.requests).toBe(1);
+});
+
+it("requires a fresh documented model input ceiling covered by the conservative reservation", async () => {
+  const f = fixture();
+  expect(() => initializeProviderBudget(f.root, { ...f.policy, acceptanceId: randomUUID(), inputCeiling: undefined })).toThrow();
+  expect(() => initializeProviderBudget(f.root, { ...f.policy, acceptanceId: randomUUID(), inputCeiling: { ...f.policy.inputCeiling, tokens: 101 } })).toThrow("BUDGET_INPUT_CEILING");
+  const until = Date.now() + 2000;
+  const policy = { ...f.policy, acceptanceId: randomUUID(), inputCeiling: { ...f.policy.inputCeiling, validUntil: new Date(until).toISOString() } };
+  const handle = initializeProviderBudget(f.root, policy), transport = vi.fn<typeof fetch>(async () => response());
+  const controlled = budgetedProviderFetch({ ...handle, operation: { ...f.operation, acceptanceId: policy.acceptanceId }, transport, now: () => until });
+  await expect(controlled(policy.endpoint, request)).rejects.toThrow("BUDGET_INPUT_CEILING_EXPIRED"); expect(transport).not.toHaveBeenCalled();
+});
+it("checks the approved observed version independently of the request model alias", async () => {
+  const f = fixture(), policy = { ...f.policy, acceptanceId: randomUUID(), observedVersion: "synthetic-snapshot-1" };
+  const handle = initializeProviderBudget(f.root, policy), transport = vi.fn<typeof fetch>(async () => response());
+  await expect(budgetedProviderFetch({ ...handle, operation: { ...f.operation, acceptanceId: policy.acceptanceId }, transport })(policy.endpoint, request)).rejects.toThrow("BUDGET_MODEL_MISMATCH");
+  expect(inspectProviderBudget(handle.directory, handle.policyHash).state).toBe("held_unknown");
+});
+it("counts active time cumulatively per stage without charging human wait time", async () => {
+  const f = fixture({ stageModelActiveMs: { understanding: 1500, clarify: 10_000, positioning: 10_000, story: 10_000, legacy_deck: 10_000 } });
+  let now = Date.now();
+  const transport = vi.fn<typeof fetch>(async () => { now += 600; return response(); });
+  const fetcher = budgetedProviderFetch({ ...f.handle, operation: f.operation, transport, now: () => now });
+  await fetcher(f.policy.endpoint, request); now += 10_000;
+  await expect(fetcher(f.policy.endpoint, request)).rejects.toThrow("BUDGET_STAGE_TIME_LIMIT");
+  expect(transport).toHaveBeenCalledTimes(1); expect(inspectProviderBudget(f.handle.directory, f.handle.policyHash).used.modelActiveMs).toBe(600);
+});
+
+it("refuses a valid old journal prefix and a removed acceptance directory with retained high-water anchor", async () => {
+  const f = fixture(), ledger = join(f.handle.directory, "provider.jsonl"), initial = readFileSync(ledger, "utf8");
+  const transport = vi.fn<typeof fetch>(async () => response());
+  await budgetedProviderFetch({ ...f.handle, operation: f.operation, transport })(f.policy.endpoint, request);
+  writeFileSync(ledger, initial);
+  await expect(budgetedProviderFetch({ ...f.handle, operation: f.operation, transport })(f.policy.endpoint, request)).rejects.toThrow("BUDGET_ANCHOR_MISMATCH");
+  expect(transport).toHaveBeenCalledTimes(1);
+  rmSync(f.handle.directory, { recursive: true });
+  expect(() => initializeProviderBudget(f.root, f.policy)).toThrow();
+});
+
+const childModule = new URL("./provider-budget.ts", import.meta.url).href;
+function competingChild(f: ReturnType<typeof fixture>, crash = false) {
+  const script = `import { budgetedProviderFetch } from ${JSON.stringify(childModule)};
+    process.stdout.write('ready\\n');
+    process.stdin.once('data',async()=>{
+      try { await budgetedProviderFetch({ ...JSON.parse(process.argv[1]), transport:async()=>{
+        process.stdout.write('dispatch\\n');
+        ${crash ? 'await new Promise(()=>{});' : 'await new Promise(resolve=>setTimeout(resolve,100));'}
+        return new Response(JSON.stringify({model:'synthetic-model',usage:{input_tokens:12,output_tokens:7}}));
+      }})("https://synthetic.invalid/v1/responses",{method:'POST',body:JSON.stringify({model:'synthetic-model',max_output_tokens:20})});
+      process.stdout.write('settled\\n'); } catch(error) { process.stdout.write(error.code+'\\n'); }
+      process.exit(0);
+    });`;
+  const child = spawn(process.execPath, ["--experimental-transform-types", "--input-type=module", "-e", script, JSON.stringify({ ...f.handle, operation: f.operation })], { stdio: ["pipe", "pipe", "pipe"] });
+  let output = "", errors = ""; child.stdout.on("data", data => { output += String(data); }); child.stderr.on("data", data => { errors += String(data); });
+  const exit = new Promise<number | null>((resolve, reject) => { child.once("error", reject); child.once("exit", resolve); });
+  const waitFor = (marker: string) => new Promise<void>((resolve, reject) => {
+    const timer = setInterval(() => { if (output.includes(marker)) { clearInterval(timer); resolve(); } else if (child.exitCode !== null) { clearInterval(timer); reject(new Error(errors || output)); } }, 5);
+  });
+  return { child, exit, waitFor, output: () => output };
+}
+it("permits exactly one actual dispatch when two processes compete for one request", async () => {
+  const f = fixture({ requests: 1 }), children = [competingChild(f), competingChild(f)];
+  try {
+    await Promise.all(children.map(child => child.waitFor("ready"))); children.forEach(child => child.child.stdin.write("go\n"));
+    expect(await Promise.all(children.map(child => child.exit))).toEqual([0, 0]);
+    expect(children.filter(child => child.output().includes("dispatch"))).toHaveLength(1);
+    expect(children.filter(child => /BUDGET_BUSY|BUDGET_REQUEST_LIMIT/.test(child.output()))).toHaveLength(1);
+    expect(inspectProviderBudget(f.handle.directory, f.handle.policyHash).used.requests).toBe(1);
+  } finally { children.forEach(child => { if (child.child.exitCode === null) child.child.kill("SIGKILL"); }); }
+});
+it("retains a killed process reservation and refuses a fresh transport after restart", async () => {
+  const f = fixture(), child = competingChild(f, true);
+  try {
+    await child.waitFor("ready"); child.child.stdin.write("go\n"); await child.waitFor("dispatch"); child.child.kill("SIGKILL"); await child.exit;
+    const state = inspectProviderBudget(f.handle.directory, f.handle.policyHash); expect(state.state).toBe("pending"); expect(state.used.inputTokens).toBe(f.policy.limits.inputTokensPerRequest);
+    const transport = vi.fn<typeof fetch>(async () => response());
+    await expect(budgetedProviderFetch({ ...f.handle, operation: { ...f.operation, sessionId: randomUUID() }, transport })(f.policy.endpoint, request)).rejects.toThrow("BUDGET_BUSY"); expect(transport).not.toHaveBeenCalled();
+  } finally { if (child.child.exitCode === null) child.child.kill("SIGKILL"); }
+});
+it("counts and blocks the actual Understanding tool loop's second provider request", async () => {
+  const f = fixture({ requests: 1, outputTokensPerRequest: 20_000, outputTokens: 100_000, microUsd: 100_000, requestBytes: 200_000 });
+  const policy = { ...f.policy, acceptanceId: randomUUID(), endpoint: "https://api.deepseek.com/responses" }, handle = initializeProviderBudget(f.root, policy);
+  const transport = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ model: policy.model, status: "completed", usage: { input_tokens: 12, output_tokens: 7 }, output: [{ type: "function_call", call_id: "synthetic-call", name: "list_sources", arguments: "{}" }] })));
+  const controlled = budgetedProviderFetch({ ...handle, operation: { ...f.operation, acceptanceId: policy.acceptanceId }, transport });
+  const runner = createLiveUnderstandingRunner(repository, { apiKey: "test-synthetic-only", model: policy.model, baseURL: "https://api.deepseek.com", fetch: controlled });
+  await expect(runner.run({ projectId: source.projectId, chunks: [chunk] })).rejects.toThrow("BUDGET_REQUEST_LIMIT");
+  expect(transport).toHaveBeenCalledTimes(1); expect(inspectProviderBudget(handle.directory, handle.policyHash).used.requests).toBe(1);
 });
