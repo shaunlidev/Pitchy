@@ -39,5 +39,9 @@
     "small_tasks_agent": "e45b040c-ec23-4a2b-8071-3fcd5efedcff",
     "supplemental_enabled": false,
     "supplemental_agent": "46c585e4-42db-4e93-9d63-cc10fea780b9"
+  },
+  "capacity": {
+    "machine_daemon_id": "01a1713e-df4d-730d-b236-0e719b6e3d1d",
+    "port_base": 43100
   }
 }

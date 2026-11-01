@@ -13,7 +13,7 @@ import time
 ROOT = Path(__file__).resolve().parents[2]
 CONTROL_MODES = {'open', 'admission_paused', 'maintenance'}
 FINGERPRINT_FILES = ('serial.py', 'controller.py', 'acceptance.py', 'artifacts.py',
-                     'github_sync.py', 'status.py', 'runtime.json', 'policy.json', 'operator_merge.py')
+                     'github_sync.py', 'status.py', 'runtime.json', 'policy.json', 'operator_merge.py', 'capacity.py')
 PHASES = {'developer', 'reviewer', 'qa', 'supplemental', 'awaiting_role_exit', 'awaiting_merge', 'done', 'held'}
 RUNNING = {'queued', 'dispatched', 'running', 'waiting_local_directory', 'deferred'}
 TERMINAL = {'completed', 'failed', 'cancelled'}
@@ -34,7 +34,7 @@ def load_config(root):
     policy = object_file(root / 'tooling/pipeline/policy.json')
     runtime = object_file(root / 'tooling/pipeline/runtime.json')
     fixed = {'schema_version': 1, 'default_base': 'main', 'mode': 'serial_polling',
-             'task_lanes': 1, 'machine_cap': 5, 'merge_policy': 'human_approved_squash',
+             'machine_cap': 5, 'merge_policy': 'human_approved_squash',
              'engineering_done_requires': ['merged', 'post_merge_checks_passed'],
              'automatic_handoff': True, 'automatic_done': True, 'automatic_deployment': False,
              'activation': 'explicit_verified_local_receipt', 'required_ci_check': 'PR gate',
@@ -52,9 +52,14 @@ def load_config(root):
         if owner in policy:
             raise ValueError('Duplicate runtime policy: ' + key)
     # Unknown policy switches must not be accepted as effective controls.
-    if set(policy) != set(fixed) | {'repository', 'project_id'}:
+    if set(policy) != set(fixed) | {'repository', 'project_id', 'task_lanes'}:
         raise ValueError('Unknown policy field')
-    allowed = {'profile', 'workspace', 'developer', 'reviewer', 'qa', 'dispatcher', 'owner',
+    if type(policy.get('task_lanes')) is not int or policy['task_lanes'] not in (1, 2):
+        raise ValueError('At most two task lanes')
+    capacity = runtime.get('capacity')
+    if not isinstance(capacity, dict) or set(capacity) != {'machine_daemon_id', 'port_base'} or identity(capacity.get('machine_daemon_id')) is None or type(capacity.get('port_base')) is not int or not 1024 <= capacity['port_base'] <= 65000:
+        raise ValueError('Invalid machine capacity configuration')
+    allowed = {'capacity', 'profile', 'workspace', 'developer', 'reviewer', 'qa', 'dispatcher', 'owner',
                'autopilot', 'optional_roles', 'review_status', 'qa_status', 'order', 'legacy_dependencies', 'decision_holds'}
     if set(runtime) - allowed - set(policy) - set(aliases):
         raise ValueError('Unknown runtime field')
@@ -98,7 +103,13 @@ def activation_state(root, state):
         value = object_file(Path(state) / 'activation.json')
         valid = (value.get('source_fingerprint') == fingerprint(root)
                  and value.get('verified') is True and type(value.get('task_lanes')) is int
-                 and value['task_lanes'] == 1 and sha(value.get('integrated_commit')) is not None)
+                 and value['task_lanes'] == object_file(Path(root) / 'tooling/pipeline/policy.json').get('task_lanes', 1)
+                 and value['task_lanes'] in (1, 2) and sha(value.get('integrated_commit')) is not None)
+        if valid and value['task_lanes'] == 2:
+            from capacity import authorized_lanes
+            from controller import Hold
+            try: authorized_lanes(root, state, 2, fingerprint(root))
+            except Hold: valid = False
         return {'state': 'valid' if valid else 'stale', 'integrated_commit': sha(value.get('integrated_commit'))}
     except FileNotFoundError:
         return {'state': 'missing', 'integrated_commit': None}
@@ -304,6 +315,15 @@ def snapshot(live=False, legacy_root=None, root=ROOT, state=None, reader=read_js
             return {**result, 'errors': ['canonical_repository_unavailable']}
     result['activation'] = activation_state(root, state)
     result['control'] = control_state(root, state, policy)
+    from capacity import read_status
+    from controller import Hold
+    try:
+        result['capacity'] = read_status(state)
+        result['capacity']['configured_lanes'] = policy['task_lanes']
+        result['capacity']['machine_cap'] = policy['machine_cap']
+    except (Hold, OSError, ValueError, TypeError, sqlite3.Error):
+        result['capacity'] = {'state': 'unknown'}
+        result['errors'].append('capacity_unavailable_or_invalid')
     try:
         lanes, uncertain = read_ledger(state)
     except (OSError, ValueError, TypeError, sqlite3.Error):
@@ -324,6 +344,7 @@ def snapshot(live=False, legacy_root=None, root=ROOT, state=None, reader=read_js
         except (OSError, ValueError, TypeError):
             result['errors'].append('legacy_dispatch_unknown')
     issues, runs, prs = {}, {}, {}
+    current_main = None
     scheduler = 'unknown'
     if live:
         from github_sync import GitHub, all_issues, mapping
@@ -339,6 +360,12 @@ def snapshot(live=False, legacy_root=None, root=ROOT, state=None, reader=read_js
         except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
             result['errors'].append('tracker_or_scheduler_unavailable')
         github = GitHub(policy['repository'], execute=reader)
+        if any(lane.get('capacity_lease') for lane in lanes.values()):
+            try:
+                current_main = sha(github.api('commits/main').get('sha'))
+                if not current_main: raise ValueError('Unknown main')
+            except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
+                result['errors'].append('compatibility_main_unknown')
         selected = {key} if key else set(lanes) | {k for k, i in issues.items() if i.get('status') in {'todo', 'in_progress', 'started_2', 'started_3', 'in_review', 'blocked'}}
         for item in sorted(selected):
             try:
@@ -371,6 +398,11 @@ def snapshot(live=False, legacy_root=None, root=ROOT, state=None, reader=read_js
         except (AttributeError, ValueError, TypeError, KeyError):
             row = {'issue': item, 'engineering_done': False, 'ready_to_merge': False, 'blocked_reasons': ['invalid_evidence'], 'next_action': 'inspect_hold', 'human_decision_required': None}
             result['errors'].append(item + ':invalid_evidence')
+        lane = lanes.get(item, {})
+        if lane.get('capacity_lease') and lane.get('phase') != 'done' and (not fresh or lane.get('compatibility_base') != current_main):
+            row['ready_to_merge'] = False
+            row.setdefault('blocked_reasons', []).append('current_main_compatibility_required')
+            row['next_action'] = 'rework_on_current_main_and_repeat_ci_review_qa'
         result['tasks'].append(row)
     if result['errors']:
         result['live_checked'] = False
