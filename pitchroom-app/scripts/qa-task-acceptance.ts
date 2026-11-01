@@ -113,6 +113,10 @@ const allocationSchema = z.object({ issue: z.literal("PIT-56"), head: z.string()
   approvalFile: z.string().refine(isAbsolute), capacityReceiptFile: z.string().refine(isAbsolute), capacityReceiptSha256: z.string().regex(/^[a-f0-9]{64}$/),
 }).strict();
 const delay = (ms: number) => new Promise<void>(done => setTimeout(done, ms));
+function groupExists(pid: number) {
+  try { process.kill(-pid, 0); return true; }
+  catch (error) { if (z.object({ code: z.literal("ESRCH") }).safeParse(error).success) return false; throw error; }
+}
 async function until<T>(action: () => Promise<T>, ready: (value: T) => boolean, timeoutMs: number): Promise<T> {
   const end = Date.now() + timeoutMs;
   while (true) { const value = await action(); if (ready(value)) return value; assert(Date.now() < end, "Bounded readiness deadline exceeded"); await delay(100); }
@@ -357,7 +361,14 @@ async function qualifyPersistentWorkflow(input: PersistentInputs) {
     };
     const browserBefore = await inspectBrowserDeck();
     const priorServerPid = web.identity.pid;
-    await stop(web.server); web = await startWeb("web-restarted");
+    const crashedGroupPid = web.server.instance.pid; assert(crashedGroupPid, "Crash target must have an owned process group");
+    checked("crash-target-group-is-running", true, groupExists(crashedGroupPid));
+    web.server.kill();
+    const crashExit = await web.server.exited;
+    await until(async () => !groupExists(crashedGroupPid), Boolean, 5000);
+    checked("actual-owned-service-crash", { groupPid: crashedGroupPid, exitCode: null, signal: "SIGKILL", groupPresent: false },
+      { groupPid: web.server.instance.pid, exitCode: crashExit, signal: web.server.instance.signalCode, groupPresent: groupExists(crashedGroupPid) });
+    web = await startWeb("web-restarted");
     checked("service-restart-has-a-new-process", true, web.identity.pid !== priorServerPid);
     checked("actual-service-restart-readback", hashTaskValue(beforeRestart), hashTaskValue(await readWorkspace()));
     checked("isolated-browser-restart-retains-deck", browserBefore, await inspectBrowserDeck());
@@ -514,10 +525,6 @@ async function main() {
       innerPolicyScope: "Subordinate 24 MB workflow allowance inside the 25 MB run; not global evidence accounting." }, scope: "tool_validation; no R1, model quality, independent UI or real participant acceptance" });
   const children = new Set<ChildProcess>(), token = randomUUID().replaceAll("-", ""), container = `pit56-${token}`, databaseName = `pit52_${token}`;
   const childCompletions = new Set<Promise<number | null>>();
-  const groupExists = (pid: number) => {
-    try { process.kill(-pid, 0); return true; }
-    catch (error) { if (z.object({ code: z.literal("ESRCH") }).safeParse(error).success) return false; throw error; }
-  };
   let containerStarted = false;
   const docker = (args: string[]) => execFileSync("docker", args, { encoding: "utf8", timeout: 20_000, maxBuffer: 8192 }).trim();
   function child(name: string, args: string[], cwd: string, environment: NodeJS.ProcessEnv, timeoutMs = 180_000) {
