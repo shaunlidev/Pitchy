@@ -10,7 +10,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -40,6 +40,113 @@ class PipelineBehavior(unittest.TestCase):
                 'meta': {'untrusted': 'synthetic-private-meta'},
             }]}],
         }
+
+    def test_offline_script_reports_and_safe_fallback(self):
+        for mode in ('success', 'failure', 'missing', 'malformed', 'oversized', 'symlink', 'unknown', 'timeout', 'oserror', 'setup'):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory).resolve()
+                workspace, source = self.diagnostic_workspace(root, 'evals')
+                (workspace / 'package.json').write_text(json.dumps({'name': '@pitchroom/evals', 'scripts': {'eval:offline': 'vitest run --no-file-parallelism --reporter=verbose'}}))
+                (root / 'pitchroom-app/package.json').write_text(json.dumps({'scripts': {'eval:offline': 'pnpm --filter @pitchroom/evals eval:offline'}}))
+                tracked = {source.relative_to(root).as_posix(): ci.static_test_metadata(source.read_text(), source.suffix)}
+                expected = 124 if mode in ('timeout', 'oserror') else 0 if mode in ('success', 'missing') else 7
+                calls = []
+                def child(argv, **options):
+                    calls.append(argv)
+                    self.assertEqual(options['timeout'], 900)
+                    self.assertNotIn('GITHUB_TOKEN', options['env'])
+                    options['stdout'].write(b'synthetic-private-stdout')
+                    if mode == 'timeout':
+                        raise subprocess.TimeoutExpired(argv, 900)
+                    if mode == 'oserror':
+                        raise OSError('synthetic-private-error')
+                    if mode == 'setup':
+                        self.assertEqual(argv, ci.STAGES['offline-eval'])
+                        return subprocess.CompletedProcess(argv, expected)
+                    self.assertEqual(argv[:6], ['pnpm', '--filter', '@pitchroom/evals', 'run', 'eval:offline', '--reporter=json'])
+                    report = workspace / argv[-1].removeprefix('--outputFile.json=')
+                    report.parent.mkdir(parents=True)
+                    packet = self.diagnostic_report(source)
+                    packet['testResults'][0]['assertionResults'][0]['fullName'] = 'private-suite'
+                    if mode == 'success':
+                        packet.update(numPassedTests=1, numFailedTests=0)
+                        packet['testResults'] = []
+                    if mode == 'unknown':
+                        packet['testResults'][0]['name'] = str(root / 'private-source')
+                    if mode == 'symlink':
+                        report.symlink_to(root / 'missing-target')
+                    elif mode != 'missing':
+                        report.write_text('bad-json' if mode == 'malformed' else 'x' * (ci.REPORT_LIMIT + 1) if mode == 'oversized' else json.dumps(packet))
+                    return subprocess.CompletedProcess(argv, expected)
+                with patch.object(ci, 'ROOT', root), patch.object(ci, 'APP', root / 'pitchroom-app'), patch.dict(os.environ, {'RUNNER_TEMP': directory, 'GITHUB_TOKEN': 'synthetic-private-token'}), patch.object(ci, 'tracked_tests', side_effect=ValueError('private-setup') if mode == 'setup' else None, return_value=tracked), patch.object(ci, 'diagnostic_context', return_value={'head': 'a' * 40}), patch.object(ci.subprocess, 'run', side_effect=child), patch('builtins.print') as output:
+                    self.assertEqual(ci.run_stage('offline-eval'), expected)
+                self.assertEqual(len(calls), 1)
+                lines = [c.args[0] for c in output.call_args_list]
+                self.assertIn('"event": "start"', lines[0])
+                self.assertIn('"event": "end"', lines[-1])
+                for private in ('synthetic-private', 'private-suite', 'private-source', 'private-setup'):
+                    self.assertNotIn(private, '\n'.join(lines))
+                summary = json.loads(next(line.removeprefix('offline-diagnostics: ') for line in lines if line.startswith('offline-diagnostics: ')))
+                if mode == 'success':
+                    self.assertEqual(summary['workspaces'][0]['counts']['numPassedTests'], 1)
+                elif mode == 'failure':
+                    self.assertEqual(summary['failures'][0]['test'], 'keeps the declared boundary')
+                elif mode == 'missing':
+                    self.assertEqual(summary['workspaces'][0]['status'], 'diagnostics_unavailable')
+                else:
+                    self.assertIn(summary['status'], ('diagnostics_unavailable', 'unattributed_nonzero_exit'))
+                for call in output.call_args_list:
+                    if call.args[0].startswith(('offline-liveness:', 'offline-diagnostics:')):
+                        self.assertTrue(call.kwargs['flush'])
+
+    def test_offline_heartbeat_is_bounded_and_interruptible(self):
+        now = [0]
+        stop = Mock()
+        stop.is_set.return_value = False
+        def wait(seconds):
+            self.assertEqual(seconds, 30)
+            now[0] += seconds
+            return False
+        stop.wait.side_effect = wait
+        with patch.object(ci.time, 'monotonic', side_effect=lambda: now[0]), patch('builtins.print') as output:
+            ci.offline_heartbeat(stop, 0)
+        self.assertEqual(stop.wait.call_count, 30)
+        self.assertEqual(output.call_count, 29)
+        self.assertTrue(all(c.kwargs['flush'] for c in output.call_args_list))
+        stop.wait.side_effect = None
+        stop.wait.return_value = True
+        with patch.object(ci.time, 'monotonic', return_value=0), patch('builtins.print') as output:
+            ci.offline_heartbeat(stop, 0)
+        output.assert_not_called()
+
+    def test_offline_finally_stops_thread_on_preparation_error(self):
+        stop, thread = Mock(), Mock()
+        thread.ident = 1
+        with patch.object(ci.threading, 'Event', return_value=stop), patch.object(ci.threading, 'Thread', return_value=thread) as constructor, patch.object(ci, 'execute_stage', side_effect=RuntimeError('synthetic')), patch('builtins.print') as output:
+            with self.assertRaisesRegex(RuntimeError, 'synthetic'):
+                ci.run_stage('offline-eval')
+        stop.set.assert_called_once()
+        thread.join.assert_called_once_with(timeout=1)
+        self.assertTrue(constructor.call_args.kwargs['daemon'])
+        self.assertIn('"event": "end"', output.call_args.args[0])
+
+    def test_offline_thread_start_failure_keeps_original_execution(self):
+        thread = Mock(ident=None)
+        thread.start.side_effect = RuntimeError('synthetic-resource-limit')
+        with patch.object(ci.threading, 'Thread', return_value=thread), patch.object(ci, 'execute_stage', return_value=7) as execute, patch('builtins.print'):
+            self.assertEqual(ci.run_stage('offline-eval'), 7)
+        execute.assert_called_once_with('offline-eval')
+        thread.join.assert_not_called()
+
+    def test_offline_failed_summary_sink_preserves_command_exit(self):
+        for code in (0, 7, 124):
+            with self.subTest(code=code), tempfile.TemporaryDirectory() as directory:
+                def output(value, **options):
+                    if value.startswith('offline-diagnostics:'):
+                        raise OSError('synthetic-failed-sink')
+                with patch.dict(os.environ, {'RUNNER_TEMP': directory}), patch.object(ci, 'diagnostic_context', return_value={'head': None}), patch.object(ci, 'offline_reports', side_effect=ValueError('synthetic-setup')), patch.object(ci.subprocess, 'run', return_value=subprocess.CompletedProcess([], code)) as child, patch('builtins.print', side_effect=output):
+                    self.assertEqual(ci.run_stage('offline-eval'), code)
+                child.assert_called_once()
 
     def test_unit_reports_are_fresh_and_separate_per_workspace(self):
         with tempfile.TemporaryDirectory() as directory:

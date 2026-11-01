@@ -77,7 +77,24 @@ const decisionFactSchema = z.object({ kind: z.literal("workflow_decision"), deci
 const decisionResolvedSchema = z.object({ kind: z.literal("workflow_decision_resolved"), decisionId: text, nextStep: stepSchema }).strict();
 const decisionRejectedSchema = z.object({ kind: z.literal("workflow_decision_rejected"), decision: decisionSchema, reason: text }).strict();
 const framingAvailableSchema = z.object({ kind: z.literal("workflow_framing_available"), checkpointHash: sha256Schema }).strict();
-const workflowFactSchema = z.discriminatedUnion("kind", [startedSchema, gateSchema, operationSchema, snapshotFactSchema, operationDoneSchema, heldSchema, takeoverSchema, decisionFactSchema, decisionResolvedSchema, decisionRejectedSchema, framingAvailableSchema]);
+const collectorEventSchema = z.object({ callId: text, kind: z.enum(["call_started", "call_finished"]) }).strict();
+const collectorStartedSchema = z.object({ kind: z.literal("workflow_collector_started"), operationId: text, collectorId: z.string().uuid() }).strict();
+const collectorEndedSchema = z.object({ kind: z.literal("workflow_collector_ended"), operationId: text, collectorId: z.string().uuid(), checkpointHash: sha256Schema, events: z.array(collectorEventSchema) }).strict();
+type SyntheticCollector = { id: string; events: z.infer<typeof collectorEventSchema>[] };
+let syntheticCollector: SyntheticCollector | null = null;
+/** Test-only dispatcher observer; cannot certify task_evidence sessions. No caller-supplied event list. */
+export function installSyntheticProviderCollector() {
+  if (syntheticCollector) throw new Error("SYNTHETIC_COLLECTOR_ALREADY_INSTALLED");
+  const collector: SyntheticCollector = { id: randomUUID(), events: [] }; syntheticCollector = collector;
+  return {
+    async observeCall<T>(callId: string, dispatch: () => Promise<T>): Promise<T> {
+      collector.events.push({ callId, kind: "call_started" });
+      try { return await dispatch(); } finally { collector.events.push({ callId, kind: "call_finished" }); }
+    },
+    dispose() { if (syntheticCollector === collector) syntheticCollector = null; },
+  };
+}
+const workflowFactSchema = z.discriminatedUnion("kind", [startedSchema, gateSchema, operationSchema, snapshotFactSchema, operationDoneSchema, heldSchema, takeoverSchema, decisionFactSchema, decisionResolvedSchema, decisionRejectedSchema, framingAvailableSchema, collectorStartedSchema, collectorEndedSchema]);
 type WorkflowFact = z.infer<typeof workflowFactSchema>;
 type Workspace = z.infer<typeof workspaceStateSchema>;
 type Operation = z.infer<typeof operationSchema>;
@@ -476,9 +493,24 @@ function replay(context: Context) {
   const decisionSteps = new Map<string, Step>();
   const decisions = new Map<string, Decision>(), resolvedDecisions = new Set<string>(), rejectedDecisions = new Map<string, Decision>();
   const completed = new Map<string, { operation: Operation; checkpointHash: z.infer<typeof sha256Schema> }>();
+  const collectorStarts = new Map<string, z.infer<typeof collectorStartedSchema>>(), collectorEnds = new Map<string, z.infer<typeof collectorEndedSchema>>();
   for (const fact of context.facts) {
     switch (fact.kind) {
       case "workflow_started": break;
+      case "workflow_collector_started": {
+        const current = pendingOperation(pending, fact.operationId);
+        const at = context.state.observations.findIndex(item => item.id === `workflow:collector-start:${fact.operationId}`);
+        const preparedAt = context.state.observations.findIndex(item => item.id === `workspace:${current.command.commandId}:prepared`);
+        if (context.state.manifest.purpose !== "tool_validation" || current.command.action !== "create_story_deck" || collectorStarts.has(fact.operationId) || (preparedAt >= 0 && at >= preparedAt)) failEvidence("WORKFLOW_COLLECTOR_START_ORDER");
+        collectorStarts.set(fact.operationId, fact); break;
+      }
+      case "workflow_collector_ended": {
+        const current = pendingOperation(pending, fact.operationId), start = collectorStarts.get(fact.operationId);
+        const at = context.state.observations.findIndex(item => item.id === `workflow:collector-end:${fact.operationId}`);
+        const outcomeAt = context.state.observations.findIndex(item => item.id === `workspace:${current.command.commandId}:outcome`);
+        if (!start || start.collectorId !== fact.collectorId || collectorEnds.has(fact.operationId) || outcomeAt < 0 || at <= outcomeAt || fact.checkpointHash !== lastCheckpoint) failEvidence("WORKFLOW_COLLECTOR_END_ORDER");
+        collectorEnds.set(fact.operationId, fact); break;
+      }
       case "workflow_snapshot": {
         const observed = snapshot(context, fact.checkpointHash);
         if (!lastCheckpoint && !isEmptyInitialWorkspace(observed.workspace)) failEvidence("WORKFLOW_INITIAL_SNAPSHOT_NOT_EMPTY");
@@ -560,7 +592,7 @@ function replay(context: Context) {
       default: { const exhaustive: never = fact; return exhaustive; }
     }
   }
-  return { step, lastCheckpoint, pending, gate, held, completed, pendingDecision, decisions, resolvedDecisions, rejectedDecisions };
+  return { step, lastCheckpoint, pending, gate, held, completed, pendingDecision, decisions, resolvedDecisions, rejectedDecisions, collectorStarts, collectorEnds };
 }
 function appendFact(context: Context, id: string, fact: WorkflowFact, step: Step) {
   const prior = context.state.observations.find(item => item.id === id);
@@ -622,6 +654,9 @@ async function executeOperation(context: Context, operation: Operation, newlyCla
   const transport = client(context);
   const prepared = context.state.observations.some(item => item.id === `workspace:${operation.command.commandId}:prepared`);
   if (!prepared) fresh(context, (await transport.read()).state);
+  const collector = newlyClaimed && !prepared && operation.command.action === "create_story_deck" && context.state.manifest.purpose === "tool_validation" ? syntheticCollector : null;
+  const eventOffset = collector?.events.length ?? 0;
+  if (collector) appendFact(context, `workflow:collector-start:${operation.operationId}`, { kind: "workflow_collector_started", operationId: operation.operationId, collectorId: collector.id }, operation.fromStep);
   const outcome = await transport.execute({ attemptId: operation.operationId, stage: operation.stage, expectedRevision: snapshot(context, operation.checkpointHash).workspace.project.revision, command: operation.command });
   saveAnchor(context.policy, transport.reference); Object.assign(context, loadRun(context.run));
   if (outcome.kind === "conflict" || outcome.kind === "outcome_unknown") return held(context, outcome.kind === "conflict" ? "WORKFLOW_PRODUCT_CONFLICT" : "WORKFLOW_OUTCOME_UNKNOWN", operation);
@@ -630,6 +665,7 @@ async function executeOperation(context: Context, operation: Operation, newlyCla
   catch (error) { return held(context, errorCode(error) ?? "WORKFLOW_PRODUCT_EFFECT_MISMATCH", operation); }
   const receipt = inspectWorkspaceReceipt({ state: context.state, binding: context.locator.launchReceipt, commandId: operation.command.commandId ?? "" });
   if (receipt.kind !== "outcome") failEvidence("WORKFLOW_COMPLETION_RECEIPT_MISSING");
+  if (collector) appendFact(context, `workflow:collector-end:${operation.operationId}`, { kind: "workflow_collector_ended", operationId: operation.operationId, collectorId: collector.id, checkpointHash: after, events: collector.events.slice(eventOffset) }, operation.nextStep);
   appendFact(context, `workflow:done:${operation.operationId}`, { kind: "workflow_operation_done", operationId: operation.operationId, checkpointHash: after, receiptHash: sha256Schema.parse(receipt.outcomeHash) }, operation.nextStep);
   return { kind: "operation_completed" };
 }
@@ -783,6 +819,9 @@ export function prepare(raw: unknown): TaskWorkflowRun {
   const source = captureTaskSourceIdentity(sourceRepository, [
     "pitchroom-app/packages/evals/src/task-acceptance/workflow.ts",
     "pitchroom-app/packages/evals/src/task-acceptance/cli.ts",
+    "pitchroom-app/packages/evals/src/task-acceptance/review.ts",
+    "pitchroom-app/packages/evals/src/task-acceptance/checks.ts",
+    "pitchroom-app/packages/evals/src/task-acceptance/verdict.ts",
     "pitchroom-app/packages/evals/package.json",
     "pitchroom-app/packages/domain/src/workspace.ts",
     "pitchroom-app/packages/domain/src/story.ts",
@@ -837,3 +876,40 @@ export function audit(raw: unknown) {
   };
 }
 export function report(raw: unknown) { return audit(raw); }
+
+/** Review consumers receive only committed snapshots admitted by workflow replay. */
+export function readWorkflowReviewContext(raw: unknown) {
+  const context = loadRun(raw); assertCodeUnchanged(context);
+  const flow = replay(context);
+  const snapshots = context.facts.flatMap(fact => {
+    if (fact.kind !== "workflow_snapshot") return [];
+    const saved = [...context.state.checkpoints.values()].find(item => item.hash === fact.checkpointHash);
+    if (!saved) failEvidence("REVIEW_CHECKPOINT_MISSING");
+    return [{ checkpointHash: fact.checkpointHash, workspace: snapshot(context, fact.checkpointHash).workspace, input: saved.value.input }];
+  });
+  return {
+    reference: context.state.reference, manifest: context.state.manifest, bundle: context.state.bundle,
+    binding: parseWorkspaceBinding(context.locator.launchReceipt), snapshots,
+    operations: [...flow.completed.values()], decisions: [...flow.decisions.values()],
+    resolvedDecisionIds: [...flow.resolvedDecisions], held: flow.held,
+    collectorStarts: [...flow.collectorStarts.values()], collectorEnds: [...flow.collectorEnds.values()],
+    records: context.state.observations.filter(item => item.kind === "review_record"),
+  };
+}
+export type WorkflowReviewContext = ReturnType<typeof readWorkflowReviewContext>;
+
+/** The workflow remains the only owner of retained anchors, including review-only writes. */
+export function appendWorkflowReview(raw: unknown, build: (context: WorkflowReviewContext) => {
+  id: string; at: string; checkpointHash: z.infer<typeof sha256Schema> | null; data: z.infer<ReturnType<typeof z.json>>;
+}) {
+  const before = readWorkflowReviewContext(raw), record = build(before);
+  const context = loadRun(raw); assertCodeUnchanged(context); replay(context);
+  if (context.state.reference.headHash !== before.reference.headHash) failEvidence("SESSION_HEAD_CHANGED");
+  const target = before.snapshots.find(item => item.checkpointHash === record.checkpointHash);
+  if (record.checkpointHash && !target) failEvidence("REVIEW_CHECKPOINT_NOT_IN_WORKFLOW");
+  const reference = appendTaskObservation(context.policy, context.state.reference, {
+    ...record, stage: target?.input.stage ?? "materials", attemptId: null, commandId: null, kind: "review_record",
+  });
+  saveAnchor(context.policy, reference);
+  return { recordHash: hashTaskValue(record.data), reference };
+}
