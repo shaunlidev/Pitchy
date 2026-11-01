@@ -19,7 +19,7 @@ RUNTIME_PARTS = {'.pitchroom', '.gstack', '.multica', '.multica-round', '.pipeli
 # PIT-58: only the five reviewed product-contract sources from PIT-50 1dba35e.
 # New content requires explicit review and a new receipt; no docs/config wildcard.
 REVIEWED_EVAL_SOURCES = {
-    'pitchroom-app/docs/evals/task-acceptance-protocol.md': '5867f4b818c330fa4fbc97729a04fe4a0b2c56f8174a5e8b31789d21a139d774',
+    'pitchroom-app/docs/evals/task-acceptance-protocol.md': '4d1056af9ef3fa3003f049155717acb5a6fbd94a5a1f8b34cfb3e0aee422a737',
     'pitchroom-app/packages/evals/config/task-acceptance/pitchroom-r1/case.json': '15a6342a74087a57014392b2e368d2614bd774a27705b7716ceec05e6645a5ca',
     'pitchroom-app/packages/evals/config/task-acceptance/pitchroom-r1/materials.json': '3af4723a9aaf0c82ff57aa8e20cebfc1d682d0a87718c0b3d3cceb16b5206f21',
     'pitchroom-app/packages/evals/config/task-acceptance/pitchroom-r1/oracle.json': 'a0753a978dee2bd8cb4406f2351c262ab7b8360ce9495197f428ec2b22654deb',
