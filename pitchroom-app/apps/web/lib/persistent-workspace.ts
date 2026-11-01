@@ -4,7 +4,7 @@ import { BriefRepository } from "@pitchroom/persistence";
 import { workflowEventLabel } from "./workspace-ux-state";
 import { proposeStory } from "./story-service";
 import { recordClaimCorrection } from "@pitchroom/domain";
-import { DeterministicDeckRunner, DeterministicPositioningRunner, DeterministicUnderstandingRunner, createLiveDeckRunner, createLivePositioningRunner, createLiveUnderstandingRunner, executePersistedUnderstandingRun, understandingLivePromptVersion } from "@pitchroom/agent";
+import { DeterministicDeckRunner, DeterministicPositioningRunner, DeterministicUnderstandingRunner, evaluationProviderFetch, createLiveDeckRunner, createLivePositioningRunner, createLiveUnderstandingRunner, executePersistedUnderstandingRun, understandingLivePromptVersion } from "@pitchroom/agent";
 import { StoryRepository, ClarificationRepository, bindDatabase, createDatabase, PitchroomRepository } from "@pitchroom/persistence";
 import { PitchroomError, type UnderstandingProposalV1 } from "@pitchroom/domain";
 import { agentReviewForChunks, type FixtureState } from "./fixture-store";
@@ -144,7 +144,7 @@ export async function removePersistentMaterial(sourceId: string) {
 export async function runPersistentAgent(idempotencyKey: string, mode: "postgres-fake" | "live" = "postgres-fake", signal?: AbortSignal) {
   const currentProject = await project();
   if (mode === "live" && process.env.PITCHROOM_LIVE_TRANSFER_ACK !== "authorized") throw new PitchroomError("INVALID_INPUT", "PITCHROOM_LIVE_TRANSFER_ACK=authorized is required before external model transfer.");
-  const runner = mode === "live" ? createLiveUnderstandingRunner(repository(), { apiKey: process.env.OPENAI_API_KEY, model: process.env.OPENAI_MODEL, baseURL: process.env.OPENAI_BASE_URL }) : new DeterministicUnderstandingRunner();
+  const runner = mode === "live" ? createLiveUnderstandingRunner(repository(), { apiKey: process.env.OPENAI_API_KEY, model: process.env.OPENAI_MODEL, baseURL: process.env.OPENAI_BASE_URL, fetch: evaluationProviderFetch({ environment: process.env, projectId: currentProject.id, stage: "understanding", commandId: idempotencyKey, transport: fetch }) }) : new DeterministicUnderstandingRunner();
   await executePersistedUnderstandingRun({ projectId: currentProject.id, idempotencyKey, promptVersion: mode === "live" ? understandingLivePromptVersion : "deterministic-v1", model: mode === "live" ? process.env.OPENAI_MODEL! : "deterministic-local", runner, store: repository(), signal });
   return readPersistentState(mode);
 }
@@ -194,7 +194,7 @@ export async function generatePersistentPositioning(expectedRevision: number, id
   const sources = await repository().listSources(currentProject.id);
   const chunks = sources.flatMap((source) => source.chunks);
   if (mode === "live" && process.env.PITCHROOM_LIVE_TRANSFER_ACK !== "authorized") throw new PitchroomError("INVALID_INPUT", "PITCHROOM_LIVE_TRANSFER_ACK=authorized is required before external model transfer.");
-  const runner = mode === "live" ? createLivePositioningRunner({ apiKey: process.env.OPENAI_API_KEY, model: process.env.OPENAI_MODEL, baseURL: process.env.OPENAI_BASE_URL }) : new DeterministicPositioningRunner();
+  const runner = mode === "live" ? createLivePositioningRunner({ apiKey: process.env.OPENAI_API_KEY, model: process.env.OPENAI_MODEL, baseURL: process.env.OPENAI_BASE_URL, fetch: evaluationProviderFetch({ environment: process.env, projectId: currentProject.id, stage: "positioning", commandId: idempotencyKey, transport: fetch }) }) : new DeterministicPositioningRunner();
   const workflow = await repository().startWorkflowRun({ projectId: currentProject.id, kind: "positioning", targetRevision: expectedRevision, model: mode === "live" ? process.env.OPENAI_MODEL! : "deterministic-local", idempotencyKey });
   const run = workflow.run;
   if (!workflow.created) {
@@ -249,7 +249,7 @@ export async function generatePersistentDeck(expectedRevision: number, idempoten
   if (!understanding) throw new PitchroomError("NOT_FOUND", "The accepted understanding was not found.");
   const sources = await repository().listSources(currentProject.id); const chunks = sources.flatMap((source) => source.chunks);
   if (mode === "live" && process.env.PITCHROOM_LIVE_TRANSFER_ACK !== "authorized") throw new PitchroomError("INVALID_INPUT", "PITCHROOM_LIVE_TRANSFER_ACK=authorized is required before external model transfer.");
-  const runner = mode === "live" ? createLiveDeckRunner({ apiKey: process.env.OPENAI_API_KEY, model: process.env.OPENAI_MODEL, baseURL: process.env.OPENAI_BASE_URL }) : new DeterministicDeckRunner();
+  const runner = mode === "live" ? createLiveDeckRunner({ apiKey: process.env.OPENAI_API_KEY, model: process.env.OPENAI_MODEL, baseURL: process.env.OPENAI_BASE_URL, fetch: evaluationProviderFetch({ environment: process.env, projectId: currentProject.id, stage: "legacy_deck", commandId: idempotencyKey, transport: fetch }) }) : new DeterministicDeckRunner();
   const workflow = await repository().startWorkflowRun({ projectId: currentProject.id, kind: "deck", targetRevision: expectedRevision, model: mode === "live" ? process.env.OPENAI_MODEL! : "deterministic-local", idempotencyKey });
   const run = workflow.run;
   if (!workflow.created) {

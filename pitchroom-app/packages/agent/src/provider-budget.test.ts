@@ -8,6 +8,7 @@ import { budgetedProviderFetch, initializeProviderBudget, inspectProviderBudget,
 import { type ClarificationTask, type SourceRecord, type StorySnapshot, type ToolRepository, type UnderstandingProposalV1 } from "@pitchroom/domain";
 import { createLiveUnderstandingRunner } from "./live-runner";
 import { buildDeterministicPositioning, createLivePositioningRunner } from "./positioning-runner";
+import { createLiveDeckRunner } from "./deck-runner";
 import { createLiveStoryRunner } from "./story-runner";
 import { createModelClarificationRunner } from "./clarification-runner";
 
@@ -193,6 +194,7 @@ const factories: { name: string; stage: ProviderBudgetOperation["stage"]; baseUR
   { name: "SDK Understanding", stage: "understanding", baseURL: "https://synthetic.invalid/v1", run: transport => createLiveUnderstandingRunner(repository, { apiKey: "test-synthetic-only", model: "synthetic-model", baseURL: "https://synthetic.invalid/v1", fetch: transport }).run({ projectId: source.projectId, chunks: [chunk] }) },
   { name: "DeepSeek Understanding", stage: "understanding", baseURL: "https://api.deepseek.com", run: transport => createLiveUnderstandingRunner(repository, { apiKey: "test-synthetic-only", model: "synthetic-model", baseURL: "https://api.deepseek.com", fetch: transport }).run({ projectId: source.projectId, chunks: [chunk] }) },
   { name: "Positioning", stage: "positioning", baseURL: "https://synthetic.invalid/v1", run: transport => createLivePositioningRunner({ apiKey: "test-synthetic-only", model: "synthetic-model", baseURL: "https://synthetic.invalid/v1", fetch: transport }).run(positioningInput) },
+  { name: "Legacy Deck", stage: "legacy_deck", baseURL: "https://synthetic.invalid/v1", run: transport => createLiveDeckRunner({ apiKey: "test-synthetic-only", model: "synthetic-model", baseURL: "https://synthetic.invalid/v1", fetch: transport }).run({ ...positioningInput, positioningVersionId: "p", positioningDecisionId: "decision", positioning, appliedDirectionId: "evidence-first" }) },
   { name: "Story", stage: "story", baseURL: "https://synthetic.invalid/v1", run: transport => createLiveStoryRunner({ apiKey: "test-synthetic-only", model: "synthetic-model", baseURL: "https://synthetic.invalid/v1", fetch: transport }).run(storySnapshot) },
   { name: "Clarify", stage: "clarify", baseURL: "https://synthetic.invalid/v1", run: transport => createModelClarificationRunner({ apiKey: "test-synthetic-only", model: "synthetic-model", baseURL: "https://synthetic.invalid/v1", fetch: transport }).run(clarification) },
 ];

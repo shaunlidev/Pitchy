@@ -22,3 +22,5 @@ export * from "./core-message-contract";
 
 export * from "./story-runner";
 export * from "./provider-budget";
+
+export * from "./evaluation-provider";
