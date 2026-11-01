@@ -162,5 +162,66 @@ class ReviewedEvalSourceSafety(unittest.TestCase):
                 self.assertNotIn(secret.decode(), str(caught.exception))
 
 
+class ReviewedPortfolioSafety(unittest.TestCase):
+    def test_only_the_eight_reviewed_files_are_allowed(self):
+        names = {'README.md', 'architecture.md', 'case-study.md',
+                 'contribution-and-interview.md', 'demo.md',
+                 'evidence-index.json', 'failure-analysis.md', 'verification.md'}
+        expected = {f'docs/portfolio/{name}' for name in names}
+        self.assertEqual(set(delivery.REVIEWED_PORTFOLIO_SOURCES), expected)
+        for path in expected:
+            self.assertTrue(delivery.allowed_path(path), path)
+            self.assertRegex(delivery.REVIEWED_PORTFOLIO_SOURCES[path], r'^[a-f0-9]{64}$')
+        for path in ['docs/portfolio/another.md', 'docs/portfolio/participant.md',
+                     'docs/portfolio/raw-qa.json', 'docs/portfolio/demo.md.bak',
+                     'docs/portfolio/evidence/output.json',
+                     'docs/portfolio/.env.local', 'docs/private.md']:
+            self.assertFalse(delivery.allowed_path(path), path)
+
+    def test_real_git_pins_content_history_modes_and_still_scans_secrets(self):
+        import hashlib
+        source = 'docs/portfolio/case-study.md'
+        approved = b'# Synthetic portfolio review\n'
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            original = subprocess.check_output
+            def g(*args):
+                return original(['git', *args], cwd=root, text=True).strip()
+            def commit(message):
+                g('add', '.'); g('commit', '-m', message)
+                return g('rev-parse', 'HEAD')
+            def output(argv, **kwargs):
+                return original(argv, cwd=root, **kwargs)
+            g('init', '-b', 'main'); g('config', 'user.name', 'Synthetic')
+            g('config', 'user.email', 'synthetic@example.invalid')
+            policy = root/'tooling/pitchroom-github-sync/allowed-files.json'
+            policy.parent.mkdir(parents=True); policy.write_text('[]')
+            p = root/source; p.parent.mkdir(parents=True); p.write_bytes(approved)
+            safe = commit('Synthetic approved portfolio')
+            with patch.object(delivery, 'REVIEWED_PORTFOLIO_SOURCES',
+                              {source: hashlib.sha256(approved).hexdigest()}), \
+                 patch.object(delivery.subprocess, 'check_output', side_effect=output):
+                self.assertEqual(delivery.audit([safe]), 2)
+                p.write_bytes(b'Unreviewed changed text.\n')
+                changed = commit('Synthetic changed portfolio')
+                p.write_bytes(approved); restored = commit('Synthetic restored portfolio')
+                self.assertEqual(delivery.audit([restored]), 2)
+                with self.assertRaisesRegex(ValueError, 'content changed'):
+                    delivery.audit([safe, changed, restored])
+                p.unlink(); p.symlink_to('outside')
+                link = commit('Synthetic symlink')
+                with self.assertRaisesRegex(ValueError, 'mode'):
+                    delivery.audit([link])
+                p.unlink()
+                secret = ('sk-' + 'a'*32).encode()
+                p.write_bytes(secret); unsafe = commit('Synthetic secret control')
+                with patch.object(delivery, 'REVIEWED_PORTFOLIO_SOURCES',
+                                  {source: hashlib.sha256(secret).hexdigest()}):
+                    with self.assertRaises(ValueError) as caught:
+                        delivery.audit([unsafe])
+                    self.assertIn('Possible credential', str(caught.exception))
+                    self.assertNotIn(secret.decode(), str(caught.exception))
+
+
 if __name__ == '__main__':
     unittest.main()
