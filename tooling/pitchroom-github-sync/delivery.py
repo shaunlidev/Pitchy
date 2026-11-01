@@ -27,6 +27,15 @@ REVIEWED_EVAL_SOURCES = {
 }
 
 
+# Retain the PIT-58-approved original during full PR-history scans. The current
+# version above was separately approved for PIT-55; neither permits other bytes.
+REVIEWED_EVAL_HISTORY = {
+    'pitchroom-app/docs/evals/task-acceptance-protocol.md': frozenset({
+        '5867f4b818c330fa4fbc97729a04fe4a0b2c56f8174a5e8b31789d21a139d774',
+    }),
+}
+
+
 def git(*args):
     return subprocess.check_output(['git', *args], text=True).strip()
 
@@ -122,8 +131,10 @@ def audit(commits):
                 raise ValueError(f'Oversized committed file: {path}')
             data = subprocess.check_output(['git', 'cat-file', 'blob', oid])
             expected = REVIEWED_EVAL_SOURCES.get(path)
-            if expected is not None and hashlib.sha256(data).hexdigest() != expected:
-                raise ValueError(f'Reviewed source content changed: {path}; explicit review required')
+            if expected is not None:
+                digest = hashlib.sha256(data).hexdigest()
+                if digest != expected and digest not in REVIEWED_EVAL_HISTORY.get(path, ()):
+                    raise ValueError(f'Reviewed source content changed: {path}; explicit review required')
             check(path, data)
     return len(seen)
 
