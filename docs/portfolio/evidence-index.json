@@ -1,0 +1,188 @@
+{
+  "schema_version": 1,
+  "date": "2026-11-01",
+  "application_baseline": "120b82e01e1cc948f6758826c10725f889d4e3c6",
+  "scope": "One local synthetic fixture walkthrough and finite offline contract controls. Documentation draft, not whole-product acceptance.",
+  "task_owners": {
+    "coordination": "PIT-87",
+    "personal_review": "PIT-88",
+    "portfolio_package": "PIT-89"
+  },
+  "source_receipts": [
+    {
+      "path": "pitchroom-app/packages/agent/src/story-reference-contract.ts",
+      "sha256": "1413d2867e49cb2d124ac4f6c660459e5fecb9637d1e2a40d55395f2a3a68b9c"
+    },
+    {
+      "path": "pitchroom-app/packages/agent/src/story-runner.ts",
+      "sha256": "d71c2636d1e6a5b11ab4a52a5d69c7d6d0e4f270140a6b31bb65dfe48f1f4c35"
+    },
+    {
+      "path": "pitchroom-app/packages/domain/src/story.ts",
+      "sha256": "0ab484029955cad9bff6d5576aaca71a48b4ea4cd8e659022dc147c9ec61c115"
+    },
+    {
+      "path": "pitchroom-app/apps/web/lib/story-service.ts",
+      "sha256": "9e84466d4fe6d81208edd3a41f2ebfa33b06b29a37ee6463c28f0a26ad9520cd"
+    },
+    {
+      "path": "pitchroom-app/packages/domain/src/deck.ts",
+      "sha256": "ad671e4887e82760ad5066eae273f9bd8b7b3d7e835737b3cf4d6b25aac3684c"
+    },
+    {
+      "path": "pitchroom-app/apps/web/lib/story-panel.tsx",
+      "sha256": "f81120fba31633b1cc8c09b5eb902cf52b6ea1d070c6d173a4ccb8e7abf0ec62"
+    }
+  ],
+  "historical_reports": [
+    {
+      "path_in_original_local_workspace": "pitchroom-app/.artifacts/english-pit17-story-retry-20261025-01/acceptance-report.json",
+      "sha256": "dc3c0ac8e7843712111a9aa1f1ded17c1e4dec100939c40192f5451839a5b706",
+      "source_commit_in_original_history": "7187085",
+      "status": "PARTIAL: Story retry and adopted-Story Deck continuation pass; Chinese revision rejected; English full-loop acceptance not passed",
+      "raw_included": false
+    },
+    {
+      "path_in_original_local_workspace": "pitchroom-app/.artifacts/english-pit17-revision-v5-20261025-01/acceptance-report.json",
+      "sha256": "c1dedf02e1c7e7227b28ef1e0e0f348ef8c8867cd0a1ae72f296f7672890b8e3",
+      "source_commit_in_original_history": "62b81e2",
+      "status": "PASS bounded saved-state Chinese revision → explicit synthetic Apply → Deck V2 continuation; not first-attempt or human acceptance",
+      "raw_included": false
+    },
+    {
+      "path_in_original_local_workspace": "pitchroom-app/.artifacts/pit17-full-182ceab-20261026-01/acceptance-report.json",
+      "sha256": "528e443bf0e3ababdf480e3061a28123fd84ef0d8dd87391acab245f55d0525a",
+      "source_commit_in_original_history": "182ceab6cbb284f4f8b4fcb78a89db73002696a5",
+      "status": "STOPPED_FIRST_HARNESS_FAILURE; full English-loop acceptance NOT PASSED",
+      "raw_included": false
+    }
+  ],
+  "current_checks": [
+    {
+      "check": "Save synthetic brief",
+      "result": "pass",
+      "kind": "browser and owned fixture HTTP"
+    },
+    {
+      "check": "Understanding requires explicit review",
+      "result": "pass",
+      "kind": "browser and owned fixture HTTP"
+    },
+    {
+      "check": "Recommendation visible",
+      "result": "pass",
+      "kind": "browser and owned fixture HTTP"
+    },
+    {
+      "check": "Preview does not apply direction",
+      "result": "pass",
+      "kind": "browser and owned fixture HTTP"
+    },
+    {
+      "check": "Choose a direction other than recommendation",
+      "result": "pass",
+      "kind": "browser and owned fixture HTTP"
+    },
+    {
+      "check": "Story preview does not adopt",
+      "result": "pass",
+      "kind": "browser and owned fixture HTTP"
+    },
+    {
+      "check": "Dismiss does not adopt",
+      "result": "pass",
+      "kind": "browser and owned fixture HTTP"
+    },
+    {
+      "check": "Explicit Story Apply",
+      "result": "pass",
+      "kind": "browser and owned fixture HTTP"
+    },
+    {
+      "check": "Deck V2 copies adopted title/body/emphasis/order",
+      "result": "pass",
+      "kind": "browser and owned fixture HTTP"
+    },
+    {
+      "check": "Edit page creates Draft 2, preserves Draft 1",
+      "result": "pass",
+      "kind": "browser and owned fixture HTTP"
+    },
+    {
+      "check": "Open prior draft in interface",
+      "result": "pass",
+      "kind": "browser and owned fixture HTTP"
+    },
+    {
+      "check": "Unsupported upload preserves brief/sources/deck history",
+      "result": "pass",
+      "kind": "browser and owned fixture HTTP"
+    },
+    {
+      "check": "Recover from upload error to current draft",
+      "result": "pass",
+      "kind": "browser and owned fixture HTTP"
+    },
+    {
+      "check": "Reload selected current draft in same process",
+      "result": "pass",
+      "kind": "browser and owned fixture HTTP"
+    },
+    {
+      "check": "Valid saved Story passes wire schema",
+      "result": "pass",
+      "kind": "offline contract control"
+    },
+    {
+      "check": "Generated 47-word body fails wire schema",
+      "result": "pass",
+      "kind": "offline contract control"
+    },
+    {
+      "check": "Generated 47-word body fails domain validator",
+      "result": "pass",
+      "kind": "offline contract control"
+    },
+    {
+      "check": "Undefined local basis reference rejected",
+      "result": "pass",
+      "kind": "offline contract control"
+    },
+    {
+      "check": "Exact 47-word human body preserved",
+      "result": "pass",
+      "kind": "offline contract control"
+    },
+    {
+      "check": "Changed human-labeled body rejected",
+      "result": "pass",
+      "kind": "offline contract control"
+    }
+  ],
+  "retained_observer_failures": [
+    {
+      "script": "browser-edit.cjs",
+      "sha256": "9fe09843656b98dc541f5fc7417af4eee77fb5b53a69f38125a68e08b27bb2eb",
+      "result": "failed observer expectation; preserved",
+      "reason": "Expected reload of selected historical draft to open current draft; UI retained historical selection."
+    },
+    {
+      "script": "browser-edit-recovery.cjs",
+      "sha256": "6b35aed4e61d7e0f701af674e54732a1726b569ed186ad9b8c4222257011d31f",
+      "result": "failed observer expectation; preserved",
+      "reason": "Exact getByText locator did not match split-node read-only label. Output showed the historical draft and Return to current draft. No third repair of this observer was attempted."
+    }
+  ],
+  "unverified": [
+    "New real-model quality",
+    "Current-version full English loop",
+    "Independent consultant observation and external use",
+    "Shaun personal explanation and practice change",
+    "Production readiness",
+    "PostgreSQL or worker recovery",
+    "Visual layout, PDF fidelity, native assistive technology"
+  ],
+  "raw_qa_uploaded": false,
+  "recording": false,
+  "new_product_model_calls": 0
+}
