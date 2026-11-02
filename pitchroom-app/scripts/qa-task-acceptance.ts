@@ -6,7 +6,7 @@ import { createServer } from "node:net";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "../packages/evals/node_modules/zod/index.js";
-import { workspaceStateSchema, workspaceCommandSchema, evaluationInstanceSchema } from "../packages/domain/src/index";
+import { workspaceStateSchema, workspaceCommandSchema, evaluationInstanceSchema, deckProposalV2Schema } from "../packages/domain/src/index";
 import { freezeTaskBundle, hashTaskBytes, hashTaskValue, parseTaskBundle, taskRubric, type TaskBundle } from "../packages/evals/src/task-acceptance/schema";
 import { advance, audit, installSyntheticProviderCollector, prepare, readWorkflowReviewContext, recordDecision, taskAcceptanceSourcePaths } from "../packages/evals/src/task-acceptance/workflow";
 import { calibrationBank, issueReviewPacket, recordReviewEvidence, targetAt, type ProviderCapture, type ReviewPacket, type ReviewRecord } from "../packages/evals/src/task-acceptance/review";
@@ -99,6 +99,33 @@ export function qualificationGoalUpgrade(run: Run, packet: ReviewPacket): Review
       conditions: preserved, time: preserved, attribution: preserved, certainty: { preserved: false, reason: "Scripted adverse judgment: the source establishes a proposal, never an achieved result." },
       severity: "critical", reviewer: packet.actorId, reason: "Qualification of the adjudication tool, not a finding about live model output." }],
   }) };
+}
+
+export function qualificationDeckControls(input: Parameters<typeof compareAdoptedDeck>[0]) {
+  const inputHash = hashTaskValue(input), deck = deckProposalV2Schema.parse(input.deck);
+  assert.deepEqual(compareAdoptedDeck(input), [], "Deck controls require the exact adopted Story output");
+  const first = deck.pages[0], second = deck.pages[1]; assert(first && second);
+  const undersized = { ...deck, pages: deck.pages.slice(0, 2) };
+  const observedIssues: z.ZodError["issues"] = [];
+  assert.throws(() => compareAdoptedDeck({ ...input, deck: undersized }), error => {
+    if (!(error instanceof z.ZodError) || error.issues.length !== 1) return false;
+    const issue = error.issues[0];
+    if (issue?.code !== "too_small" || issue.origin !== "array" || issue.minimum !== 3 || issue.inclusive !== true
+      || issue.path.length !== 1 || issue.path[0] !== "pages") return false;
+    observedIssues.push(issue); return true;
+  }, "Only the expected minimum-page schema refusal qualifies");
+  const minimumPageIssue = observedIssues[0];
+  assert(minimumPageIssue?.code === "too_small");
+  const minimumPageRefusal = { code: minimumPageIssue.code, origin: minimumPageIssue.origin, path: minimumPageIssue.path,
+    minimum: minimumPageIssue.minimum, inclusive: minimumPageIssue.inclusive, actualPageCount: undersized.pages.length };
+  const replacement = { ...second, id: `${first.id}-omission-control` };
+  assert(!deck.pages.some(page => page.id === replacement.id), "Omission control requires a distinct replacement page ID");
+  const omitted = { ...deck, pages: [replacement, ...deck.pages.slice(1)] };
+  assert(!omitted.pages.some(page => page.storyBlockId === first.storyBlockId), "The controlled Story block must actually be absent");
+  const missingBlock = compareAdoptedDeck({ ...input, deck: omitted });
+  const changedBody = compareAdoptedDeck({ ...input, deck: { ...deck, pages: [{ ...first, body: `${first.body}\nPIT56 altered body.` }, ...deck.pages.slice(1)] } });
+  assert.equal(hashTaskValue(input), inputHash, "Deck controls must not mutate the adopted input");
+  return { inputHash, minimumPageRefusal, omittedBlockId: first.storyBlockId, replacementPageId: replacement.id, missingBlock, changedBody };
 }
 
 function byteCount(path: string): number {
@@ -328,12 +355,11 @@ async function qualifyPersistentWorkflow(input: PersistentInputs) {
     const story = view.workspace.story.versions.find(item => item.id === view.workspace.story?.head.storyId); assert(story);
     const deckInput = { story: story.story, storyId: story.id, generation: view.workspace.story.head.generation, deck: view.workspace.deck.proposal };
     checked("exact-adopted-story-deck", [], compareAdoptedDeck(deckInput));
-    assert(view.workspace.deck.proposal.schemaVersion === 2); const page = view.workspace.deck.proposal.pages[0]; assert(page);
-    const missingPage = compareAdoptedDeck({ ...deckInput, deck: { ...view.workspace.deck.proposal, pages: view.workspace.deck.proposal.pages.slice(1) } });
-    const changedBody = compareAdoptedDeck({ ...deckInput, deck: { ...view.workspace.deck.proposal, pages: [{ ...page, body: "Altered meaning" }, ...view.workspace.deck.proposal.pages.slice(1)] } });
-    checked("missing-story-block-fails", true, missingPage.length > 0);
-    checked("changed-deck-body-fails", true, changedBody.length > 0);
-    write("deck-negative-controls.json", { missingPage, changedBody });
+    const deckControls = qualificationDeckControls(deckInput);
+    checked("undersized-deck-schema-refused", { code: "too_small", origin: "array", path: ["pages"], minimum: 3, inclusive: true, actualPageCount: 2 }, deckControls.minimumPageRefusal);
+    checked("missing-story-block-fails", true, deckControls.missingBlock.includes("pages.0.block"));
+    checked("changed-deck-body-fails", true, deckControls.changedBody.includes("pages.0.body"));
+    write("deck-negative-controls.json", deckControls);
     await recordDecision({ run, decision: qualificationDecision(view, { kind: "record_review", originalWords: "Scripted tool qualification; no real user reviewed this." }) });
     view = qualificationView.parse(await advance(run));
     await recordDecision({ run, decision: qualificationDecision(view, { kind: "use_not_observed", reason: "Synthetic qualification has no real downstream use." }) });

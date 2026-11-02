@@ -4,12 +4,12 @@ import { mkdirSync, readFileSync, readdirSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, it, vi } from "vitest";
-import { fixture, httpFixture } from "./review-fixture";
+import { fixture, httpFixture, reachDeck } from "./review-fixture";
 import { advance, audit, prepare, readWorkflowReviewContext } from "./workflow";
 import { recordReviewEvidence, reviewRecords, type ReviewPacket } from "./review";
 import { assessTask } from "./verdict";
 import { hashTaskValue, parseTaskBundle } from "./schema";
-import { qualificationGoalUpgrade, qualificationPacket, qualificationReviewer, qualificationView, writeQualificationCase } from "../../../../scripts/qa-task-acceptance";
+import { qualificationDeckControls, qualificationGoalUpgrade, qualificationPacket, qualificationReviewer, qualificationView, writeQualificationCase } from "../../../../scripts/qa-task-acceptance";
 
 function guardFixture() {
   const { root } = fixture(), directory = join(root, "child-transport");
@@ -103,6 +103,21 @@ async function controlledReview() {
   const packet = qualificationPacket(run, view.checkpointHash, reviewer);
   return { fixture, bundle, run, reviewer, view, packet };
 }
+
+it("distinguishes minimum-page refusal from a missing Story block without mutating the adopted Deck", async () => {
+  const f = await httpFixture(true), run = prepare(f.input), view = await reachDeck(run);
+  const adopted = view.workspace.story?.versions.find(item => item.id === view.workspace.story?.head.storyId);
+  if (!adopted || !view.workspace.story || !view.workspace.deck) throw new Error("Missing actual adopted Story and Deck");
+  const input = { story: adopted.story, storyId: adopted.id, generation: view.workspace.story.head.generation, deck: view.workspace.deck.proposal };
+  expect(input.deck.pages).toHaveLength(3);
+  const before = hashTaskValue(input), controls = qualificationDeckControls(input);
+  expect(controls.minimumPageRefusal).toEqual({ code: "too_small", origin: "array", path: ["pages"], minimum: 3, inclusive: true, actualPageCount: 2 });
+  expect(controls.omittedBlockId).toBe(adopted.story.blocks[0]?.id);
+  expect(input.deck.pages.some(page => page.id === controls.replacementPageId)).toBe(false);
+  expect(controls.missingBlock).toContain("pages.0.block");
+  expect(controls.changedBody).toEqual(["pages.0.body"]);
+  expect(controls.inputHash).toBe(before); expect(hashTaskValue(input)).toBe(before);
+}, 30_000);
 
 it("keeps absent or partial review pending and refuses every stale review binding", async () => {
   const { run, packet, view } = await controlledReview();
