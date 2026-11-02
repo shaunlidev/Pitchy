@@ -205,7 +205,17 @@ async function execute() {
   try {
     for (const process of children) terminate(process, "SIGKILL");
     await until(async () => [...children].every(process => { try { globalThis.process.kill(-process.pid!, 0); return false; } catch (error) { return (error as NodeJS.ErrnoException).code === "ESRCH"; } }), Boolean, 5000);
-    if (containerStarted) { docker(["stop", "--time", "1", container]); assert.equal(docker(["ps", "--all", "--filter", `name=^/${container}$`, "--format", "{{.ID}}"]), ""); }
+    if (containerStarted) {
+      docker(["stop", "--time", "1", container]);
+      const removalDeadline = Date.now() + 5000;
+      let remainingContainer = container;
+      while (remainingContainer) {
+        const remainingMs = removalDeadline - Date.now();
+        assert(remainingMs > 0, `Owned container removal timed out: ${container} (${remainingContainer})`);
+        remainingContainer = execFileSync("docker", ["ps", "--all", "--filter", `name=^/${container}$`, "--format", "{{.ID}}"], { encoding: "utf8", timeout: remainingMs, maxBuffer: 4096 }).trim();
+        if (remainingContainer) await delay(100);
+      }
+    }
     write("cleanup.json", { ownedProcessGroupsStopped: true, ownedContainerRemoved: containerStarted });
   } catch (error) { failure ??= error; }
   if (failure || !result) {

@@ -24,6 +24,26 @@ export const projectPhase = pgEnum("project_phase", [
   "cancelled",
 ]);
 
+export const deploymentIdentity = pgTable("deployment_identity", {
+  singleton: integer("singleton").primaryKey(),
+  environmentId: uuid("environment_id").notNull(),
+  environment: text("environment").notNull(),
+  databaseTarget: text("database_target").notNull(),
+  databaseName: text("database_name").notNull(),
+  runtimeRole: text("runtime_role").notNull(),
+  targetReceiptSha: text("target_receipt_sha").notNull(),
+}, table => [check("deployment_identity_singleton", sql`${table.singleton} = 1`)]);
+
+export const workerHeartbeats = pgTable("worker_heartbeats", {
+  instanceId: uuid("instance_id").primaryKey(),
+  environmentId: uuid("environment_id").notNull(),
+  releaseSha: text("release_sha").notNull(),
+  schemaVersion: text("schema_version").notNull(),
+  configurationHash: text("configuration_hash").notNull(),
+  state: text("state").$type<"ready" | "stopped">().notNull(),
+  seenAt: timestamp("seen_at", { withTimezone: true }).notNull(),
+}, table => [check("worker_heartbeats_state", sql`${table.state} in ('ready', 'stopped')`), index("worker_heartbeats_seen_idx").on(table.seenAt)]);
+
 export const projects = pgTable("projects", {
   id: uuid("id").defaultRandom().primaryKey(),
   slug: text("slug").notNull().unique(),

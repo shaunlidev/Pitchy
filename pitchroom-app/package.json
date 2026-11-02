@@ -2,11 +2,13 @@
   "name": "pitchroom-app",
   "private": true,
   "packageManager": "pnpm@9.6.0",
+  "engines": { "node": ">=24.10.0 <25" },
   "devDependencies": {
     "tsx": "4.20.6"
   },
   "scripts": {
     "dev": "pnpm --filter @pitchroom/web dev",
+    "start": "node scripts/check-env.mjs --production && pnpm --filter @pitchroom/web exec next start --hostname 0.0.0.0",
     "build": "pnpm --filter @pitchroom/web build",
     "check": "pnpm typecheck && pnpm test && pnpm test:server:guard && pnpm build",
     "typecheck": "pnpm -r --if-present typecheck && pnpm --filter @pitchroom/web exec tsc -p ../../scripts/tsconfig.json",
