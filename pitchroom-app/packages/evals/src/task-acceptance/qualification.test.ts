@@ -21,7 +21,7 @@ function guardFixture() {
   // The original fetch is an observable sentinel, so a broken guard cannot
   // accidentally send a real network request during this subprocess check.
   const nativeFetch = "data:text/javascript," + encodeURIComponent("globalThis.transportCalls=[];globalThis.fetch=(input,options)=>{globalThis.transportCalls.push({input,options});return Promise.resolve(new Response('synthetic'));}");
-  const run = (code: string, loader: boolean, override: Partial<typeof environment> = {}) => spawnSync(process.execPath,
+  const run = (code: string, loader: boolean, override: Partial<Record<keyof typeof environment, string>> = {}) => spawnSync(process.execPath,
     ["--import", nativeFetch, "--import", transport, ...(loader ? ["--import", import.meta.resolve("tsx")] : []), "--input-type=module", "-e", code],
     { cwd: root, env: { ...environment, ...override }, encoding: "utf8", timeout: 5000, killSignal: "SIGKILL", maxBuffer: 8192 });
   return { root, directory, nonce, sourceHash, origin, run };
