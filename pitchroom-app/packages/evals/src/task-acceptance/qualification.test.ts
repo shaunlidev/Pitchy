@@ -21,10 +21,12 @@ function guardFixture() {
   // The original fetch is an observable sentinel, so a broken guard cannot
   // accidentally send a real network request during this subprocess check.
   const nativeFetch = "data:text/javascript," + encodeURIComponent("globalThis.transportCalls=[];globalThis.fetch=(input,options)=>{globalThis.transportCalls.push({input,options});return Promise.resolve(new Response('synthetic'));}");
-  const run = (code: string, loader: boolean, override: Partial<Record<keyof typeof environment, string>> = {}) => spawnSync(process.execPath,
-    ["--import", nativeFetch, "--import", transport, ...(loader ? ["--import", import.meta.resolve("tsx")] : []), "--input-type=module", "-e", code],
-    { cwd: root, env: { ...environment, ...override }, encoding: "utf8", timeout: 5000, killSignal: "SIGKILL", maxBuffer: 8192 });
-  return { root, directory, nonce, sourceHash, origin, run };
+  const launch = (entry: string[], loader: boolean, override: Partial<Record<keyof typeof environment, string>> = {}) => spawnSync(process.execPath,
+    ["--import", nativeFetch, ...(loader ? ["--import", import.meta.resolve("tsx")] : []), "--import", transport, ...entry],
+    { cwd: root, env: { ...environment, NODE_OPTIONS: "", ...override }, encoding: "utf8", timeout: 5000, killSignal: "SIGKILL", maxBuffer: 8192 });
+  const run = (code: string, loader: boolean, override: Partial<Record<keyof typeof environment, string>> = {}) => launch(["--input-type=module", "-e", code], loader, override);
+  const runWorker = () => launch([fileURLToPath(new URL("../../../../scripts/clarification-worker.ts", import.meta.url)), "--once"], true);
+  return { root, directory, nonce, sourceHash, origin, run, runWorker };
 }
 
 it.each([false, true])("starts the standalone child guard and preserves its actual refusal chain (tsx=%s)", loader => {
@@ -51,6 +53,17 @@ it.each([false, true])("starts the standalone child guard and preserves its actu
     expect(hash).toBe(hashTaskValue(body)); previous = hash;
   });
   expect(ready).toEqual({ ...seed, canaryHash: attempts[0].hash, externalDispatches: 0 });
+});
+
+it("loads the actual TypeScript worker and refuses missing database configuration after guard startup", () => {
+  const f = guardFixture(), result = f.runWorker();
+  expect(result.error).toBeUndefined(); expect(result.signal).toBeNull(); expect(result.status).toBe(1); expect(result.stdout).toBe("");
+  expect(result.stderr).toBe("Clarification worker failed. Check database readiness and worker configuration.\n");
+  expect(readdirSync(f.directory).sort()).toEqual([`${result.pid}.attempts.jsonl`, `${result.pid}.ready.json`]);
+  const seed = { pid: result.pid, nonce: f.nonce, sourceHash: f.sourceHash, origin: f.origin };
+  const canary = { pid: result.pid, sequence: 0, nonce: f.nonce, canary: true, origin: "https://pit56.invalid", blockedBeforeNetwork: true, previous: hashTaskValue(seed) };
+  expect(JSON.parse(readFileSync(join(f.directory, `${result.pid}.attempts.jsonl`), "utf8"))).toEqual({ ...canary, hash: hashTaskValue(canary) });
+  expect(JSON.parse(readFileSync(join(f.directory, `${result.pid}.ready.json`), "utf8"))).toEqual({ ...seed, canaryHash: hashTaskValue(canary), externalDispatches: 0 });
 });
 
 it("refuses an invalid child identity and symlinked evidence before writing ready", () => {

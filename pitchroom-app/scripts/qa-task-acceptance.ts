@@ -274,7 +274,7 @@ async function qualifyPersistentWorkflow(input: PersistentInputs) {
     const answer = qualificationDecision(view, { kind: "answer_clarification", taskKey: question.key, originalWords: "The discussion should seek a limited pilot, not an annual procurement commitment." });
     const answerResult = await recordDecision({ run, decision: answer }); checked("lost-response-read-only-recovery", "decision_completed", answerResult.kind);
     checked("lost-response-no-second-post", 1, commands.filter(command => command.action === "submit_clarification").length);
-    const worker = child("worker-clarification", ["--import", "tsx", "scripts/clarification-worker.ts", "--once"], app, environment, 30_000);
+    const worker = child("worker-clarification", ["--import", "tsx", "--import", join(app, "scripts/qa-task-acceptance-transport.mjs"), "scripts/clarification-worker.ts", "--once"], app, { ...environment, NODE_OPTIONS: "" }, 30_000);
     checked("actual-postgres-fake-worker", 0, await worker.exited);
     view = qualificationView.parse(await advance(run)); checked("actual-worker-candidate-awaits-apply", "clarification_wait", view.step);
     const candidate = view.choices[0]; assert(candidate);
