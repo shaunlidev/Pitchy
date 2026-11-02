@@ -1,11 +1,83 @@
+import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { mkdirSync, readFileSync, readdirSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { expect, it, vi } from "vitest";
-import { httpFixture } from "./review-fixture";
+import { fixture, httpFixture } from "./review-fixture";
 import { advance, audit, prepare, readWorkflowReviewContext } from "./workflow";
 import { recordReviewEvidence, reviewRecords, type ReviewPacket } from "./review";
 import { assessTask } from "./verdict";
 import { hashTaskValue, parseTaskBundle } from "./schema";
 import { qualificationGoalUpgrade, qualificationPacket, qualificationReviewer, qualificationView, writeQualificationCase } from "../../../../scripts/qa-task-acceptance";
+
+function guardFixture() {
+  const { root } = fixture(), directory = join(root, "child-transport");
+  mkdirSync(directory);
+  const nonce = randomUUID(), sourceHash = "a".repeat(64), origin = "http://127.0.0.1:9";
+  const transport = fileURLToPath(new URL("../../../../scripts/qa-task-acceptance-transport.mjs", import.meta.url));
+  const environment = { PITCHROOM_RUNTIME: "postgres-fake", PITCHROOM_EVAL_SOURCE_HASH: sourceHash,
+    PIT56_CHILD_NETWORK_GUARD: origin, PIT56_CHILD_GUARD_DIRECTORY: directory, PIT56_CHILD_GUARD_NONCE: nonce };
+  // The original fetch is an observable sentinel, so a broken guard cannot
+  // accidentally send a real network request during this subprocess check.
+  const nativeFetch = "data:text/javascript," + encodeURIComponent("globalThis.transportCalls=[];globalThis.fetch=(input,options)=>{globalThis.transportCalls.push({input,options});return Promise.resolve(new Response('synthetic'));}");
+  const run = (code: string, loader: boolean, override: Partial<typeof environment> = {}) => spawnSync(process.execPath,
+    ["--import", nativeFetch, "--import", transport, ...(loader ? ["--import", import.meta.resolve("tsx")] : []), "--input-type=module", "-e", code],
+    { cwd: root, env: { ...environment, ...override }, encoding: "utf8", timeout: 5000, killSignal: "SIGKILL", maxBuffer: 8192 });
+  return { root, directory, nonce, sourceHash, origin, run };
+}
+
+it.each([false, true])("starts the standalone child guard and preserves its actual refusal chain (tsx=%s)", loader => {
+  const f = guardFixture();
+  const result = f.run(`
+    import assert from 'node:assert/strict';
+    assert.throws(() => fetch('https://pit56.invalid/refused'), /PIT56_CHILD_EXTERNAL_NETWORK_REFUSED/);
+    assert.equal(globalThis.transportCalls.length, 0);
+    await fetch('${f.origin}/read-only', { redirect: 'follow' });
+    assert.deepEqual(globalThis.transportCalls, [{ input: '${f.origin}/read-only', options: { redirect: 'error' } }]);
+    console.log(JSON.stringify({ entry: true, pid: process.pid }));
+  `, loader);
+  expect(result.error).toBeUndefined(); expect(result.signal).toBeNull(); expect(result.status).toBe(0); expect(result.stderr).toBe("");
+  expect(JSON.parse(result.stdout)).toEqual({ entry: true, pid: result.pid });
+  expect(readdirSync(f.directory).sort()).toEqual([`${result.pid}.attempts.jsonl`, `${result.pid}.ready.json`]);
+  const ready = JSON.parse(readFileSync(join(f.directory, `${result.pid}.ready.json`), "utf8"));
+  const seed = { pid: result.pid, nonce: f.nonce, sourceHash: f.sourceHash, origin: f.origin };
+  const attempts = readFileSync(join(f.directory, `${result.pid}.attempts.jsonl`), "utf8").trim().split("\n").map(line => JSON.parse(line));
+  expect(attempts).toHaveLength(2);
+  let previous = hashTaskValue(seed);
+  attempts.forEach((event, sequence) => {
+    const { hash, ...body } = event;
+    expect(body).toEqual({ pid: result.pid, sequence, nonce: f.nonce, canary: sequence === 0, origin: "https://pit56.invalid", blockedBeforeNetwork: true, previous });
+    expect(hash).toBe(hashTaskValue(body)); previous = hash;
+  });
+  expect(ready).toEqual({ ...seed, canaryHash: attempts[0].hash, externalDispatches: 0 });
+});
+
+it("refuses an invalid child identity and symlinked evidence before writing ready", () => {
+  const f = guardFixture();
+  const invalid = f.run("throw new Error('entry must not run')", false, { PIT56_CHILD_GUARD_NONCE: "not-a-uuid" });
+  expect(invalid.error).toBeUndefined(); expect(invalid.status).not.toBe(0); expect(invalid.stderr).toContain("PIT56_CHILD_GUARD_NONCE_INVALID");
+  expect(readdirSync(f.directory)).toEqual([]);
+  const link = join(f.root, "linked-transport"); symlinkSync(f.directory, link, "dir");
+  const linked = f.run("throw new Error('entry must not run')", false, { PIT56_CHILD_GUARD_DIRECTORY: link });
+  expect(linked.error).toBeUndefined(); expect(linked.status).not.toBe(0); expect(linked.stderr).toContain("EVIDENCE_PATH_SYMLINK");
+  expect(readdirSync(f.directory)).toEqual([]);
+});
+
+it("retains an incomplete marker and stops the owned child when transport evidence cannot be kept", () => {
+  const f = guardFixture();
+  const result = f.run(`
+    import { appendFileSync } from 'node:fs';
+    import { join } from 'node:path';
+    appendFileSync(join(process.env.PIT56_CHILD_GUARD_DIRECTORY, process.pid + '.attempts.jsonl'), 'x'.repeat(8192));
+    fetch('https://pit56.invalid/capacity-refusal');
+    throw new Error('entry must not continue');
+  `, false);
+  expect(result.error).toBeUndefined(); expect(result.status).toBeNull(); expect(result.signal).toBe("SIGKILL");
+  const marker = JSON.parse(readFileSync(join(f.directory, `${result.pid}.incomplete.json`), "utf8"));
+  expect(marker).toEqual({ pid: result.pid, nonce: f.nonce, sourceHash: f.sourceHash, origin: f.origin,
+    error: "Child transport evidence limit exceeded", lostAttemptHash: expect.stringMatching(/^[a-f0-9]{64}$/) });
+});
 
 async function controlledReview() {
   const fixture = await httpFixture();

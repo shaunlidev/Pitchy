@@ -165,7 +165,7 @@ async function qualifyPersistentWorkflow(input: PersistentInputs) {
   const origin = `http://127.0.0.1:${await availablePort()}`, instanceId = randomUUID(), guardNonce = randomUUID(), guardDirectory = join(evidence, "child-transport");
   mkdirSync(guardDirectory, { mode: 0o700 });
   const environment: NodeJS.ProcessEnv = { PATH: process.env.PATH, TMPDIR: process.env.TMPDIR, DATABASE_URL: databaseURL, PITCHROOM_RUNTIME: "postgres-fake", PITCHROOM_ISOLATED_QA: "1", NEXT_TELEMETRY_DISABLED: "1", PITCHROOM_EVAL_INSTANCE_ID: instanceId, PITCHROOM_EVAL_SOURCE_HASH: sourceHash,
-    PIT56_CHILD_NETWORK_GUARD: origin, PIT56_CHILD_GUARD_DIRECTORY: guardDirectory, PIT56_CHILD_GUARD_NONCE: guardNonce, NODE_OPTIONS: `--import=tsx --import=${self}` };
+    PIT56_CHILD_NETWORK_GUARD: origin, PIT56_CHILD_GUARD_DIRECTORY: guardDirectory, PIT56_CHILD_GUARD_NONCE: guardNonce, NODE_OPTIONS: `--import=${join(app, "scripts/qa-task-acceptance-transport.mjs")}` };
   const readChildAttempts = () => {
     const files = readdirSync(guardDirectory);
     assert(!files.some(file => file.endsWith(".incomplete.json")), "Child transport observation failed; zero calls cannot be certified");
@@ -497,7 +497,7 @@ async function main() {
   assert.equal(execFileSync("git", ["status", "--porcelain", "--untracked-files=no"], { cwd: repository, encoding: "utf8" }).trim(), "", "Freeze reviewed source before execution");
   for (const directory of [app, join(app, "apps/web")]) assert(!readdirSync(directory).some(name => /^\.env(?:\.(?:local|development|production|test)(?:\.local)?)?$/.test(name)), "Environment-file discovery refused");
   const sourcePaths = execFileSync("git", ["ls-files", "-z", "--", "pitchroom-app"], { cwd: repository, encoding: "utf8", maxBuffer: 1_000_000 }).split("\0").filter(Boolean);
-  for (const path of [...taskAcceptanceSourcePaths, "pitchroom-app/pnpm-lock.yaml", "pitchroom-app/scripts/qa-task-acceptance.ts", "pitchroom-app/packages/evals/src/task-acceptance/qualification.test.ts"]) assert(sourcePaths.includes(path), "Qualification source must be committed before execution");
+  for (const path of [...taskAcceptanceSourcePaths, "pitchroom-app/pnpm-lock.yaml", "pitchroom-app/scripts/qa-task-acceptance.ts", "pitchroom-app/scripts/qa-task-acceptance-transport.mjs", "pitchroom-app/packages/evals/src/task-acceptance/qualification.test.ts"]) assert(sourcePaths.includes(path), "Qualification source must be committed before execution");
   const source = sourcePaths.map(path => ({ path, sha256: hashTaskBytes(readFileSync(join(repository, path))) }));
   assert.equal(hashTaskValue(source), allocation.sourceHash, "Allocation source fingerprint changed");
   const nextEnvPath = "pitchroom-app/apps/web/next-env.d.ts", nextEnvBefore = readFileSync(join(repository, nextEnvPath));
@@ -553,11 +553,11 @@ async function main() {
   const stop: PersistentInputs["stop"] = async running => {
     const pid = running.instance.pid; assert(pid, "Owned child was never spawned");
     if (groupExists(pid)) process.kill(-pid, "SIGTERM");
-    const gracefulDeadline = Date.now() + 3000;
-    while (groupExists(pid) && Date.now() < gracefulDeadline) await delay(100);
+    const closedGracefully = await Promise.race([running.exited.then(() => true), delay(3000).then(() => false)]);
+    if (!closedGracefully) running.kill();
+    await running.exited;
     if (groupExists(pid)) running.kill();
     await until(async () => !groupExists(pid), Boolean, 5000);
-    await running.exited;
   };
   let failure: unknown;
   try {
@@ -568,12 +568,14 @@ async function main() {
     try { await action(); } catch (error) { cleanupErrors.push(error instanceof Error ? { message: error.message, stack: error.stack } : { message: String(error) }); }
   };
   let groupsGone = false, containerRemoved = false;
+  for (const instance of children) await cleanupStep(() => {
+    if (instance.pid && groupExists(instance.pid)) { try { process.kill(-instance.pid, "SIGKILL"); } catch (error) { if (!z.object({ code: z.literal("ESRCH") }).safeParse(error).success) throw error; } }
+  });
+  for (const completed of childCompletions) await cleanupStep(async () => { await completed; });
   await cleanupStep(async () => {
-    for (const instance of children) if (instance.pid && groupExists(instance.pid)) { try { process.kill(-instance.pid, "SIGKILL"); } catch (error) { if (!z.object({ code: z.literal("ESRCH") }).safeParse(error).success) throw error; } }
     await until(async () => [...children].every(instance => !instance.pid || !groupExists(instance.pid)), Boolean, 5000);
     groupsGone = true;
   });
-  for (const completed of childCompletions) await cleanupStep(async () => { await completed; });
   await cleanupStep(async () => {
     if (containerStarted && docker(["ps", "--all", "--filter", `name=^/${container}$`, "--format", "{{.ID}}"])) {
       docker(["stop", "--time", "1", container]); containerRemoved = true;
@@ -606,39 +608,5 @@ async function main() {
   process.stdout.write(JSON.stringify({ outcome: "pass", evidence, bytes: byteCount(evidence), checks: results.length }) + "\n");
 }
 
-if (process.env.PIT56_CHILD_NETWORK_GUARD) {
-  const allowed = new URL(process.env.PIT56_CHILD_NETWORK_GUARD); assert.equal(allowed.hostname, "127.0.0.1");
-  assert.equal(process.env.PITCHROOM_RUNTIME, "postgres-fake");
-  assert.equal(process.env.OPENAI_API_KEY, undefined); assert.equal(process.env.PITCHROOM_LIVE_TRANSFER_ACK, undefined);
-  const directory = z.string().refine(isAbsolute).parse(process.env.PIT56_CHILD_GUARD_DIRECTORY);
-  const nonce = z.string().uuid().parse(process.env.PIT56_CHILD_GUARD_NONCE);
-  const sourceHash = z.string().regex(/^[a-f0-9]{64}$/).parse(process.env.PITCHROOM_EVAL_SOURCE_HASH);
-  assertUnlinkedPath(directory); assert(readdirSync(directory).length < 64, "Child guard process limit exceeded");
-  const trace = join(directory, `${process.pid}.attempts.jsonl`), seed = { pid: process.pid, nonce, sourceHash, origin: allowed.origin };
-  writeFileSync(trace, "", { flag: "wx", mode: 0o600 });
-  let previous = hashTaskValue(seed), sequence = 0, canary = true;
-  const original = globalThis.fetch;
-  globalThis.fetch = (input, options) => {
-    const url = new URL(input instanceof Request ? input.url : String(input));
-    if (url.origin !== allowed.origin) {
-      const body = { pid: process.pid, sequence, nonce, canary, origin: url.origin, blockedBeforeNetwork: true };
-      const event = { ...body, previous, hash: hashTaskValue({ ...body, previous }) }, bytes = JSON.stringify(event) + "\n";
-      try {
-        assert(statSync(trace).size + Buffer.byteLength(bytes) <= 8192, "Child transport evidence limit exceeded");
-        assert(byteCount(directory) + Buffer.byteLength(bytes) <= 512_000, "Shared child transport evidence limit exceeded");
-        appendFileSync(trace, bytes, { mode: 0o600 }); previous = event.hash; sequence++;
-      } catch (error) {
-        try { writeFileSync(join(directory, `${process.pid}.incomplete.json`), JSON.stringify({ ...seed, error: error instanceof Error ? error.message : String(error), lostAttemptHash: event.hash }), { flag: "wx", mode: 0o600 }); }
-        finally { process.kill(process.pid, "SIGKILL"); }
-        throw error;
-      }
-      throw new Error("PIT56_CHILD_EXTERNAL_NETWORK_REFUSED");
-    }
-    return original(input, { ...options, redirect: "error" });
-  };
-  assert.throws(() => globalThis.fetch("https://pit56.invalid/guard-canary"), /PIT56_CHILD_EXTERNAL_NETWORK_REFUSED/);
-  canary = false;
-  writeFileSync(join(directory, `${process.pid}.ready.json`), JSON.stringify({ ...seed, canaryHash: previous, externalDispatches: 0 }), { flag: "wx", mode: 0o600 });
-}
 // The entrypoint is intentionally inert when imported by offline qualification tests.
 if (process.argv[1] && resolve(process.argv[1]) === self) main().catch(error => { process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`); process.exitCode = 1; });
