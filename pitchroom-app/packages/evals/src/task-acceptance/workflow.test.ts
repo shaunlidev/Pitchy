@@ -9,7 +9,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { readPositioning, storyToDeck, workspaceStateSchema } from "@pitchroom/domain";
 import { GET, POST } from "../../../../apps/web/app/api/workspace/route";
-import { healthResponse } from "../../../../apps/web/app/api/health/route";
+import { healthResponse } from "../../../../apps/web/lib/runtime-responses";
 import { evaluationInstance } from "../../../../apps/web/lib/evaluation-instance";
 import { addFixtureMaterial, readFixtureState, resetFixtureState } from "../../../../apps/web/lib/fixture-store";
 import { hashTaskBytes, hashTaskValue } from "./schema";

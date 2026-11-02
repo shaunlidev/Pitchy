@@ -10,7 +10,7 @@ import { afterEach, vi } from "vitest";
 import { z } from "zod";
 import { workspaceStateSchema } from "@pitchroom/domain";
 import { GET, POST } from "../../../../apps/web/app/api/workspace/route";
-import { healthResponse } from "../../../../apps/web/app/api/health/route";
+import { healthResponse } from "../../../../apps/web/lib/runtime-responses";
 import { evaluationInstance } from "../../../../apps/web/lib/evaluation-instance";
 import { resetFixtureState } from "../../../../apps/web/lib/fixture-store";
 import { advance, prepare, recordDecision } from "./workflow";

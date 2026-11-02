@@ -12,7 +12,7 @@ it("refuses budget and transport source changes before any workflow HTTP dispatc
   execFileSync("git", ["init", "--quiet"], { cwd: source }); execFileSync("git", ["add", "."], { cwd: source });
   execFileSync("git", ["-c", "user.name=Synthetic test", "-c", "user.email=test@example.invalid", "commit", "--quiet", "-m", "Synthetic frozen sources"], { cwd: source });
   const run = prepare({ ...f.input, sourceRepository: source });
-  for (const path of ["packages/agent/src/provider-budget.ts", "packages/agent/src/evaluation-provider.ts", "apps/web/lib/persistent-workspace.ts", "apps/web/lib/story-service.ts", "scripts/clarification-worker.ts", "packages/evals/src/task-acceptance/provider-budget-audit.ts"]) {
+  for (const path of ["packages/agent/src/provider-budget.ts", "packages/agent/src/evaluation-provider.ts", "apps/web/lib/runtime-responses.ts", "apps/web/lib/persistent-workspace.ts", "apps/web/lib/story-service.ts", "scripts/clarification-worker.ts", "packages/evals/src/task-acceptance/provider-budget-audit.ts"]) {
     const target = join(source, "pitchroom-app", path), before = readFileSync(target, "utf8"); writeFileSync(target, before + "\n// Synthetic changed source\n");
     await expect(advance(run), path).rejects.toThrow("WORKFLOW_CODE_CHANGED"); writeFileSync(target, before);
   }

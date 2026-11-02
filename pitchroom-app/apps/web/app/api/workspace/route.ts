@@ -1,3 +1,4 @@
+import { workspaceResponse } from "../../../lib/runtime-responses";
 import { evaluationRequestGuard } from "../../../lib/evaluation-instance";
 import {saveFixturePositioningWording} from "../../../lib/fixture-store";
 import {savePersistentPositioningWording} from "../../../lib/persistent-workspace";
@@ -13,23 +14,10 @@ import { proposePersistentStory, decidePersistentStory, undoPersistentStory, cre
 import { errorEnvelopeSchema, workspaceCommandSchema, workspaceStateSchema } from "../../../lib/api-contract";
 export const dynamic = "force-dynamic";
 const headers = (requestId: string, runtime: RuntimeMode) => ({ "cache-control": "no-store", "x-pitchroom-mode": runtime, "x-request-id": requestId });
-export async function workspaceResponse(readState?: () => unknown | Promise<unknown>) {
-  const requestId = crypto.randomUUID();
-  const configured = readRuntimeMode();
-  if (!configured.success) return invalidRuntimeResponse(requestId);
-  const runtime = configured.data;
-  try {
-    const state = await (readState ? readState() : runtime === "fixture" ? readFixtureState() : readPersistentState(runtime === "live" ? "live" : "postgres-fake"));
-    return NextResponse.json(workspaceStateSchema.parse(state), { headers: headers(requestId, runtime) });
-  } catch {
-    const envelope = errorEnvelopeSchema.parse({ code: "PERSISTENCE_ERROR", error: "Workspace storage is temporarily unavailable. Retry in a moment.", requestId });
-    return NextResponse.json(envelope, { status: 503, headers: headers(requestId, runtime) });
-  }
-}
-export async function GET(request?: Request) {
+export async function GET(request: Request) {
   const rejected = evaluationRequestGuard(request);
   if (rejected) return rejected;
-  return workspaceResponse();
+  return workspaceResponse((runtime) => runtime === "fixture" ? readFixtureState() : readPersistentState(runtime === "live" ? "live" : "postgres-fake"));
 }
 export async function POST(request: Request) {
   const rejected = evaluationRequestGuard(request);
