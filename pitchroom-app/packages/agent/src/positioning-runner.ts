@@ -140,8 +140,8 @@ export class ResponsesPositioningRunner implements PositioningAgentRunner {
   }
 }
 
-export function createLivePositioningRunner(config: { apiKey?: string; model?: string; baseURL?: string }) {
+export function createLivePositioningRunner(config: { apiKey?: string; model?: string; baseURL?: string; fetch?: typeof fetch }) {
   if (!config.apiKey) throw new PitchroomError("INVALID_INPUT", "OPENAI_API_KEY is required for live positioning.");
   if (!config.model) throw new PitchroomError("INVALID_INPUT", "OPENAI_MODEL must be pinned for live positioning.");
-  return new ResponsesPositioningRunner({ apiKey: config.apiKey, model: config.model, baseURL: config.baseURL ?? "https://api.openai.com/v1" });
+  return new ResponsesPositioningRunner({ apiKey: config.apiKey, model: config.model, baseURL: config.baseURL ?? "https://api.openai.com/v1", fetch: config.fetch });
 }

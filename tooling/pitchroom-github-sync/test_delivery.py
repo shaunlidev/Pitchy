@@ -6,6 +6,12 @@ from unittest.mock import patch
 import delivery
 
 class PushSafety(unittest.TestCase):
+    def test_capacity_sources_exact_and_state_not_publishable(self):
+        for path in ('tooling/pipeline/capacity.py','tooling/pipeline/test_capacity.py'):
+            self.assertTrue(delivery.allowed_path(path))
+        for path in ('tooling/pipeline/capacity.sqlite3','tooling/pipeline/parallel-authorization.json','tooling/pipeline/capacity.py.bak'):
+            self.assertFalse(delivery.allowed_path(path))
+
     def test_manual_merge_sources_are_exact_and_still_content_scanned(self):
         for path in ['tooling/pipeline/operator_merge.py', 'tooling/pipeline/test_operator_merge.py']:
             self.assertTrue(delivery.allowed_path(path), path)
@@ -100,6 +106,50 @@ class ReviewedEvalSourceSafety(unittest.TestCase):
             'pitchroom-app/packages/evals/config/task-acceptance/pitchroom-r1/other.json',
         ]:
             self.assertFalse(delivery.allowed_path(path), path)
+
+    def test_reviewed_history_is_exact_and_cannot_grant_new_paths(self):
+        path = 'pitchroom-app/docs/evals/task-acceptance-protocol.md'
+        self.assertEqual(delivery.REVIEWED_EVAL_HISTORY, {path: frozenset({
+            '5867f4b818c330fa4fbc97729a04fe4a0b2c56f8174a5e8b31789d21a139d774',
+        })})
+        self.assertEqual(delivery.REVIEWED_EVAL_SOURCES[path],
+                         '4d1056af9ef3fa3003f049155717acb5a6fbd94a5a1f8b34cfb3e0aee422a737')
+        unreviewed = 'pitchroom-app/docs/evals/unreviewed.md'
+        with patch.object(delivery, 'REVIEWED_EVAL_HISTORY', {unreviewed: {'a'*64}}):
+            self.assertFalse(delivery.allowed_path(unreviewed))
+
+    def test_real_git_accepts_both_approved_versions_but_rejects_intermediate(self):
+        import hashlib
+        source = 'pitchroom-app/docs/evals/task-acceptance-protocol.md'
+        old = b'# Synthetic previously reviewed contract\n'
+        new = b'# Synthetic newly reviewed contract\n'
+        current = {source: hashlib.sha256(new).hexdigest()}
+        historical = {source: frozenset({hashlib.sha256(old).hexdigest()})}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); original = subprocess.check_output
+            def g(*args):
+                return original(['git', *args], cwd=root, text=True).strip()
+            def output(argv, **kwargs):
+                return original(argv, cwd=root, **kwargs)
+            def commit(data, message):
+                p.write_bytes(data); g('add', '.'); g('commit', '-m', message)
+                return g('rev-parse', 'HEAD')
+            g('init', '-b', 'main'); g('config', 'user.name', 'Synthetic'); g('config', 'user.email', 'synthetic@example.invalid')
+            policy = root/'tooling/pitchroom-github-sync/allowed-files.json'
+            policy.parent.mkdir(parents=True); policy.write_text('[]')
+            p = root/source; p.parent.mkdir(parents=True)
+            previous = commit(old, 'Synthetic previous approval')
+            unsafe = commit(b'Unreviewed private content\n', 'Synthetic unsafe intermediate')
+            latest = commit(new, 'Synthetic new approval')
+            with patch.object(delivery, 'REVIEWED_EVAL_SOURCES', current), patch.object(delivery, 'REVIEWED_EVAL_HISTORY', historical), patch.object(delivery.subprocess, 'check_output', side_effect=output):
+                self.assertEqual(delivery.audit([previous, latest]), 3)
+                with self.assertRaisesRegex(ValueError, 'content changed'):
+                    delivery.audit([previous, unsafe, latest])
+                secret = ('sk-' + 'a'*32).encode()
+                secret_commit = commit(secret, 'Synthetic historical credential control')
+                with patch.object(delivery, 'REVIEWED_EVAL_HISTORY', {source: {hashlib.sha256(secret).hexdigest()}}):
+                    with self.assertRaisesRegex(ValueError, 'Possible credential'):
+                        delivery.audit([secret_commit])
 
     def test_real_git_checks_all_pinned_content_history_and_file_modes(self):
         import hashlib

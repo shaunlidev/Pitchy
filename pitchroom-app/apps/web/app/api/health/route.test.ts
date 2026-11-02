@@ -1,14 +1,22 @@
+import { randomUUID } from "node:crypto";
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { evaluationProviderKeys, evaluationProviderReferenceHash, evaluationProviderTargetFingerprint, initializeProviderBudget, type ProviderBudgetPolicy } from "@pitchroom/agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { healthResponse } from "./route";
 import { deployedEnvironment } from "../../../../../packages/domain/src/runtime-configuration.testkit";
 
 beforeEach(() => {
   for (const key of Object.keys(deployedEnvironment())) vi.stubEnv(key, undefined);
+  for (const key of evaluationProviderKeys) vi.stubEnv(key, undefined);
   vi.stubEnv("NODE_ENV", "test");
 });
 
+const directories: string[] = [];
 const original = { runtime: process.env.PITCHROOM_RUNTIME, key: process.env.OPENAI_API_KEY, model: process.env.OPENAI_MODEL, database: process.env.DATABASE_URL, ack: process.env.PITCHROOM_LIVE_TRANSFER_ACK };
 afterEach(() => {
+  for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true });
   for (const [key, value] of Object.entries({ PITCHROOM_RUNTIME: original.runtime, OPENAI_API_KEY: original.key, OPENAI_MODEL: original.model, DATABASE_URL: original.database, PITCHROOM_LIVE_TRANSFER_ACK: original.ack })) {
     if (value === undefined) delete process.env[key]; else process.env[key] = value;
   }
@@ -55,6 +63,43 @@ describe("health readiness", () => {
     const failed = await healthResponse(undefined, async () => { throw new Error("postgres://secret@localhost/private"); });
     expect(failed.status).toBe(503);
     expect(await failed.text()).not.toMatch(/secret|private|postgres:/);
+  });
+
+  it("reports a bound local budget identity without exposing runtime secrets and rejects a stale binding before probing", async () => {
+    const directory = realpathSync(mkdtempSync(join(tmpdir(), "pitchroom-pit34-health-")));
+    directories.push(directory);
+    const policy = {
+      schemaVersion: 1, acceptanceId: randomUUID(), projectId: randomUUID(), caseHash: "a".repeat(64), sourceHash: "b".repeat(64),
+      provider: "synthetic", model: "synthetic-model", observedVersion: "synthetic-model", endpoint: "https://synthetic.invalid/v1/responses",
+      approval: { evidenceRef: "test-synthetic-only", approvedAt: "2026-01-01T00:00:00Z", validUntil: "2099-01-01T00:00:00Z" },
+      pricing: { source: "https://synthetic.invalid/pricing", checkedAt: "2026-01-01T00:00:00Z", validUntil: "2099-01-01T00:00:00Z", inputMicroUsdPerMillion: 1_000_000, outputMicroUsdPerMillion: 2_000_000 },
+      inputCeiling: { tokens: 100, source: "https://synthetic.invalid/context", checkedAt: "2026-01-01T00:00:00Z", validUntil: "2099-01-01T00:00:00Z" },
+      limits: { requests: 2, inputTokens: 1000, outputTokens: 1000, microUsd: 3000, inputTokensPerRequest: 100, outputTokensPerRequest: 50, requestMs: 1000, modelActiveMs: 10_000, stageModelActiveMs: { understanding: 10_000, clarify: 10_000, positioning: 10_000, story: 10_000, legacy_deck: 10_000 }, requestBytes: 10_000, responseBytes: 10_000, ledgerBytes: 50_000 },
+    } satisfies ProviderBudgetPolicy;
+    const databaseUrl = "postgres://synthetic-user:clarify_qa@127.0.0.1:55455/pit55_" + "a".repeat(32);
+    const handle = initializeProviderBudget(directory, policy);
+    const reference = { schemaVersion: 1, ...handle, sessionId: randomUUID(), instanceId: randomUUID(), sourceHash: policy.sourceHash, caseHash: policy.caseHash, targetFingerprint: evaluationProviderTargetFingerprint(databaseUrl) };
+    const path = join(directory, "reference.json");
+    writeFileSync(path, JSON.stringify(reference), { mode: 0o600 });
+    const referenceHash = evaluationProviderReferenceHash(reference);
+    for (const [key, value] of Object.entries({ PITCHROOM_DEPLOYMENT_ENV: "local", PITCHROOM_RUNTIME: "live", DATABASE_URL: databaseUrl, OPENAI_API_KEY: "provider-auth-secret", OPENAI_MODEL: policy.model, OPENAI_BASE_URL: "https://synthetic.invalid/v1", PITCHROOM_LIVE_TRANSFER_ACK: "authorized", PITCHROOM_EVAL_BUDGET_FILE: path, PITCHROOM_EVAL_INSTANCE_ID: reference.instanceId, PITCHROOM_EVAL_SOURCE_HASH: policy.sourceHash, PITCHROOM_EVAL_CASE_HASH: policy.caseHash, PITCHROOM_EVAL_REFERENCE_HASH: referenceHash })) vi.stubEnv(key, value);
+    const probe = vi.fn(async () => true), deploymentProbe = vi.fn(async () => { throw new Error("Unexpected deployment probe"); });
+    const response = await healthResponse(probe, deploymentProbe);
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body).toMatchObject({ environment: "local", runtime: "live", externalModelEnabled: true, evaluationBudgetInstance: { kind: "isolated_budget_evaluation", instanceId: reference.instanceId, referenceHash, projectId: policy.projectId } });
+    expect(body).not.toHaveProperty("evaluationInstance");
+    expect(JSON.stringify(body)).not.toMatch(/synthetic-user|clarify_qa|provider-auth-secret|postgres:/);
+    expect(JSON.stringify(body)).not.toContain(directory);
+    expect(probe).toHaveBeenCalledExactlyOnceWith(databaseUrl);
+    expect(deploymentProbe).not.toHaveBeenCalled();
+    probe.mockClear();
+    vi.stubEnv("PITCHROOM_EVAL_REFERENCE_HASH", "f".repeat(64));
+    const refused = await healthResponse(probe, deploymentProbe);
+    expect(refused.status).toBe(503);
+    expect(await refused.json()).toEqual({ status: "not_ready", code: "INVALID_EVALUATION_INSTANCE" });
+    expect(probe).not.toHaveBeenCalled();
+    expect(deploymentProbe).not.toHaveBeenCalled();
   });
 
   it("rejects an unknown runtime before probing storage or reporting ready", async () => {

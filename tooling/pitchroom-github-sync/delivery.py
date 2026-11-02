@@ -19,11 +19,20 @@ RUNTIME_PARTS = {'.pitchroom', '.gstack', '.multica', '.multica-round', '.pipeli
 # PIT-58: only the five reviewed product-contract sources from PIT-50 1dba35e.
 # New content requires explicit review and a new receipt; no docs/config wildcard.
 REVIEWED_EVAL_SOURCES = {
-    'pitchroom-app/docs/evals/task-acceptance-protocol.md': '5867f4b818c330fa4fbc97729a04fe4a0b2c56f8174a5e8b31789d21a139d774',
+    'pitchroom-app/docs/evals/task-acceptance-protocol.md': '4d1056af9ef3fa3003f049155717acb5a6fbd94a5a1f8b34cfb3e0aee422a737',
     'pitchroom-app/packages/evals/config/task-acceptance/pitchroom-r1/case.json': '15a6342a74087a57014392b2e368d2614bd774a27705b7716ceec05e6645a5ca',
     'pitchroom-app/packages/evals/config/task-acceptance/pitchroom-r1/materials.json': '3af4723a9aaf0c82ff57aa8e20cebfc1d682d0a87718c0b3d3cceb16b5206f21',
     'pitchroom-app/packages/evals/config/task-acceptance/pitchroom-r1/oracle.json': 'a0753a978dee2bd8cb4406f2351c262ab7b8360ce9495197f428ec2b22654deb',
     'pitchroom-app/packages/evals/config/task-acceptance/pitchroom-r1/task.md': '24940981939f3c5cc25a724ad34cb75c88a1da4c511d16d9e4a92226a9b0b42b',
+}
+
+
+# Retain the PIT-58-approved original during full PR-history scans. The current
+# version above was separately approved for PIT-55; neither permits other bytes.
+REVIEWED_EVAL_HISTORY = {
+    'pitchroom-app/docs/evals/task-acceptance-protocol.md': frozenset({
+        '5867f4b818c330fa4fbc97729a04fe4a0b2c56f8174a5e8b31789d21a139d774',
+    }),
 }
 
 
@@ -56,6 +65,8 @@ def allowed_path(path, reviewed=()):
         'tooling/pipeline/artifacts.py',
         'tooling/pipeline/serial.py',
         'tooling/pipeline/operator_merge.py',
+        'tooling/pipeline/capacity.py',
+        'tooling/pipeline/test_capacity.py',
         'tooling/pipeline/test_operator_merge.py',
         'tooling/pipeline/github_sync.py',
         'tooling/pipeline/runtime.json',
@@ -122,8 +133,10 @@ def audit(commits):
                 raise ValueError(f'Oversized committed file: {path}')
             data = subprocess.check_output(['git', 'cat-file', 'blob', oid])
             expected = REVIEWED_EVAL_SOURCES.get(path)
-            if expected is not None and hashlib.sha256(data).hexdigest() != expected:
-                raise ValueError(f'Reviewed source content changed: {path}; explicit review required')
+            if expected is not None:
+                digest = hashlib.sha256(data).hexdigest()
+                if digest != expected and digest not in REVIEWED_EVAL_HISTORY.get(path, ()):
+                    raise ValueError(f'Reviewed source content changed: {path}; explicit review required')
             check(path, data)
     return len(seen)
 

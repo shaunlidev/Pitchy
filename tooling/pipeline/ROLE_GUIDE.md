@@ -76,3 +76,22 @@ Reports may declare `evidence_files`, a unique list of relative files inside the
 Before executing frozen checks or publishing a verdict, the controller copies the report and declared files into `.state/pipeline/role-evidence/PIT-N/generation/role/run/`. The manifest binds actor/run/source/contract, original path, bytes and SHA256. Files outside that workspace, symlinks, missing/changed files and repeat submissions hold. An interrupted copy keeps its intent, partial files and consumed reservation; it cannot be overwritten or retried under the same run. A later independently authorized run has another evidence directory. The original native files stay unchanged. Verification reads the retained manifest and files, so native workspace cleanup does not destroy declared evidence.
 
 The operator must allocate storage first. Roles must not create/edit `.state/pipeline/evidence-budget.json` or reservations. Missing/exhausted budget holds; it never authorizes deletion, uploads or recordings. Controller check logs and handoffs also consume reservations. A command exceeding available output storage holds before writing those outputs; retained role evidence and earlier failures remain. Budget refusal is a missing-evidence hold, never a passed check.
+
+## Capacity-bound execution
+
+For newly admitted work, the operator declares `capacity_scope` before dispatch;
+Developer `allowed_paths` must match it exactly. Keep the actual native branch
+and workspace intact. The canonical controller binds them to the actual run and
+rejects another run's resources. Frozen commands receive `PORT`, `PGDATABASE`,
+`DATABASE_URL`, `PITCHROOM_TEST_DATABASE_URL`, `PITCHROOM_BROWSER_STATE_DIR`,
+`PITCHROOM_BUILD_OUTPUT` and `PITCHROOM_CAPACITY_LEASE`. Use those isolated
+resources; do not substitute a fixed port/database/browser profile. A missing
+synthetic service is a hold, never permission to use private state or install.
+Native commands outside the controller do not automatically receive this env.
+
+If main advances, report the compatibility gap. Old CI/Review/QA cannot authorize
+integration; preserve prior reports and rework the original task on current main.
+Each new generation requires fresh checks and independent roles. Only the human
+operator may authorize capacity, retire a lease or record merge intent. Current
+production remains one lane, with its schedule paused. Synthetic two-lane tests
+do not authorize two real tasks.

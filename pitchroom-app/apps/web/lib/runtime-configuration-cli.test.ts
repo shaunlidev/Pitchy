@@ -2,7 +2,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { deployedEnvironment } from "../../../packages/domain/src/runtime-configuration.testkit";
 
@@ -75,6 +75,24 @@ describe("configuration CLI and worker entry", () => {
       expect(result.stderr).toContain("Clarification worker failed.");
       expect(result.stdout + result.stderr).not.toMatch(/test-synthetic-provider-key|example/);
       expect(result.error).toBeUndefined();
+    }
+  });
+
+  it("refuses partial evaluation bindings before network access with explicit live runtime, with or without the live flag", () => {
+    const preloader = join(temporaryCwd(), "refuse-network.mjs");
+    writeFileSync(preloader, `import { Socket } from "node:net";
+const refuse = () => { process.stderr.write("UNEXPECTED_NETWORK_ATTEMPT\\n"); throw new Error("Unexpected network attempt"); };
+Socket.prototype.connect = refuse;
+globalThis.fetch = async () => refuse();
+`);
+    for (const flags of [[], ["--live"]]) {
+      const result = spawnSync(process.execPath, ["--import", "tsx", "--import", pathToFileURL(preloader).href, "scripts/clarification-worker.ts", "--once", ...flags], {
+        cwd: appRoot, env: { PATH: process.env.PATH, NODE_ENV: "test", PITCHROOM_DEPLOYMENT_ENV: "local", PITCHROOM_RUNTIME: "live", DATABASE_URL: "postgres://synthetic-user:clarify_qa@127.0.0.1:1/pit55_" + "a".repeat(32), OPENAI_API_KEY: "provider-auth-secret", OPENAI_MODEL: "synthetic-model", OPENAI_BASE_URL: "https://synthetic.invalid/v1", PITCHROOM_LIVE_TRANSFER_ACK: "authorized", PITCHROOM_EVAL_INSTANCE_ID: "11111111-1111-4111-8111-111111111111" }, encoding: "utf8", timeout: 10_000,
+      });
+      expect(result.status).toBe(1);
+      expect(result.error).toBeUndefined();
+      expect(result.stderr).toContain("Clarification worker failed.");
+      expect(result.stdout + result.stderr).not.toMatch(/UNEXPECTED_NETWORK_ATTEMPT|synthetic-user|clarify_qa|provider-auth-secret/);
     }
   });
 });

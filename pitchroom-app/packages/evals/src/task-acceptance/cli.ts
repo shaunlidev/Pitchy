@@ -1,3 +1,4 @@
+import { auditProviderBudget } from "./provider-budget-audit";
 import { lstatSync, readFileSync, realpathSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -19,6 +20,7 @@ report --run FILE
 review-packet --run FILE --checkpoint HASH --actor ID
 review-record --run FILE --file RECORD.json
 assess --run FILE
+provider-budget-audit --budget-directory ABSOLUTE --policy-hash SHA256
 
 No arguments or --help prints this help without preparing or dispatching work.
 prepare is local only. advance stops at the next human boundary and never Applies or Accepts.
@@ -26,9 +28,9 @@ record-decision requires actor, time, checkpointHash, capability, assistance and
 An awaiting_human result includes exact displayed choices and the actual product workspace.
 Live runtime/provider dispatch is unavailable here; frozen inputs do not authorize it.
 `;
-const commandSchema = z.enum(["prepare", "advance", "record-decision", "audit", "report", "review-packet", "review-record", "assess"]);
+const commandSchema = z.enum(["prepare", "advance", "record-decision", "audit", "report", "review-packet", "review-record", "assess", "provider-budget-audit"]);
 const prepareOptions = ["case", "launch-receipt", "accounting-policy", "source-repository", "session-id", "maximum-bytes", "purpose"];
-const commandOptions = { prepare: prepareOptions, advance: ["run"], "record-decision": ["run", "file"], audit: ["run"], report: ["run"], "review-packet": ["run", "checkpoint", "actor"], "review-record": ["run", "file"], assess: ["run"] };
+const commandOptions = { prepare: prepareOptions, advance: ["run"], "record-decision": ["run", "file"], audit: ["run"], report: ["run"], "review-packet": ["run", "checkpoint", "actor"], "review-record": ["run", "file"], assess: ["run"], "provider-budget-audit": ["budget-directory", "policy-hash"] };
 
 function decisionFile(path: string): unknown {
   assertUnlinkedPath(path);
@@ -41,7 +43,7 @@ export async function runTaskAcceptanceCLI(args: string[], output: (value: strin
   try {
     if (!args.length || args.includes("--help")) { output(help); return 0; }
     const parsed = parseArgs({ args, allowPositionals: true, strict: true, options: {
-      case: { type: "string" }, "launch-receipt": { type: "string" }, "accounting-policy": { type: "string" }, "source-repository": { type: "string" },
+      "budget-directory": { type: "string" }, "policy-hash": { type: "string" }, case: { type: "string" }, "launch-receipt": { type: "string" }, "accounting-policy": { type: "string" }, "source-repository": { type: "string" },
       "session-id": { type: "string" }, "maximum-bytes": { type: "string" }, purpose: { type: "string" }, run: { type: "string" }, file: { type: "string" }, checkpoint: { type: "string" }, actor: { type: "string" },
     } });
     if (parsed.positionals.length !== 1) throw new Error("TASK_COMMAND_REQUIRED");
@@ -60,6 +62,7 @@ export async function runTaskAcceptanceCLI(args: string[], output: (value: strin
       case "record-decision": result = await recordDecision({ run: { referenceFile: path("run") }, decision: decisionFile(path("file")) }); break;
       case "audit": result = audit({ referenceFile: path("run") }); break;
       case "report": result = report({ referenceFile: path("run") }); break;
+      case "provider-budget-audit": result = auditProviderBudget({ directory: values["budget-directory"], policyHash: values["policy-hash"] }); break;
       case "assess": result = assessTask({ referenceFile: path("run") }); break;
       case "review-packet": result = issueReviewPacket({ referenceFile: path("run") }, { checkpointHash: values.checkpoint, actorId: values.actor }); break;
       case "review-record": result = recordReviewEvidence({ referenceFile: path("run") }, decisionFile(path("file"))); break;

@@ -37,7 +37,9 @@ export async function healthResponse(databaseProbe: (url: string) => Promise<boo
   }
   const ready = databaseReady;
   return NextResponse.json(
-    { status: ready ? "ready" : "not_ready", ...configurationSummary(configured.config), ...(instance.kind === "enabled" ? { evaluationInstance: instance.identity } : {}), checks: { configuration: true, database: databaseReady, liveModel: true } },
+    { status: ready ? "ready" : "not_ready", ...configurationSummary(configured.config), ...(instance.kind === "enabled" ? { evaluationInstance: instance.identity } : {}),
+      ...(instance.kind === "budgeted_live" ? { evaluationBudgetInstance: instance.identity } : {}),
+      checks: { configuration: true, database: databaseReady, liveModel: true } },
     { status: ready ? 200 : 503, headers: { "cache-control": "no-store" } },
   );
 }

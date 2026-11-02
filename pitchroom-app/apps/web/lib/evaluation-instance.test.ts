@@ -3,8 +3,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { evaluationInstance, evaluationRequestGuard } from "./evaluation-instance";
 import { GET, POST } from "../app/api/workspace/route";
 import { healthResponse } from "../app/api/health/route";
+import * as agent from "@pitchroom/agent";
 
-afterEach(() => vi.unstubAllEnvs());
+afterEach(() => { vi.unstubAllEnvs(); vi.restoreAllMocks(); });
 const environment = () => ({ PITCHROOM_RUNTIME: "fixture", PITCHROOM_EVAL_INSTANCE_ID: randomUUID(), PITCHROOM_EVAL_SOURCE_HASH: "a".repeat(64) });
 function configure(input = environment()) {
   for (const [name, value] of Object.entries(input)) vi.stubEnv(name, value);
@@ -59,5 +60,25 @@ describe("operator-owned isolated evaluation identity", () => {
     expect(await response.json()).toMatchObject({ runtime: "fixture", evaluationInstance: { kind: "isolated_evaluation_instance", pid: process.pid, projectSelector: "atelier" } });
     vi.stubEnv("PITCHROOM_EVAL_INSTANCE_ID", undefined); vi.stubEnv("PITCHROOM_EVAL_SOURCE_HASH", undefined);
     expect(await (await healthResponse()).json()).not.toHaveProperty("evaluationInstance");
+  });
+  it("keeps budgeted runtime identity separate from formal task acceptance and binds every request", async () => {
+    const env = configure({ ...environment(), PITCHROOM_RUNTIME: "live" });
+    const identity = { kind: "isolated_budget_evaluation" as const, runtime: "live" as const, pid: process.pid,
+      instanceId: env.PITCHROOM_EVAL_INSTANCE_ID, sourceFingerprint: env.PITCHROOM_EVAL_SOURCE_HASH, targetFingerprint: "b".repeat(64),
+      sessionId: randomUUID(), acceptanceId: randomUUID(), policyHash: "c".repeat(64), caseHash: "d".repeat(64), projectId: randomUUID(), referenceHash: "e".repeat(64) };
+    vi.spyOn(agent, "evaluationProviderIdentity").mockReturnValue(identity);
+    vi.stubEnv("DATABASE_URL", "postgres://test-user:synthetic@127.0.0.1:55455/pit55_" + "a".repeat(32));
+    vi.stubEnv("OPENAI_API_KEY", "test-synthetic-only"); vi.stubEnv("OPENAI_MODEL", "synthetic-model"); vi.stubEnv("PITCHROOM_LIVE_TRANSFER_ACK", "authorized");
+    const payload = await (await healthResponse(async () => true)).json();
+    expect(payload.evaluationBudgetInstance).toEqual(identity); expect(payload).not.toHaveProperty("evaluationInstance");
+    const headers = { "x-pitchroom-eval-instance": identity.instanceId, "x-pitchroom-eval-source": identity.sourceFingerprint, "x-pitchroom-eval-target": identity.targetFingerprint, "x-pitchroom-eval-budget": identity.referenceHash };
+    expect(evaluationRequestGuard(new Request("http://127.0.0.1", { headers }))).toBeUndefined();
+    expect(evaluationRequestGuard(new Request("http://127.0.0.1", { headers: { ...headers, "x-pitchroom-eval-budget": "stale-session" } }))?.status).toBe(409);
+  });
+  it("does not silently disable partial budget configuration", () => {
+    for (const key of ["PITCHROOM_EVAL_BUDGET_FILE", "PITCHROOM_EVAL_CASE_HASH", "PITCHROOM_EVAL_REFERENCE_HASH"]) {
+      expect(evaluationInstance({ PITCHROOM_RUNTIME: "live", [key]: "partial" }).kind).toBe("invalid");
+      expect(evaluationInstance({ ...environment(), [key]: "partial" }).kind).toBe("invalid");
+    }
   });
 });

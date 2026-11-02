@@ -36,9 +36,9 @@ Use unique stable IDs for blocks/bases/unknowns. Rationale basisRefs must not be
     return {story:validateStory(result.data.story,{...snapshot,sources:eligibleSources}),responseToJudgment:result.data.responseToJudgment};
   }
 }
-export function createLiveStoryRunner(config:{apiKey?:string;model?:string;baseURL?:string}) {
+export function createLiveStoryRunner(config:{apiKey?:string;model?:string;baseURL?:string;fetch?:typeof fetch}) {
   if(!config.apiKey||!config.model) throw new PitchroomError("INVALID_INPUT","A configured API key and pinned model are required for live story generation.");
-  return new ResponsesStoryRunner({apiKey:config.apiKey,model:config.model,baseURL:config.baseURL??"https://api.openai.com/v1"});
+  return new ResponsesStoryRunner({apiKey:config.apiKey,model:config.model,baseURL:config.baseURL??"https://api.openai.com/v1",fetch:config.fetch});
 }
 export class SyntheticStoryRunner implements StoryRunner {
   async run(snapshot:StorySnapshot) {

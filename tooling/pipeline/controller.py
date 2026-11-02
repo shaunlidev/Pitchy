@@ -197,6 +197,15 @@ class Controller:
                                      or issue.get("metadata", {}).get("supplemental_review", "off") != "off"):
             raise Hold("Legacy task cannot adopt a new route")
 
+    def admission_check(self, issue, issues):
+        return None
+
+    def admit_lane(self, lane, issue):
+        return None
+
+    def check_environment(self, lane, role, checkout_path, run_id):
+        return {}
+
     def dispatch(self, apply=False):
         issues, lanes = self.issues(), self.lanes()
         active = self.active_issues(issues)
@@ -218,6 +227,7 @@ class Controller:
                 if key in lanes:
                     raise Hold("lane already reserved; no duplicate start")
                 self.dependencies(item, issues)
+                self.admission_check(item, issues)
                 required = requirements(item.get("description") or "")
             except Hold as e:
                 result["held"][key] = str(e)
@@ -236,6 +246,7 @@ class Controller:
             lane = {"issue": key, "id": item["id"], "generation": 1, "phase": "developer",
                     "description": item.get("description") or "", "requirements": required,
                     "description_sha256": digest(item.get("description") or ""), "repairs": 0, "routing": routing}
+            self.admit_lane(lane, fresh)
             self.save(lane)
             self.call(["issue", "assign", item["id"], "--to-id", self.role_actor(lane, "developer"), "--no-start"])
             self.call(["issue", "update", item["id"], "--status", "todo", "--output", "json"])
@@ -609,6 +620,7 @@ class Controller:
             cwd.relative_to(Path(checkout_path).resolve())
             env = {k: v for k, v in os.environ.items() if k in ("PATH", "HOME", "TMPDIR", "SYSTEMROOT")}
             env.update(CI="1", PITCHROOM_DELIVERY_COMMIT=artifact["commit"], PITCHROOM_DELIVERY_TREE=artifact["tree"], PITCHROOM_ISOLATED_QA="1")
+            env.update(self.check_environment(lane, role, checkout_path, run_id))
             try:
                 proc = subprocess.run(check["argv"], cwd=cwd, env=env, capture_output=True, text=True, timeout=180)
                 code, stdout, stderr = proc.returncode, proc.stdout, proc.stderr

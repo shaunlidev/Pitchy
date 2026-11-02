@@ -1,6 +1,6 @@
 # Full-task semantic acceptance contract — v1
 
-Owner: PIT-50 under PIT-49. Scope: schemas, R1 input/oracle and freeze contract. This is not a task runner, model adapter or quality result. No `eval:task` command exists yet. PIT-51–57 implement persistence, HTTP, sequencing, grading, provider limits and diagnostic regression.
+Owner: PIT-50 under PIT-49. Sections 1–7 record the schemas, R1 input/oracle and freeze contract. Subsequent delivery adds the `eval:task` CLI; section 8 describes PIT-55's provider budget and its separate engineering verification. Neither a valid contract nor a budget audit is a model-quality result.
 
 ## 1. Authority and entry points
 
@@ -59,3 +59,36 @@ Keep userTask awaiting_observation until actual evidence exists. A pass is expli
 Required: parse the committed R1 draft, verify five source receipts and all oracle quotes; reject mismatched bytes/versions, missing frozen task context, duplicate IDs, stale approvals and score bindings; prove allowlisted model preview excludes private oracle/confirmation; preserve source boundary/original words. Unit tests are offline and make no provider requests. Package typecheck and existing eval tests are appropriate; app build/database/browser are unaffected and not claims of this task.
 
 Case freeze and engineering completion are separate. R1 1.0.0 is owner-confirmed and frozen. PIT-50 engineering completion still follows current project integration policy (review, QA, approved merge and integration checks); no task is marked done solely because local tests passed. A future draft must not be falsely frozen to close an issue. No installation, private data access, model call, recording or deployment is implied. Preserve original dirty workspace and evidence; scoped work starts from fixed integrated main in its own worktree. Future tasks must consume the accepted artifact, not merely an issue status or stage number.
+
+## 8. Isolated provider budget — PIT-55
+
+`initializeProviderBudget` creates one private, append-only ledger for an acceptance ID. Its policy pins project, case/code hashes, provider/model/observed version, endpoint, approval and price evidence, the documented model input ceiling, and request/token/cost/time/byte limits. Each actual provider request reserves its worst permitted consumption before transport. Internal tool rounds and failed requests count separately. Missing usage or an unknown result retains the full reservation and blocks further calls. A monotonic clock measures model activity; human review and paused time do not consume active time.
+
+The separate high-water anchor detects journal truncation and partial rollback. It does not defend against an administrator restoring or rewriting every local record. Keep both ledger and anchor. `ready` means no unresolved request; the next atomic reservation still checks remaining allowances. Never clear a pending/unknown record to make a run continue.
+
+Both Web and Clarify worker consume an explicit private `PITCHROOM_EVAL_BUDGET_FILE`. Its reference contains the ledger directory/policy hash, session and instance IDs, case/code hashes, and `targetFingerprint`. The target must be a numeric-loopback PostgreSQL database named `pit55_<32 hex characters>`. Derive its fingerprint with `evaluationProviderTargetFingerprint`; pin the parsed reference with `evaluationProviderReferenceHash` in `PITCHROOM_EVAL_REFERENCE_HASH`. All evaluation identity fields must agree. Partial configuration, another target, or a replaced reference fails closed. These are operator-owned launch bindings, not authentication, build attestation, or independent proof of user consent.
+
+Health exposes this configuration as `evaluationBudgetInstance`. Requests must carry the matching `x-pitchroom-eval-instance`, `x-pitchroom-eval-source`, `x-pitchroom-eval-target`, and `x-pitchroom-eval-budget` headers. The existing formal task client continues to accept only fixture/postgres-fake `evaluationInstance` identities. A budgeted runtime does not grant formal live workflow admission or a semantic pass.
+
+The worker validates the same target before connecting and checks for unresolved provider calls before claiming work. An already admitted polling worker waits while a Web request holds a pending reservation; it does not resend a provider request. Startup with unresolved consumption or any unknown outcome still fails closed. Each reservation records the active attempt's command, task and attempt IDs, including an explicit retry. A new session requires a new pinned reference and runtime launch but uses the same acceptance directory and policy hash. Audit the original budget before continuing; changing session IDs does not refund consumption.
+
+Read the cumulative balance and every actual request without dispatching anything:
+
+```sh
+# From pitchroom-app/packages/evals, with the existing supported Node runtime.
+node --import tsx src/task-acceptance/cli.ts provider-budget-audit \
+  --budget-directory /absolute/private/acceptance-directory \
+  --policy-hash <sha256>
+```
+
+The result is `provider_budget_integrity_only`; `liveAdmission` remains `not_granted`. Actual model execution additionally needs the existing exact material-transfer approval, current official provider pricing/context evidence, a human-approved execution budget, and the formal workflow's separate admission path. This implementation supplies no production/global rate limiter.
+
+`scripts/qa-provider-budget.ts` verifies the actual Web routes, PostgreSQL persistence and separate live-runner worker using a test-only preloaded synthetic transport. It requires an existing Docker image and Chrome; it installs neither. It creates only a new owned database, rejects unexpected transport destinations, proves durable reservation precedes each fake provider response, and records bounded metadata without browser recordings. Run only after reserving its evidence allowance:
+
+```sh
+# From pitchroom-app; PIT55_EVIDENCE_DIRECTORY must be a new absolute directory.
+PIT55_EVIDENCE_DIRECTORY=/absolute/private/new-run \
+  node --import tsx scripts/qa-provider-budget.ts
+```
+
+The scenario covers the actual Understanding tool loop, malformed Clarify output, browser/runtime restart with unchanged cumulative balance, explicit retry attribution, and missing-usage holds across worker restart. Synthetic prices, usage, keys and response bodies are engineering fixtures. The run does not establish real-provider compatibility, model quality, user acceptance, or oracle isolation for a real material package. Existing isolated primitive tests separately cover process competition, deadlines, byte/token/cost limits and killed-process reservations.
