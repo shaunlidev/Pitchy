@@ -10,7 +10,7 @@ import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[2]
-REPO = "shaunlidev/pitchroom"
+REPO = "shaunlidev/Pitchy"
 URL = f"https://github.com/{REPO}.git"
 MIRROR = ROOT / ".pitchroom-github"
 HELPER = "tooling/pitchroom-github-sync"
