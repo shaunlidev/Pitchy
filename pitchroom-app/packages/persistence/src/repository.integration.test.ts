@@ -32,6 +32,41 @@ describe("PostgreSQL repository contract", () => {
     expect(await repository.getChunk(other.id, chunk.id)).toBeUndefined();
   });
 
+  it("returns the saved filename across normalized duplicates, historical retries and explicit restoration", async () => {
+    const project = await repository.createProject("Import receipts");
+    const input = { name: "a.md", mediaType: "text/markdown" as const, text: "Cafe\u0301\r\nsource." };
+    const other = { name: "b.txt", mediaType: "text/plain" as const, text: "Café\nsource." };
+    const { source, receipt } = await repository.addMaterialWithReceipt(project.id, input, "first");
+    const actual = { sourceId: source.id, sourceName: "a.md" };
+    expect(receipt).toEqual({ ...actual, commandId: "first", outcome: "created" });
+    const chunks = (await repository.listSources(project.id))[0]!.chunks;
+    expect((await repository.addMaterialWithReceipt(project.id, other, "second")).receipt).toEqual({ ...actual, commandId: "second", outcome: "reused" });
+    expect((await repository.addMaterialWithReceipt(project.id, other, "second")).receipt).toEqual({ ...actual, commandId: "second", outcome: "replayed" });
+    await expect(repository.addMaterialWithReceipt(project.id, { ...other, text: "Different." }, "second")).rejects.toMatchObject({ code: "CONFLICT" });
+    const distinct = await repository.addMaterial(project.id, { ...input, text: "Different." }, "third");
+    expect(distinct.name).toBe("a.md"); expect(distinct.id).not.toBe(source.id);
+    await repository.removeMaterial(project.id, source.id);
+    await expect(repository.addMaterialWithReceipt(project.id, other, "second")).rejects.toMatchObject({ code: "CONFLICT" });
+    expect((await repository.addMaterialWithReceipt(project.id, other, "restore")).receipt).toEqual({ ...actual, commandId: "restore", outcome: "restored" });
+    expect(await repository.listSources(project.id)).toContainEqual(expect.objectContaining({ id: source.id, name: "a.md", chunks }));
+    expect(await repository.getCommandReceipt(project.id, "restore")).toMatchObject({ resourceId: source.id });
+  });
+
+  it("classifies concurrent imports by the row and command that won the project lock", async () => {
+    const project = await repository.createProject("Concurrent import receipts");
+    const input = { name: "a.txt", mediaType: "text/plain" as const, text: "Shared bytes." };
+    const completed = await Promise.all(["a.txt", "b.txt"].map(name =>
+      repository.addMaterialWithReceipt(project.id, { ...input, name }, name)));
+    const created = completed.find(item => item.receipt.outcome === "created")!;
+    const reused = completed.find(item => item.receipt.outcome === "reused")!;
+    expect(reused.receipt.sourceId).toBe(created.source.id);
+    expect(reused.receipt.sourceName).toBe(created.source.name);
+    const attempts = await Promise.all([0, 1].map(() => repository.addMaterialWithReceipt(project.id, { ...input, text: "Another source." }, "one-command")));
+    expect(attempts.map(item => item.receipt.outcome).sort()).toEqual(["created", "replayed"]);
+    expect(attempts[0]!.source.id).toBe(attempts[1]!.source.id);
+    expect(await repository.listSources(project.id)).toHaveLength(2);
+  });
+
   it("restores removed material only through a new explicit import while retaining its source and chunks", async () => {
     const project=await repository.createProject("Removed material re-import QA");
     const input={name:"first.txt",mediaType:"text/plain",text:"Synthetic original source."} satisfies Parameters<PitchroomRepository["addMaterial"]>[1];
