@@ -1,5 +1,6 @@
 import {positioningSelectionKey,positioningProposalV1Schema,assertPositioningHead,changePositioningChoice,positioningProposalForCandidate,readPositioning,resolvePositioningChoice,validateRetainedPositioningChoice,type PositioningHead,type PositioningWordingInput,type RetainedPositioningChoice} from "@pitchroom/domain";
-import { topicRefSchema, topicLabel, sameTopic, type TopicMaterial, type TopicRef } from "@pitchroom/domain";
+import { topicRefSchema, topicLabel, sameTopic, type IngestedMaterial, type MaterialInput, type TopicMaterial, type TopicRef } from "@pitchroom/domain";
+import type { MaterialImportReceipt } from "@pitchroom/persistence";
 import { ingestBrief, briefText, saveBriefSchema, stableHash, normalizeMaterialText, type BriefWorkspace } from "@pitchroom/domain";
 import { SyntheticStoryRunner } from "@pitchroom/agent";
 import { assertStoryHead, sameStoryOrigin, storyIsFresh, sourceFingerprint, compareStories, exactStoryEdit, storyToDeck, type StoryHead, type StoryRequest, type StorySnapshot, type StoryProposal } from "@pitchroom/domain";
@@ -36,9 +37,11 @@ export type FixtureState = {
 };
 
 const makeState = (): FixtureState => ({ mode: "synthetic-fixture", project: { id: "00000000-0000-4000-8000-000000000001", name: "Atelier pitch", phase: "empty", revision: 0 }, brief: { head: null, versions: [] }, topicMaterials: [], removedSources: [], sources: [], versions: [], positioningVersions: [], deckVersions: [], workflowRuns: [], clarifications: [], events: [] });
-const globalStore = globalThis as typeof globalThis & { __pitchroomFixture?: FixtureState };
+type MaterialCommandReceipt = { commandType: "add_material" | "topic_material"; requestHash: string; resourceId: string };
+const globalStore = globalThis as typeof globalThis & { __pitchroomFixture?: FixtureState; __pitchroomFixtureMaterialReceipts?: Map<string, MaterialCommandReceipt> };
 const state = globalStore.__pitchroomFixture ?? makeState();
 globalStore.__pitchroomFixture = state;
+const materialReceipts = globalStore.__pitchroomFixtureMaterialReceipts ??= new Map<string, MaterialCommandReceipt>();
 const addEvent = (label: string, detail: string) => state.events.push({ sequence: state.events.length + 1, label, detail, at: new Date().toISOString() });
 export function agentReviewForChunks(chunks: Array<{ text: string }>): AgentReview | undefined {
   const affectedChunks = chunks.filter((chunk) => isInstructionLikeSourceText(chunk.text)).length;
@@ -67,7 +70,7 @@ export const readFixtureState = (): FixtureState => {
   if(result.positioning)result.positioning={...result.positioning,head:readPositioning(result.positioning).head};
   return result;
 };
-export function resetFixtureState() { delete state.story; storyReceipts.clear(); positioningReceipts.clear(); briefReceipts.clear(); topicReceipts.clear(); Object.assign(state, makeState()); return readFixtureState(); }
+export function resetFixtureState() { delete state.story; storyReceipts.clear(); positioningReceipts.clear(); briefReceipts.clear(); materialReceipts.clear(); Object.assign(state, makeState()); return readFixtureState(); }
 
 const briefReceipts = new Map<string, string>();
 function fixtureStoredCharacters() {
@@ -99,22 +102,69 @@ export function saveFixtureBrief(raw: unknown) {
   return readFixtureState();
 }
 
-export function addFixtureMaterial(input: { name: string; mediaType: "text/plain" | "text/markdown"; text: string }) {
+function previousMaterialCommand(commandId: string, commandType: MaterialCommandReceipt["commandType"], requestHash: string) {
+  const previous = materialReceipts.get(commandId);
+  if (previous && (previous.commandType !== commandType || previous.requestHash !== requestHash)) {
+    throw new PitchroomError("CONFLICT", "Command already used for another material change.");
+  }
+  return previous;
+}
+
+function materialImportResult(commandId: string, source: WorkspaceMaterial, outcome: MaterialImportReceipt["outcome"]) {
+  const materialImport: MaterialImportReceipt = { commandId, sourceId: source.sourceId, sourceName: source.name, outcome };
+  return { state: readFixtureState(), materialImport };
+}
+
+function replayFixtureImport(commandId: string, previous: MaterialCommandReceipt) {
+  const isOriginal = (source: WorkspaceMaterial) => source.sourceId === previous.resourceId && source.kind !== "brief";
+  const active = state.sources.find(isOriginal);
+  if (active) return materialImportResult(commandId, active, "replayed");
+  const removed = state.removedSources?.find(isOriginal);
+  if (!removed) throw new PitchroomError("PERSISTENCE_ERROR", "Material receipt points to a missing source.");
+  if (previous.commandType === "add_material") throw new PitchroomError("CONFLICT", "This material was removed after its original save. Re-add it explicitly with a new command.");
+  return materialImportResult(commandId, removed, "replayed");
+}
+
+function storeFixtureFile(ingested: IngestedMaterial): { source: WorkspaceMaterial; outcome: "created" | "reused" | "restored" } {
+  const sameFile = (source: WorkspaceMaterial) => source.kind !== "brief" && source.contentHash === ingested.contentHash;
+  const active = state.sources.find(sameFile);
+  if (active) return { source: active, outcome: "reused" };
+  const removed = state.removedSources?.find(sameFile);
+  if (removed) {
+    state.removedSources = state.removedSources?.filter(source => source.sourceId !== removed.sourceId);
+    state.sources.push(removed);
+    return { source: removed, outcome: "restored" };
+  }
+  const removedCharacters = (state.removedSources ?? []).reduce((sum, source) => sum + source.content.length, 0);
+  if (fixtureStoredCharacters() + removedCharacters + ingested.content.length > defaultProjectCharacterLimit) {
+    throw new PitchroomError("INVALID_INPUT", "Material would exceed the project text limit.", { limit: defaultProjectCharacterLimit });
+  }
+  const source = { ...ingested, agentReview: agentReviewForChunks(ingested.chunks) };
+  state.sources.push(source);
+  return { source, outcome: "created" };
+}
+
+export function addFixtureMaterial(input: MaterialInput) {
+  return addFixtureMaterialWithReceipt(input, crypto.randomUUID()).state;
+}
+
+export function addFixtureMaterialWithReceipt(input: MaterialInput, commandId: string) {
+  const ingested = ingestMaterial(state.project.id, input);
+  const previous = previousMaterialCommand(commandId, "add_material", ingested.contentHash);
+  if (previous) return replayFixtureImport(commandId, previous);
   if (state.project.phase === "reading" || state.project.phase === "structuring") {
     throw new PitchroomError("INVALID_TRANSITION", `Material cannot be added while the project is ${state.project.phase}.`);
   }
-  const ingested = ingestMaterial(state.project.id, input);
-  const material: WorkspaceMaterial = { ...ingested, agentReview: agentReviewForChunks(ingested.chunks) };
-  if (!state.sources.some((source) => source.contentHash === material.contentHash && source.kind !== "brief") && fixtureStoredCharacters() + material.content.length > defaultProjectCharacterLimit) throw new PitchroomError("INVALID_INPUT", "Material would exceed the project text limit.", { limit: defaultProjectCharacterLimit });
-  if (!state.sources.some((source) => source.contentHash === material.contentHash && source.kind !== "brief")) state.sources.push(material);
-  state.removedSources = (state.removedSources ?? []).filter(source => source.sourceId !== material.sourceId);
+  const { source: material, outcome } = storeFixtureFile(ingested);
+  materialReceipts.set(commandId, { commandType: "add_material", requestHash: ingested.contentHash, resourceId: material.sourceId });
+  if (outcome === "reused") return materialImportResult(commandId, material, outcome);
   state.project.phase = "materials_ready";
   state.currentVersionId = undefined;
   state.positioning = undefined;
   if (state.deck) state.deck.stale = true;
   addEvent("Material ready", `${material.name} · ${material.chunks.length} chunk${material.chunks.length === 1 ? "" : "s"}`);
   if (material.agentReview) addEvent("Agent review required", `${material.name} · ${material.agentReview.affectedChunks} passage${material.agentReview.affectedChunks === 1 ? "" : "s"} isolated from agent use`);
-  return readFixtureState();
+  return materialImportResult(commandId, material, outcome);
 }
 
 export function removeFixtureMaterial(sourceId: string) {
@@ -398,29 +448,46 @@ export function createFixtureStoryDeck(input:{expected:StoryHead;commandId:strin
   const replay=replayStoryCommand(input);if(replay.replayed)return readFixtureState();const work=fixtureStory();assertStoryHead(input.expected,work.head);const version=work.versions.find(v=>v.id===work.head.storyId);if(!version||!storyIsFresh(version.story.origin,storyContext()))throw new PitchroomError("CONFLICT","Adopt a current story first.");const deck:DeckVersion={id:crypto.randomUUID(),number:state.deckVersions.length+1,proposal:storyToDeck({storyId:version.id,generation:work.head.generation,story:version.story}),createdBy:"agent",createdAt:new Date().toISOString()};state.deckVersions.push(deck);state.deck={...deck,stale:false};storyReceipts.set(input.commandId,replay.hash);return readFixtureState();
 }
 
-const topicReceipts = new Map<string, string>();
-export function changeFixtureTopicMaterial(input: { topic: TopicRef; commandId: string } & ({ action: "attach"; material: { name: string; mediaType: "text/plain" | "text/markdown"; text: string } } | { action: "link" | "unlink"; sourceId: string })) {
-  const topic = topicRefSchema.parse(input.topic);
-  const material = input.action === "attach" ? ingestMaterial(state.project.id, input.material) : undefined;
-  const hash = stableHash(JSON.stringify([input.action, topic, input.action === "attach" ? material?.contentHash : input.sourceId]));
-  const prior = topicReceipts.get(input.commandId);
-  if (prior) { if (prior !== hash) throw new PitchroomError("CONFLICT", "Command already used for another material change."); return readFixtureState(); }
+type FixtureAttachment = { action: "attach"; topic: TopicRef; commandId: string; material: MaterialInput };
+type FixtureRelationChange = { action: "link" | "unlink"; topic: TopicRef; commandId: string; sourceId: string };
+
+function fixtureTopicLabel(topic: TopicRef, action: "attach" | "link" | "unlink") {
   if (["reading", "structuring"].includes(state.project.phase)) throw new PitchroomError("CONFLICT", "Wait for the current material run.");
   const version = state.versions.find(version => version.id === topic.understandingId);
   if (!version) throw new PitchroomError("NOT_FOUND", "The original Understanding was not found.");
   const label = topicLabel(version.proposal, topic);
-  if (input.action !== "unlink" && state.currentVersionId !== topic.understandingId) throw new PitchroomError("CONFLICT", "This topic belongs to an older Understanding. Refresh before attaching material.");
-  const sourceId = material?.sourceId ?? (input.action !== "attach" ? input.sourceId : "");
-  if (material) {
-    if (!state.sources.some(source => source.sourceId === sourceId)) {
-      if (fixtureStoredCharacters() + material.content.length > defaultProjectCharacterLimit) throw new PitchroomError("INVALID_INPUT", "Material would exceed the project text limit.");
-      state.sources.push({ ...material, agentReview: agentReviewForChunks(material.chunks) });
-    }
-    state.removedSources = (state.removedSources ?? []).filter(source => source.sourceId !== sourceId);
-  } else if (!state.sources.some(source => source.sourceId === sourceId && source.kind !== "brief")) throw new PitchroomError("NOT_FOUND", "The source is not in the active project.");
+  if (action !== "unlink" && state.currentVersionId !== topic.understandingId) throw new PitchroomError("CONFLICT", "This topic belongs to an older Understanding. Refresh before attaching material.");
+  return label;
+}
+
+function linkFixtureSource(topic: TopicRef, label: string, sourceId: string) {
   const links = state.topicMaterials ??= [];
-  if (input.action === "unlink") state.topicMaterials = links.filter(link => !(link.sourceId === sourceId && sameTopic(link, topic)));
-  else if (!links.some(link => link.sourceId === sourceId && sameTopic(link, topic))) links.push({ ...topic, sourceId, label, status: "needs_review" });
-  topicReceipts.set(input.commandId, hash);
+  if (!links.some(link => link.sourceId === sourceId && sameTopic(link, topic))) links.push({ ...topic, sourceId, label, status: "needs_review" });
+}
+
+export function attachFixtureTopicMaterialWithReceipt(input: FixtureAttachment) {
+  const topic = topicRefSchema.parse(input.topic);
+  const ingested = ingestMaterial(state.project.id, input.material);
+  const requestHash = stableHash(JSON.stringify([input.action, topic, ingested.contentHash]));
+  const previous = previousMaterialCommand(input.commandId, "topic_material", requestHash);
+  if (previous) return replayFixtureImport(input.commandId, previous);
+  const label = fixtureTopicLabel(topic, input.action);
+  const { source, outcome } = storeFixtureFile(ingested);
+  linkFixtureSource(topic, label, source.sourceId);
+  materialReceipts.set(input.commandId, { commandType: "topic_material", requestHash, resourceId: source.sourceId });
+  return materialImportResult(input.commandId, source, outcome);
+}
+
+export function changeFixtureTopicMaterial(input: FixtureAttachment | FixtureRelationChange) {
+  if (input.action === "attach") return attachFixtureTopicMaterialWithReceipt(input).state;
+  const topic = topicRefSchema.parse(input.topic);
+  const { sourceId, commandId, action } = input;
+  const requestHash = stableHash(JSON.stringify([action, topic, sourceId]));
+  if (previousMaterialCommand(commandId, "topic_material", requestHash)) return readFixtureState();
+  const label = fixtureTopicLabel(topic, action);
+  if (!state.sources.some(source => source.sourceId === sourceId && source.kind !== "brief")) throw new PitchroomError("NOT_FOUND", "The source is not in the active project.");
+  if (action === "unlink") state.topicMaterials = (state.topicMaterials ?? []).filter(link => !(link.sourceId === sourceId && sameTopic(link, topic)));
+  else linkFixtureSource(topic, label, sourceId);
+  materialReceipts.set(commandId, { commandType: "topic_material", requestHash, resourceId: sourceId });
   return readFixtureState();
 }

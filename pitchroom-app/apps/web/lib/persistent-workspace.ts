@@ -129,10 +129,22 @@ export async function savePersistentBrief(input: unknown) {
   return readPersistentState();
 }
 
-export async function addPersistentMaterial(input: { name: string; mediaType: "text/plain" | "text/markdown"; text: string; idempotencyKey: string }) {
-  const currentProject = await project();
-  await repository().addMaterial(currentProject.id, input, input.idempotencyKey);
-  return readPersistentState();
+type FileInput = { name: string; mediaType: "text/plain" | "text/markdown"; text: string; idempotencyKey: string };
+type PersistentMode = "postgres-fake" | "live";
+
+async function readImportedWorkspace(materialImport: import("./api-contract").MaterialImportReceipt, mode: PersistentMode) {
+  try { return { state: await readPersistentState(mode), materialImport }; }
+  catch { throw new PitchroomError("PERSISTENCE_ERROR", "The saved workspace could not be read back. Retry with the original file command."); }
+}
+
+export async function addPersistentMaterialWithReceipt(input: FileInput, mode: PersistentMode = "postgres-fake") {
+  const current = await project();
+  const { receipt } = await repository().addMaterialWithReceipt(current.id, input, input.idempotencyKey);
+  return readImportedWorkspace(receipt, mode);
+}
+
+export async function addPersistentMaterial(input: FileInput) {
+  return (await addPersistentMaterialWithReceipt(input)).state;
 }
 
 export async function removePersistentMaterial(sourceId: string) {
@@ -298,6 +310,12 @@ export async function undoPersistentStory(input: { expected: import("@pitchroom/
 }
 export async function createPersistentStoryDeck(input: { expected: import("@pitchroom/domain").StoryHead; commandId: string }, mode: "postgres-fake" | "live") {
   const current = await project(); await new StoryRepository(repository().db).createDeck({ ...input, projectId: current.id }); return readPersistentState(mode);
+}
+
+export async function attachPersistentTopicMaterialWithReceipt(input: Extract<Parameters<TopicMaterialRepository["change"]>[1], { action: "attach" }>, mode: PersistentMode = "postgres-fake") {
+  const current = await project();
+  const materialImport = await new TopicMaterialRepository(repository().db).changeWithReceipt(current.id, input);
+  return readImportedWorkspace(materialImport, mode);
 }
 
 export async function changePersistentTopicMaterial(input: Parameters<TopicMaterialRepository["change"]>[1]) {
