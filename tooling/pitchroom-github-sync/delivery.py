@@ -48,6 +48,11 @@ def safe_destination(local_sha, remote_ref):
 def allowed_path(path, reviewed=()):
     # Explicit infrastructure files only; all other hidden/runtime paths stay refused.
     infrastructure = {
+        'CLAUDE.md',
+        'docs/development/HARNESS_REVIEW_2026-11-09.md',
+        'docs/development/WORKFLOW_EFFICIENCY.md',
+        'tooling/pipeline/context_budget.py',
+        'tooling/pipeline/test_context_budget.py',
         '.github/workflows/pr-ci.yml',
         'docs/development/PIPELINE.md',
         'docs/development/QA_SKILLS.md',

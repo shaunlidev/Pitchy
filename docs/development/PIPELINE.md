@@ -2,6 +2,10 @@
 
 This section and the [role protocol](../../tooling/pipeline/ROLE_GUIDE.md) are the current operating instructions. Earlier migration notes are preserved below as history. Product requirements remain governed by v6.
 
+## Bounded context and coordination
+
+Use [WORKFLOW_EFFICIENCY.md](WORKFLOW_EFFICIENCY.md) for source reuse, event/deadline-based observation, complete handoffs and context checkpoints. `context_budget.py` checks its own read/packet bounds only; it cannot replace fresh operational gates, independent roles or human approval. No controller cadence, observation validity or paused schedule changes.
+
 ## One configuration path
 
 Both the controller and status command use `status.load_config`. [policy.json](../../tooling/pipeline/policy.json) owns repository/project, main baseline, one task lane, machine cap 5, merge/completion rules, observation lifetime and the safe pause default. [runtime.json](../../tooling/pipeline/runtime.json) owns local identities, the existing Autopilot ID and task routing. Repeating policy fields in runtime, unknown switches or unsupported values fails closed; changing either file never authorizes dispatch.
