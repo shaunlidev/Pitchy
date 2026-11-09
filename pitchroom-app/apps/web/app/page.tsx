@@ -5,11 +5,13 @@ import type { TopicRef } from "@pitchroom/domain";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { FileImportItem } from "../lib/file-import";
 import type { FixtureState } from "../lib/fixture-store";
-import { errorEnvelopeSchema, workspaceStateSchema } from "../lib/api-contract";
+import { errorEnvelopeSchema, readMaterialImportResponse, workspaceStateSchema, type MaterialImportReceipt } from "../lib/api-contract";
 import { agentActionForCommand, createWorkspaceActionError, deriveWorkspaceUXState, type ActiveAgentRequest, type WorkspaceActionError } from "../lib/workspace-ux-state";
 import { WorkspaceView } from "../lib/workspace-view";
 import "./styles.css";
 import "./ux-fixes.css";
+
+type CommandAttempt = { commandId?: string; explicitRetry?: boolean; retainWrittenBrief?: boolean };
 
 export default function HomePage() {
   const [state, setState] = useState<FixtureState>();
@@ -53,7 +55,11 @@ export default function HomePage() {
     return () => clearInterval(timer);
   }, [clarificationRunning, refresh]);
 
-  async function act(body: Record<string, unknown>, attempt: { commandId?: string; explicitRetry?: boolean; retainWrittenBrief?: boolean } = {}): Promise<boolean> {
+  async function act(body: Record<string, unknown>, attempt: CommandAttempt = {}): Promise<boolean> {
+    return Boolean(await sendCommand(body, attempt));
+  }
+
+  async function sendCommand(body: Record<string, unknown>, attempt: CommandAttempt): Promise<{ materialImport?: MaterialImportReceipt } | false> {
     if (submitting.current) return false;
     const feedbackDecision = ["apply_clarification","dismiss_clarification","retry_clarification"].includes(String(body.action));
     if (!attempt.explicitRetry && !attempt.commandId && state && deriveWorkspaceUXState(state, activeAgentRequest, { busy, error: actionError }).mutationLocked && !(feedbackDecision && !busy && !actionError)) return false;
@@ -82,7 +88,23 @@ export default function HomePage() {
         if (agentAction) setFailedAgentCommand({ body, commandId });
         return false;
       }
-      setState(workspaceStateSchema.parse(result));
+      let receipt: MaterialImportReceipt | undefined;
+      if (body.action === "add_material" || body.action === "attach_topic_material") {
+        const confirmed = readMaterialImportResponse(result, commandId);
+        if (!confirmed) {
+          lastFailure.current = createWorkspaceActionError({
+            code: "INVALID_RESPONSE", commandId, outcomeUnknown: true,
+            technicalMessage: "The server did not confirm this file import. Retry to check the same operation.",
+          });
+          setActionError(lastFailure.current);
+          return false;
+        }
+        const { materialImport, ...workspace } = confirmed;
+        receipt = materialImport;
+        setState(workspace);
+      } else {
+        setState(workspaceStateSchema.parse(result));
+      }
       setFailedAgentCommand(undefined);
       if ((body.action === "add_material" && !attempt.retainWrittenBrief) || body.action === "save_brief") setText("");
       if (body.action === "answer" || (body.action === "submit_clarification" && !body.rebaseTaskId)) setAnswer("");
@@ -91,7 +113,7 @@ export default function HomePage() {
         setAnswer("");
         setCorrection("");
       }
-      return true;
+      return { materialImport: receipt };
     } catch (cause) {
       if (controller?.signal.aborted) {
         await refresh().catch(() => undefined);
@@ -110,27 +132,28 @@ export default function HomePage() {
     }
   }
 
-  async function chooseFile(file: File, commandId: string, topic?: TopicRef) {
+  async function chooseFile(file: File, commandId: string, topic?: TopicRef): Promise<MaterialImportReceipt | undefined> {
     lastFailure.current = undefined;
-    if (!file) return false;
+    if (!file) return undefined;
     if (!/\.(md|txt)$/i.test(file.name)) {
       lastFailure.current = createWorkspaceActionError({ code: "INVALID_INPUT", technicalMessage: "Choose a UTF-8 .txt or .md file." });
       setActionError(lastFailure.current);
-      return false;
+      return undefined;
     }
     try {
       const fileText = new TextDecoder("utf-8", { fatal: true }).decode(await file.arrayBuffer());
       if (!fileText.trim() || fileText.length > 1_048_576) {
         lastFailure.current = createWorkspaceActionError({ code: "INVALID_INPUT", technicalMessage: !fileText.trim() ? "Material must contain readable text." : "Material exceeds the source size limit." });
         setActionError(lastFailure.current);
-        return false;
+        return undefined;
       }
       setActionError(undefined);
-      return await act({ action: topic ? "attach_topic_material" : "add_material", topic, name: file.name, mediaType: file.name.toLowerCase().endsWith(".md") ? "text/markdown" : "text/plain", text: fileText }, { commandId, explicitRetry: true, retainWrittenBrief: true });
+      const result = await sendCommand({ action: topic ? "attach_topic_material" : "add_material", topic, name: file.name, mediaType: file.name.toLowerCase().endsWith(".md") ? "text/markdown" : "text/plain", text: fileText }, { commandId, explicitRetry: true, retainWrittenBrief: true });
+      return result ? result.materialImport : undefined;
     } catch {
       lastFailure.current = createWorkspaceActionError({ code: "INVALID_INPUT", technicalMessage: "The selected file could not be read as UTF-8 text." });
       setActionError(lastFailure.current);
-      return false;
+      return undefined;
     }
   }
 
@@ -144,12 +167,12 @@ export default function HomePage() {
     try {
       for (const entry of entries) {
         setFileImports(previous => previous.map(item => item.id === entry.id ? { id: entry.id, name: entry.name, status: "importing" } : item));
-        const saved = await chooseFile(entry.file, entry.commandId, entry.topic);
+        const receipt = await chooseFile(entry.file, entry.commandId, entry.topic);
         const failure = lastFailure.current;
-        const item: FileImportItem = saved ? { id: entry.id, name: entry.name, status: "saved" }
+        const item: FileImportItem = receipt ? { id: entry.id, name: entry.name, status: "saved", receipt }
           : { ...entry, status: "failed", message: failure?.technicalMessage ?? "The file was not imported. Review the current project before retrying.", outcomeUnknown: failure?.outcomeUnknown ?? false };
         setFileImports(previous => previous.map(previousItem => previousItem.id === item.id ? item : previousItem));
-        allSaved = allSaved && saved;
+        allSaved = allSaved && Boolean(receipt);
       }
       return allSaved;
     } finally {

@@ -4,7 +4,7 @@ import { PitchroomError } from "@pitchroom/domain";
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { saveFixtureBrief, submitFixtureClarification, decideFixtureClarification, runFixtureClarification, acceptFixture, applyFixturePositioning, generateFixturePositioning, generateFixtureDeck, addFixtureMaterial, answerFixtureQuestion, correctFixtureClaim, readFixtureState, removeFixtureMaterial, resetFixtureState, runFixtureAgent } from "../lib/fixture-store";
+import { saveFixtureBrief, submitFixtureClarification, decideFixtureClarification, runFixtureClarification, acceptFixture, applyFixturePositioning, generateFixturePositioning, generateFixtureDeck, addFixtureMaterial, addFixtureMaterialWithReceipt, attachFixtureTopicMaterialWithReceipt, changeFixtureTopicMaterial, answerFixtureQuestion, correctFixtureClaim, readFixtureState, removeFixtureMaterial, resetFixtureState, runFixtureAgent } from "../lib/fixture-store";
 import HomePage from "./page";
 import { WorkspaceView } from "../lib/workspace-view";
 import { workspaceCommandSchema } from "../lib/api-contract";
@@ -33,7 +33,19 @@ describe("HomePage review interactions", () => {
         try { return jsonResponse(saveFixtureBrief(body)); }
         catch (error) { if (error instanceof PitchroomError) return jsonResponse({code:error.code,error:error.message,requestId:"qa-brief"},409); throw error; }
       }
-      if (body.action === "add_material") return jsonResponse(addFixtureMaterial({ name: body.name ?? "pasted-material.md", mediaType: body.mediaType ?? "text/markdown", text: body.text ?? "" }));
+      if (body.action === "add_material" || body.action === "attach_topic_material") {
+        if (!body.commandId) throw new Error("Expected a file import command ID.");
+        const material = { name: body.name, mediaType: body.mediaType, text: body.text };
+        try {
+          const { state, materialImport } = body.action === "add_material"
+            ? addFixtureMaterialWithReceipt(material, body.commandId)
+            : attachFixtureTopicMaterialWithReceipt({ action: "attach", topic: body.topic, material, commandId: body.commandId });
+          return jsonResponse({ ...state, materialImport });
+        } catch (error) {
+          if (error instanceof PitchroomError) return jsonResponse({ code: error.code, error: error.message, requestId: "fixture-import" }, error.code === "CONFLICT" ? 409 : 400);
+          throw error;
+        }
+      }
       if (body.action === "submit_clarification") { const saved=submitFixtureClarification({text:body.text!,expectedRevision:body.expectedRevision!,commandId:body.commandId!}); await runFixtureClarification(saved.clarifications!.at(-1)!.id); return jsonResponse(readFixtureState(),202); }
       if (body.action === "apply_clarification") return jsonResponse(decideFixtureClarification({taskId:body.taskId!,commandId:body.commandId!,action:"apply",result:body.result}));
       if (body.action === "answer") return jsonResponse(answerFixtureQuestion(body.text ?? "", body.expectedRevision ?? -1));
@@ -235,8 +247,8 @@ describe("HomePage review interactions", () => {
     ]);
     await waitFor(() => expect(readFixtureState().sources.map(source => source.name)).toEqual(["brief.md", "first.txt", "last.md"]));
     const results = screen.getByRole("region", { name: "File import results" });
-    expect(results.textContent).toContain("first.txt — Saved");
-    expect(results.textContent).toContain("last.md — Saved");
+    expect(await within(results).findByText("first.txt — Saved as first.txt")).toBeTruthy();
+    expect(await within(results).findByText("last.md — Saved as last.md")).toBeTruthy();
     expect(results.textContent).toContain("rejected.json — Not imported");
     expect(results.textContent).toContain("UTF-8");
     expect((screen.getByLabelText("Written brief") as HTMLTextAreaElement).value).toBe("Keep this unsent written brief.");
@@ -250,12 +262,9 @@ describe("HomePage review interactions", () => {
       const body = workspaceCommandSchema.parse(JSON.parse(String(init.body)));
       if (body.action !== "add_material") return normalFetch(input, init);
       commands.push({ name: body.name, commandId: body.commandId });
-      if (body.name === "uncertain.md") {
-        if (commands.filter(command => command.name === body.name).length === 1) {
-          await normalFetch(input, init);
-          throw new Error("Response lost after save");
-        }
-        return jsonResponse(readFixtureState());
+      if (body.name === "uncertain.md" && commands.filter(command => command.name === body.name).length === 1) {
+        await normalFetch(input, init);
+        throw new Error("Response lost after save");
       }
       return normalFetch(input, init);
     });
@@ -267,12 +276,137 @@ describe("HomePage review interactions", () => {
     ]);
     const retry = await screen.findByRole("button", { name: "Retry uncertain.md" });
     expect((retry as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.getByText("uncertain.md — Save not confirmed")).toBeTruthy();
     await user.click(retry);
-    await waitFor(() => expect(screen.queryByRole("button", { name: "Retry uncertain.md" })).toBeNull());
+    expect(await screen.findByText("uncertain.md — Previous import confirmed: uncertain.md")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Retry uncertain.md" })).toBeNull();
+    expect(screen.getByText("saved.txt — Saved as saved.txt")).toBeTruthy();
     expect(commands.filter(command => command.name === "saved.txt")).toHaveLength(1);
     const attempts = commands.filter(command => command.name === "uncertain.md");
     expect(attempts).toHaveLength(2); expect(attempts[1]!.commandId).toBe(attempts[0]!.commandId);
     expect(readFixtureState().sources.map(source => source.name)).toEqual(["brief.md", "saved.txt", "uncertain.md"]);
+  });
+
+  it("shows the selected and stored filenames for normalized duplicates in Materials and Clarify", async () => {
+    const user = userEvent.setup();
+    const view = render(<HomePage />);
+    await user.click(await screen.findByRole("button", { name: "Clarify" }));
+    const alias = () => new File(["Café\nclient."], "b.txt", { type: "text/plain" });
+    await user.upload(screen.getByLabelText("Attach TXT or MD to this topic"), new File(["Cafe\u0301\r\nclient."], "a.md", { type: "text/markdown" }));
+    expect(await screen.findByText("a.md — Saved as a.md")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Materials" }));
+    await user.click(screen.getByRole("button", { name: /Add files/ }));
+    await user.upload(screen.getByLabelText("Choose a UTF-8 text or Markdown file"), alias());
+    const label = "b.txt — Reused existing source a.md";
+    expect(await within(screen.getByRole("region", { name: "File import results" })).findByText(label)).toBeTruthy();
+    view.unmount();
+    render(<HomePage />);
+    await user.click(await screen.findByRole("button", { name: "Materials" }));
+    expect(await screen.findByRole("button", { name: "Remove a.md" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Remove b.txt" })).toBeNull();
+    expect(screen.getByText("2 files")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Clarify" }));
+    await user.upload(screen.getByLabelText("Attach TXT or MD to this topic"), alias());
+    const panel = screen.getByRole("region", { name: "Topic materials" });
+    expect(await within(panel).findByText(label)).toBeTruthy();
+    expect(within(panel).getByRole("button", { name: "Unlink a.md" })).toBeTruthy();
+    const saved = readFixtureState();
+    expect(saved.sources.map(source => source.name)).toEqual(["brief.md", "a.md"]);
+    expect(saved.topicMaterials).toEqual([expect.objectContaining({ sourceId: saved.sources[1]!.sourceId })]);
+  });
+
+  it("keeps same-name files with different text and a matching written brief independent", async () => {
+    const text = "Original client brief.";
+    const brief = saveFixtureBrief({ commandId: "save-brief", expectedVersionId: null, text }).brief;
+    const user = userEvent.setup(); render(<HomePage />);
+    await user.click(await screen.findByRole("button", { name: /Add files/ }));
+    await user.upload(screen.getByLabelText("Choose a UTF-8 text or Markdown file"), [
+      new File([text], "client.txt", { type: "text/plain" }),
+      new File(["A different client requirement."], "client.txt", { type: "text/plain" }),
+    ]);
+    await waitFor(() => expect(screen.getAllByText("client.txt — Saved as client.txt")).toHaveLength(2));
+    const saved = readFixtureState();
+    const files = saved.sources.filter(source => source.name === "client.txt" && source.kind !== "brief");
+    expect(files.map(source => source.content)).toEqual([text, "A different client requirement."]);
+    expect(new Set(files.map(source => source.sourceId)).size).toBe(2);
+    const written = saved.sources.find(source => source.kind === "brief")!;
+    expect(written.content).toBe(text);
+    expect(written.sourceId).not.toBe(files[0]!.sourceId);
+    expect(saved.brief).toEqual(brief);
+  });
+
+  it.each(["missing receipt", "invalid receipt", "wrong command"])("keeps a topic file available for explicit retry after a %s", async fault => {
+    const normalFetch = vi.mocked(fetch).getMockImplementation()!;
+    const attempts: Array<Extract<ReturnType<typeof workspaceCommandSchema.parse>, { action: "attach_topic_material" }>> = [];
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const response = await normalFetch(input, init);
+      if (init?.method !== "POST") return response;
+      const body = workspaceCommandSchema.parse(JSON.parse(String(init.body)));
+      if (body.action !== "attach_topic_material") return response;
+      attempts.push(body);
+      if (attempts.length > 1) return response;
+      const { materialImport, ...workspace } = await response.json();
+      if (fault === "missing receipt") return jsonResponse(workspace);
+      const corrupt = fault === "invalid receipt" ? { outcome: "unknown" } : { commandId: "another-command" };
+      return jsonResponse({ ...workspace, materialImport: { ...materialImport, ...corrupt } });
+    });
+    const user = userEvent.setup(); render(<HomePage />);
+    await user.click(await screen.findByRole("button", { name: "Clarify" }));
+    await user.upload(screen.getByLabelText("Attach TXT or MD to this topic"), new File(["Evidence."], "attached.md", { type: "text/markdown" }));
+    expect(await screen.findByText("attached.md — Save not confirmed")).toBeTruthy();
+    expect(attempts).toHaveLength(1);
+    expect((screen.getByLabelText("Attach TXT or MD to this topic") as HTMLInputElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "Retry attached.md" }) as HTMLButtonElement).disabled).toBe(false);
+    const link = readFixtureState().topicMaterials![0]!;
+    changeFixtureTopicMaterial({ action: "unlink", topic: attempts[0]!.topic, sourceId: link.sourceId, commandId: "separate-unlink" });
+    await user.click(screen.getByRole("button", { name: "Retry attached.md" }));
+    expect(await screen.findByText("attached.md — Previous import confirmed: attached.md")).toBeTruthy();
+    expect(attempts).toEqual([attempts[0], attempts[0]]);
+    expect(readFixtureState().topicMaterials).toEqual([]);
+    expect(readFixtureState().sources.map(source => source.name)).toEqual(["brief.md", "attached.md"]);
+    expect(screen.queryByRole("button", { name: "Unlink attached.md" })).toBeNull();
+  });
+
+  it("marks an explicit command conflict as not imported", async () => {
+    const normalFetch = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      if (init?.method === "POST") {
+        const body = workspaceCommandSchema.parse(JSON.parse(String(init.body)));
+        if (body.action === "add_material") addFixtureMaterialWithReceipt({ name: "earlier.txt", text: "Earlier request.", mediaType: "text/plain" }, body.commandId!);
+      }
+      return normalFetch(input, init);
+    });
+    const user = userEvent.setup(); render(<HomePage />);
+    await user.click(await screen.findByRole("button", { name: /Add files/ }));
+    await user.upload(screen.getByLabelText("Choose a UTF-8 text or Markdown file"), new File(["Different request."], "new.txt", { type: "text/plain" }));
+    expect(await screen.findByText("new.txt — Not imported")).toBeTruthy();
+    expect(screen.queryByText("new.txt — Save not confirmed")).toBeNull();
+    expect(readFixtureState().sources.map(source => source.name)).toEqual(["brief.md", "earlier.txt"]);
+  });
+
+  it.each(["Materials", "Clarify"])("shows the retained name when an explicit import restores a removed source in %s", async panel => {
+    const topic = { understandingId: readFixtureState().currentVersionId!, kind: "theme" as const, index: 0 };
+    const original = attachFixtureTopicMaterialWithReceipt({ action: "attach", commandId: "old-attach", topic, material: { name: "a.md", mediaType: "text/markdown", text: "Retained text." } });
+    const sourceId = original.materialImport.sourceId;
+    removeFixtureMaterial(sourceId);
+    const fresh = runFixtureAgent();
+    const user = userEvent.setup(); render(<HomePage />);
+    const file = new File(["Retained text."], "b.txt", { type: "text/plain" });
+    if (panel === "Materials") {
+      await user.click(await screen.findByRole("button", { name: /Add files/ }));
+      await user.upload(screen.getByLabelText("Choose a UTF-8 text or Markdown file"), file);
+    } else {
+      await user.click(await screen.findByRole("button", { name: "Clarify" }));
+      await user.click(screen.getByText("Project overview", { selector: "summary" }));
+      await user.click(screen.getByRole("button", { name: /^Open question 1/ }));
+      await user.upload(screen.getByLabelText("Attach TXT or MD to this topic"), file);
+    }
+    expect(await screen.findByText("b.txt — Restored source a.md")).toBeTruthy();
+    const restored = readFixtureState();
+    expect(restored.sources).toContainEqual(original.state.sources.find(source => source.sourceId === sourceId));
+    expect(restored.removedSources).toEqual([]);
+    expect(restored.topicMaterials).toEqual(panel === "Materials" ? [] : [expect.objectContaining({ sourceId, understandingId: fresh.currentVersionId, kind: "gap", index: 0 })]);
+    expect(restored.versions).toEqual(fresh.versions);
   });
 
   it("continues after a file read failure and retries only that file after reopening Materials", async () => {
@@ -325,10 +459,10 @@ describe("HomePage review interactions", () => {
       new File(["Valid trailing material."], "trailing.txt", { type: "text/plain" }),
     ]);
     const results = screen.getByRole("region", { name: "File import results" });
-    await waitFor(() => expect(results.textContent).toContain("trailing.txt — Saved"));
+    expect(await within(results).findByText("trailing.txt — Saved as trailing.txt")).toBeTruthy();
     expect(results.textContent).toContain("Material must contain readable text.");
     expect(results.textContent).toContain("Material exceeds the source size limit.");
-    expect(results.textContent).toContain("duplicate.md — Saved");
+    expect(within(results).getByText("duplicate.md — Reused existing source brief.md")).toBeTruthy();
     expect(results.textContent).toContain("Storage temporarily unavailable.");
     expect(readFixtureState().sources.map(source => source.name)).toEqual(["brief.md", "trailing.txt"]);
     expect(readFixtureState().deckVersions).toEqual(before.deckVersions);
@@ -336,7 +470,7 @@ describe("HomePage review interactions", () => {
     expect(readFixtureState().project.phase).toBe("materials_ready");
     rejectService = false;
     await user.click(screen.getByRole("button", { name: "Retry service.md" }));
-    await waitFor(() => expect(results.textContent).toContain("service.md — Saved"));
+    expect(await within(results).findByText("service.md — Saved as service.md")).toBeTruthy();
     expect(importedNames).toEqual(["duplicate.md", "service.md", "trailing.txt", "service.md"]);
   });
 
@@ -350,8 +484,11 @@ describe("HomePage review interactions", () => {
     await screen.findByRole("button", { name: "Retry corrected.md" });
     await user.click(screen.getByRole("button", { name: "Review current step" }));
     const beforeCancel = readFixtureState().sources;
+    const writes = () => vi.mocked(fetch).mock.calls.filter(([, init]) => init?.method === "POST").length;
+    const writesBeforeCancel = writes();
     await user.click(screen.getByRole("button", { name: /Add files/ }));
     await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(writes()).toBe(writesBeforeCancel);
     expect(readFixtureState().sources).toEqual(beforeCancel);
     await user.click(screen.getByRole("button", { name: /Add files/ }));
     await user.upload(screen.getByLabelText("Choose a UTF-8 text or Markdown file"), new File(["Corrected UTF-8 material."], "corrected.md", { type: "text/markdown" }));
@@ -516,6 +653,25 @@ describe("P1 authoritative state boundaries", () => {
     expect((screen.getByRole("button", { name: "Confirm & create deck" }) as HTMLButtonElement).disabled).toBe(true);
     await user.click(screen.getByRole("button", { name: "Confirm & create deck" })); expect(input.onAction).not.toHaveBeenCalled();
   });
+  it("unlocks only the current uncertain file retry and keeps it locked during active work", async () => {
+    const state = ready(); const input = props(state);
+    const file = new File(["Text"], "first.txt");
+    const failed = { status: "failed" as const, id: "one", commandId: "first-command", name: file.name, file, outcomeUnknown: true, message: "Unconfirmed" };
+    const error = { code: "INVALID_RESPONSE", commandId: failed.commandId, message: "Unconfirmed", technicalMessage: "Missing receipt", recovery: "refresh" as const, outcomeUnknown: true };
+    const viewProps = { ...input, state, initialDestination: "clarify" as const, error, onRetryFile: vi.fn(),
+      fileImports: [failed, { ...failed, id: "two", name: "other.txt", commandId: "other-command" }] };
+    const view = render(<WorkspaceView {...viewProps} />);
+    const retry = (name: string) => screen.getByRole("button", { name: "Retry " + name }) as HTMLButtonElement;
+    expect(retry("first.txt").disabled).toBe(false);
+    expect(retry("other.txt").disabled).toBe(true);
+    view.rerender(<WorkspaceView {...viewProps} busy />);
+    expect(retry("first.txt").disabled).toBe(true);
+    view.rerender(<WorkspaceView {...viewProps} state={{ ...state, workflowRuns: [{ id: "active", kind: "positioning", status: "running", events: [] }] }} />);
+    expect(retry("first.txt").disabled).toBe(true);
+    await userEvent.click(retry("first.txt"));
+    expect(viewProps.onRetryFile).not.toHaveBeenCalled();
+  });
+
   it("keeps stopped generation labels distinct from mutation locks", () => {
     const state = ready(); state.positioning = undefined;
     const input = props(state);
