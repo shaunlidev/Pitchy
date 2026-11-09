@@ -72,7 +72,7 @@ describe("workspace API", () => {
     const replay = await send(attach);
     expect(replay.materialImport).toEqual({ commandId: "three", sourceId, sourceName: "a.md", outcome: "replayed" });
     expect(replay.topicMaterials).toEqual([]);
-    const current = await (await GET()).json();
+    const current = await (await GET(new Request("http://localhost/api/workspace"))).json();
     expect(current).not.toHaveProperty("materialImport");
     expect(workspaceStateSchema.parse(replay)).toEqual(current);
     expect(readMaterialImportResponse(replay, "three")).toBeDefined();
