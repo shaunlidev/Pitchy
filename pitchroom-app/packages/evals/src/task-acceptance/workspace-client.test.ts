@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { GET, POST } from "../../../../apps/web/app/api/workspace/route";
-import { healthResponse } from "../../../../apps/web/app/api/health/route";
+import { healthResponse } from "../../../../apps/web/lib/runtime-responses";
 import { evaluationInstance } from "../../../../apps/web/lib/evaluation-instance";
 import { addFixtureMaterial, runFixtureAgent, acceptFixture, generateFixturePositioning, applyFixturePositioning, proposeFixtureStory, resetFixtureState } from "../../../../apps/web/lib/fixture-store";
 import { loadEvidencePolicy } from "./capacity";
