@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup,render,screen } from "@testing-library/react";
+import { cleanup,render,screen,within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach,expect,it,vi } from "vitest";
 import { readFileSync } from "node:fs";
@@ -249,4 +249,75 @@ it("keeps cancelled interpretation edits visibly recoverable across reopening", 
  view.unmount();view=render(<WorkspaceView {...props} state={state}/>);await user.click(screen.getByText("Saved answer · Before / Now"));
  expect(screen.getByRole("region",{name:"Unsubmitted interpretation edits"}).textContent).toContain("My cancelled unsent interpretation.");
  expect(state.currentVersionId).toBe(initial.currentVersionId);expect(screen.queryByRole("button",{name:"Apply changes to understanding"})).toBeNull();window.localStorage.clear();
+});
+
+
+it("keeps the selected question ahead of long context and open reviews from other topics", async () => {
+ const {newClarification,understandingProposalV1Schema}=await import("@pitchroom/domain");
+ const {groundedTestResult}=await import("../../../packages/agent/src/clarification-model.testkit");
+ window.localStorage.clear();resetFixtureState();
+ addFixtureMaterial({name:"layout.md",mediaType:"text/markdown",text:"Synthetic audience and measurement context."});
+ const state=runFixtureAgent();
+ const proposal=understandingProposalV1Schema.parse({schemaVersion:1,
+  themes:["Audience","Measurement","Timing"].map(title=>({title,summary:`${title} context remains unconfirmed. `.repeat(16),claims:[{statement:`${title} is unknown.`,evidenceState:"unknown",evidence:[]}]})),
+  gaps:[],nextQuestion:{question:"Who is the audience?",whyItMatters:"Audience is unknown.",relatedThemeIndexes:[0]},
+  topicTasks:[{id:"audience",themeIndex:0,question:{question:"Who is the audience?",whyItMatters:"Audience is unknown.",relatedThemeIndexes:[0]}},
+   {id:"measurement",themeIndex:1,question:{question:"What is the measurement baseline?",whyItMatters:"Measurement is unknown.",relatedThemeIndexes:[1]}}],
+ });
+ const current={...state.versions.find(version=>version.id===state.currentVersionId)!,number:2,proposal};
+ const historical={...current,id:"layout-understanding-v1",number:1,proposal:structuredClone(proposal)};
+ historical.proposal.themes[1]!.title="Earlier measurement topic";
+ state.versions=[historical,current];
+ const pending=newClarification({id:"layout-pending",inputId:"layout-input",projectId:state.project.id,commandId:"layout-command",actorId:"user",versionId:current.id,revision:state.project.revision,base:proposal,sources:[],answer:"The measurement baseline is still unknown.",selection:{understandingId:current.id,taskId:"measurement",themeIndex:1}});
+ pending.status="proposal_ready";
+ pending.result=groundedTestResult({schemaVersion:2,reason:"Synthetic saved review, not an applied change.",operations:[{type:"update_summary",themeId:pending.base.themes[1]!.id!,text:"Measurement still requires review."}]},pending.base);
+ const history=newClarification({id:"layout-history",inputId:"layout-old-input",projectId:state.project.id,commandId:"layout-old-command",actorId:"user",versionId:historical.id,revision:1,base:historical.proposal,sources:[],answer:"Keep the earlier measurement context.",selection:{understandingId:historical.id,taskId:"measurement",themeIndex:1}});
+ history.status="dismissed";state.clarifications=[history,pending];
+ const original=structuredClone(state),onAction=vi.fn(()=>true);
+ const props={state,busy:false,text:"",answer:"",correction:"",onTextChange:vi.fn(),onAnswerChange:vi.fn(),onCorrectionChange:vi.fn(),onChooseFile:()=>true,onCancelRun:vi.fn(),onAction,initialDestination:"clarify" as const};
+ render(<WorkspaceView {...props}/>);
+ const user=userEvent.setup(),answer=screen.getByRole("textbox",{name:"Answer the agent’s question"});
+ const review=screen.getByText("Saved topic: Measurement · Based on Understanding v2").closest("details")!;
+ const past=screen.getByText("Saved topic: Earlier measurement topic · Based on Understanding v1").closest("details")!;
+ expect(screen.getByRole("heading",{name:"Who is the audience?"})).toBeTruthy();
+ expect(answer.compareDocumentPosition(review)&Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+ for(const summary of screen.getAllByText(proposal.themes[0]!.summary.trim())) expect(answer.compareDocumentPosition(summary)&Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+ expect(review.open).toBe(true);expect(past.open).toBe(false);
+ expect(within(review).getByRole("heading",{name:"Review the proposed changes"})).toBeTruthy();
+ expect(within(review).getByRole("button",{name:"Apply changes to understanding"}).hasAttribute("disabled")).toBe(false);
+ await user.type(answer,"Audience draft stays here.");
+ const interpretation=within(review).getByLabelText("Proposed interpretation 1");
+ await user.clear(interpretation);await user.type(interpretation,"Unsubmitted measurement wording.");
+ await user.click(screen.getByText("Project overview"));await user.click(screen.getByRole("button",{name:/^Measurement\s*Needs context$/}));
+ expect(screen.getByRole("heading",{name:"What is the measurement baseline?"})).toBeTruthy();
+ expect(screen.getByRole("textbox",{name:"Answer the agent’s question"})).toHaveProperty("value","");
+ await user.type(screen.getByRole("textbox",{name:"Answer the agent’s question"}),"Measurement draft stays separate.");
+ await user.click(screen.getByText("Project overview"));await user.click(screen.getByRole("button",{name:/^Timing\s*Needs context$/}));
+ const noTask = screen.getByRole("heading",{name:"No question is linked to this topic yet."}).closest("article")!;
+ expect(within(noTask).getByText("Timing")).toBeTruthy();
+ expect(screen.queryByRole("textbox",{name:"Answer the agent’s question"})).toBeNull();
+ await user.click(screen.getByText("Project overview"));await user.click(screen.getByRole("button",{name:/^Audience\s*Needs context$/}));
+ expect(screen.getByRole("textbox",{name:"Answer the agent’s question"})).toHaveProperty("value","Audience draft stays here.");
+ expect(within(review).getByLabelText("Proposed interpretation 1")).toHaveProperty("value","Unsubmitted measurement wording.");
+ await user.click(within(past).getByText("Saved answer · Before / Now"));
+ expect(within(past).getByRole("heading",{name:"Current understanding kept"})).toBeTruthy();
+ expect(review.open).toBe(true);expect(onAction).not.toHaveBeenCalled();expect(state).toEqual(original);
+});
+
+it.each(["unrecorded", "unavailable", "different-version"] as const)("does not substitute the selected topic for a %s saved origin", async kind => {
+ const {newClarification}=await import("@pitchroom/domain");
+ resetFixtureState();addFixtureMaterial({name:"origin.md",mediaType:"text/markdown",text:"The audience remains unknown."});
+ const state=runFixtureAgent(),base=structuredClone(state.versions.find(version=>version.id===state.currentVersionId)!.proposal);
+ delete base.topicTasks;
+ const task=newClarification({id:"origin-check",inputId:"origin-input",projectId:state.project.id,commandId:"origin-command",actorId:"user",versionId:"unavailable-original-version",revision:1,base,sources:[],answer:"Preserved saved answer."});
+ task.status="dismissed";
+ if(kind!=="unrecorded") task.selection={understandingId:kind==="different-version" ? state.currentVersionId! : task.baseUnderstandingId,taskId:"legacy-next-question",themeIndex:kind==="unavailable" ? 99 : 0};
+ state.clarifications=[task];
+ const original=structuredClone(state),onAction=vi.fn(()=>true);
+ render(<WorkspaceView state={state} busy={false} text="" answer="" correction="" onTextChange={vi.fn()} onAnswerChange={vi.fn()} onCorrectionChange={vi.fn()} onChooseFile={()=>true} onCancelRun={vi.fn()} onAction={onAction} initialDestination="clarify"/>);
+ const label=kind==="unrecorded" ? "Topic selection not recorded" : "Saved topic unavailable";
+ const summary=screen.getByText(`Saved topic: ${label} · Based on Understanding version unavailable`).closest("summary")!;
+ expect(summary.textContent).not.toContain(base.themes[0]!.title);
+ expect(summary.closest("details")).toHaveProperty("open",false);
+ expect(onAction).not.toHaveBeenCalled();expect(state).toEqual(original);
 });
