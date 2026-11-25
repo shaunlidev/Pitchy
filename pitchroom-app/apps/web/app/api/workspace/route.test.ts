@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { deployedEnvironment } from "../../../../../packages/domain/src/runtime-configuration.testkit";
 import { PitchroomError } from "@pitchroom/domain";
 import * as fixtureStore from "../../../lib/fixture-store";
 import { errorEnvelopeSchema, workspaceStateSchema } from "../../../lib/api-contract";
@@ -6,6 +7,7 @@ import { resetFixtureState } from "../../../lib/fixture-store";
 import { GET, POST, workspaceResponse } from "./route";
 
 const request = (body: unknown) => new Request("http://localhost/api/workspace", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+afterEach(() => vi.unstubAllEnvs());
 
 beforeEach(() => {
   vi.restoreAllMocks();
@@ -14,6 +16,18 @@ beforeEach(() => {
 });
 
 describe("workspace API", () => {
+  it("refuses deployed fixture mode on reads and writes without touching saved state", async () => {
+    const before = fixtureStore.readFixtureState();
+    for (const [key, value] of Object.entries(deployedEnvironment())) vi.stubEnv(key, value);
+    vi.stubEnv("PITCHROOM_RUNTIME", "fixture");
+    const read = vi.fn(() => fixtureStore.readFixtureState());
+    expect((await workspaceResponse(read)).status).toBe(503);
+    expect((await GET()).status).toBe(503);
+    expect((await POST(request({ action: "add_material", commandId: "blocked", name: "test.txt", mediaType: "text/plain", text: "Unapproved input" }))).status).toBe(503);
+    expect(read).not.toHaveBeenCalled();
+    expect(fixtureStore.readFixtureState()).toEqual(before);
+  });
+
   it("refuses an invalid runtime without reading or mutating project state", async () => {
     process.env.PITCHROOM_RUNTIME = "liv-typo";
     const read = vi.fn(() => fixtureStore.readFixtureState());

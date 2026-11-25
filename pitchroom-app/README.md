@@ -43,7 +43,7 @@ Both file pickers accept multiple UTF-8 TXT/MD files. Each file saves independen
 
 ## Runtime validation
 
-The HTTP workspace, health and SSE boundaries accept only `fixture`, `postgres-fake` and `live`. Unknown or empty `PITCHROOM_RUNTIME` values return 503 before accessing project storage or starting work. Omitting the value retains the local fixture default; production deployment policy and credentials remain separate release gates.
+The HTTP workspace, health and SSE boundaries share the Web/worker/CLI [runtime configuration contract](RUNBOOK.md#runtime-configuration). Local development retains the fixture default. Production Node processes require explicit environment and runtime; staging, trial and production reject fixture modes, incomplete identities and inconsistent targets/provider settings before accessing project state. Valid configuration does not establish deployment readiness.
 
 ## Working-position recovery
 
@@ -97,9 +97,11 @@ pnpm --filter @pitchroom/web exec next dev -H 127.0.0.1 -p 3001
 3001. After restarting the server, `pnpm qa:persistent-readback` verifies that
 the accepted state and version history survived the process.
 
-`pnpm env:check` reads the same `apps/web/.env.local` used by Next.js (while
-preserving any shell-provided overrides) and reports only readiness booleans;
-it does not print credentials.
+`pnpm env:check` validates configuration without printing credentials. Only local
+development/test loads `apps/web/.env.local`, preserving shell overrides.
+Production/deployed checks require explicit process variables. `pnpm start`
+performs that production preflight before starting Web; see the
+[required variables and remaining readiness checks](RUNBOOK.md#runtime-configuration).
 
 ## Verification
 

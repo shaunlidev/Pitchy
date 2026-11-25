@@ -23,7 +23,7 @@ test("failed Deck review survives a real browser edit and requires a new CLI-bou
   const baseURL = `http://127.0.0.1:${address.port}`, instanceId = randomUUID();
   const localDev = process.env.PIT54_BROWSER_LOCAL_DEV === "1";
   const server = spawn(process.execPath, [resolve(web, "node_modules/next/dist/bin/next"), ...(localDev ? ["dev", "--webpack"] : ["start"]), "--hostname", "127.0.0.1", "--port", String(address.port)], {
-    cwd: web, detached: true, stdio: "ignore", env: { NODE_ENV: localDev ? "development" : "production", ...(localDev ? { PITCHROOM_ISOLATED_QA: "1" } : {}), PATH: process.env.PATH, HOME: process.env.HOME, PITCHROOM_RUNTIME: "fixture", PITCHROOM_EVAL_INSTANCE_ID: instanceId, PITCHROOM_EVAL_SOURCE_HASH: hashTaskValue("PIT54 isolated browser runtime"), NEXT_TELEMETRY_DISABLED: "1" },
+    cwd: web, detached: true, stdio: "ignore", env: { NODE_ENV: localDev ? "development" : "production", ...(localDev ? { PITCHROOM_ISOLATED_QA: "1" } : {}), PATH: process.env.PATH, HOME: process.env.HOME, PITCHROOM_DEPLOYMENT_ENV: "local", PITCHROOM_RUNTIME: "fixture", PITCHROOM_EVAL_INSTANCE_ID: instanceId, PITCHROOM_EVAL_SOURCE_HASH: hashTaskValue("PIT54 isolated browser runtime"), NEXT_TELEMETRY_DISABLED: "1" },
   });
   let context: Awaited<ReturnType<typeof browser.newContext>> | undefined;
   try {

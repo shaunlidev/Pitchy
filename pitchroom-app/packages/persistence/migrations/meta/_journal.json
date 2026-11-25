@@ -92,6 +92,13 @@
       "when": 1792980000000,
       "tag": "0012_topic_materials",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1793333954382,
+      "tag": "0013_deployment_readiness",
+      "breakpoints": true
     }
   ]
 }

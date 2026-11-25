@@ -7,3 +7,4 @@ export * from "./story-repository";
 export * from "./brief-repository";
 
 export * from "./topic-material-repository";
+export * from "./deployment-readiness";
