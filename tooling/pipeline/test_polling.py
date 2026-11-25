@@ -43,6 +43,48 @@ class GH:
 
 
 class Polling(unittest.TestCase):
+    def test_renamed_repository_restores_metadata_flow_without_dispatch(self):
+        old, renamed = 'shaunlidev/pitchroom', 'shaunlidev/Pitchy'
+        row = issue()
+        row['metadata'].update(pr_number=1, pr_url=f'https://github.com/{old}/pull/1')
+        original = copy.deepcopy(row)
+        pull = pr()
+        pull['base']['repo']['full_name'] = renamed
+        pull['head']['repo']['full_name'] = renamed
+        call = Memory([row])
+        gh = gs.GitHub(renamed)
+        gh.prs = lambda: [pull]
+        gh.api = lambda path: copy.deepcopy(pull)
+        gh.ci = lambda sha, event: {'state': 'success', 'sha': sha, 'run_id': 1}
+        before = gs.sync({**POLICY, 'repository': old}, call, gh)
+        self.assertEqual(before['issues'], {})
+        policy = {**POLICY, 'repository': renamed}
+        result = gs.sync(policy, call, gh, True, 't1')
+        snapshot = json.loads(row['metadata']['github_prs'])[0]
+        self.assertEqual(snapshot['url'], f'https://github.com/{renamed}/pull/1')
+        self.assertEqual(snapshot['head'], SHA)
+        self.assertEqual(snapshot['ci']['sha'], SHA)
+        self.assertEqual(result['repository'], renamed)
+        self.assertEqual(row['metadata']['github_sync_state'], 'fresh')
+        count = len(call.writes)
+        gs.sync(policy, call, gh, True, 't1')
+        self.assertEqual(len(call.writes), count)
+        pull['head']['sha'] = 'b' * 40
+        gs.sync(policy, call, gh, True, 't2')
+        changed = json.loads(row['metadata']['github_prs'])[0]
+        self.assertEqual(changed['head'], 'b' * 40)
+        self.assertEqual(changed['ci']['sha'], 'b' * 40)
+        self.assertEqual({k: v for k, v in row.items() if k != 'metadata'},
+                         {k: v for k, v in original.items() if k != 'metadata'})
+        for key, value in original['metadata'].items():
+            self.assertEqual(row['metadata'][key], value)
+        self.assertTrue(all(a[:3] == ['issue', 'metadata', 'set'] for a in call.writes))
+
+    def test_rename_does_not_accept_same_number_from_foreign_repository(self):
+        row, pull = issue(), pr()
+        row['metadata'].update(pr_number=1, pr_url='https://github.com/shaunlidev/Pitchy/pull/1')
+        self.assertEqual(gs.mapping([row], [pull], 'shaunlidev/Pitchy'), {})
+
     def test_issue_pagination_and_duplicate_refusal(self):
         rows=[issue(i) for i in range(101)];self.assertEqual(len(gs.all_issues(Memory(rows),'project')),101)
         rows[-1]=rows[0]
