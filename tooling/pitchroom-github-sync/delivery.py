@@ -8,9 +8,9 @@ import shlex
 import subprocess
 import sys
 from pathlib import Path
-from sync import check
+from sync import REPO, check
 
-URL = 'https://github.com/shaunlidev/pitchroom.git'
+URL = f'https://github.com/{REPO}.git'
 TASK = re.compile(r'refs/heads/codex/pit-\d+-[a-z0-9-]+$')
 ZERO = re.compile(r'0+$')
 RUNTIME_PARTS = {'.pitchroom', '.gstack', '.multica', '.multica-round', '.pipeline-local', '.pipeline-artifact', '.artifacts', '.local', '.vercel', '.trash', 'archive', 'test-results', 'playwright-report', 'node_modules', 'dist', 'build', 'screenshots', 'recordings', 'artifacts', 'evidence', 'logs', 'uploads', 'storage', 'sessions', 'cache', 'tmp', 'temp', 'coverage'}
@@ -155,8 +155,8 @@ def hook(remote_name, remote_url, lines):
         outgoing.update(git('rev-list', local_sha, '--not', '--remotes=origin').splitlines())
         outgoing.add(local_sha)
     count = audit(sorted(outgoing))
-    metadata = json.loads(subprocess.check_output(['gh', 'repo', 'view', 'shaunlidev/pitchroom', '--json', 'visibility,nameWithOwner'], text=True))
-    if metadata != {'visibility': 'PRIVATE', 'nameWithOwner': 'shaunlidev/pitchroom'}:
+    metadata = json.loads(subprocess.check_output(['gh', 'repo', 'view', REPO, '--json', 'visibility,nameWithOwner'], text=True))
+    if metadata != {'visibility': 'PRIVATE', 'nameWithOwner': REPO}:
         raise ValueError('Destination must be the expected PRIVATE repository')
     print(f'Push guard passed: {len(outgoing)} commits, {count} file versions', file=sys.stderr)
 

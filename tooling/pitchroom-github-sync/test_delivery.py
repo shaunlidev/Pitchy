@@ -1,4 +1,5 @@
 import subprocess
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -48,10 +49,27 @@ class PushSafety(unittest.TestCase):
                 delivery.hook('origin',delivery.URL,[f"HEAD {'a'*40} refs/heads/codex/pit-47-safe {'b'*40}\n"])
 
     def test_all_history_scanned_and_public_destination_refused(self):
-        with patch.object(delivery,'git',return_value='first\nsecond'),patch.object(delivery,'audit',return_value=3) as audit,patch.object(delivery.subprocess,'check_output',return_value='{"visibility":"PUBLIC","nameWithOwner":"shaunlidev/pitchroom"}'):
+        with patch.object(delivery,'git',return_value='first\nsecond'),patch.object(delivery,'audit',return_value=3) as audit,patch.object(delivery.subprocess,'check_output',return_value='{"visibility":"PUBLIC","nameWithOwner":"shaunlidev/Pitchy"}'):
             with self.assertRaisesRegex(ValueError,'PRIVATE'):
                 delivery.hook('origin',delivery.URL,[f"HEAD {'a'*40} refs/heads/codex/pit-47-safe {'0'*40}\n"])
             self.assertEqual(set(audit.call_args.args[0]),{'first','second','a'*40})
+
+    def test_renamed_destination_requires_exact_private_identity(self):
+        policy = json.loads((Path(__file__).resolve().parents[1] / 'pipeline/policy.json').read_text())
+        self.assertEqual(delivery.REPO, policy['repository'])
+        self.assertEqual(delivery.URL, 'https://github.com/shaunlidev/Pitchy.git')
+        for repo in ('shaunlidev/pitchroom', 'other/Pitchy', 'shaunlidev/Pitchy'):
+            with self.subTest(repo=repo), patch.object(delivery, 'git', return_value=''), \
+                    patch.object(delivery, 'audit', return_value=1), \
+                    patch.object(delivery.subprocess, 'check_output', return_value=json.dumps({'visibility': 'PRIVATE', 'nameWithOwner': repo})) as query:
+                if repo == 'shaunlidev/Pitchy':
+                    delivery.hook('origin', delivery.URL, [f"HEAD {'a'*40} refs/heads/codex/pit-96-rename {'0'*40}\n"])
+                    self.assertEqual(query.call_args.args[0][3], repo)
+                else:
+                    with self.assertRaisesRegex(ValueError, 'PRIVATE'):
+                        delivery.hook('origin', delivery.URL, [f"HEAD {'a'*40} refs/heads/codex/pit-96-rename {'0'*40}\n"])
+        with self.assertRaises(ValueError):
+            delivery.hook('origin', 'https://github.com/shaunlidev/pitchroom.git', [])
 
     def test_real_git_safe_source_secret_history_and_symlink(self):
         with tempfile.TemporaryDirectory() as directory:
