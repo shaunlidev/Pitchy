@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { evaluationInstance, evaluationRequestGuard } from "./evaluation-instance";
 import { GET, POST } from "../app/api/workspace/route";
-import { healthResponse } from "../app/api/health/route";
+import { healthResponse } from "./runtime-responses";
 import * as agent from "@pitchroom/agent";
 
 afterEach(() => { vi.unstubAllEnvs(); vi.restoreAllMocks(); });
@@ -45,7 +45,7 @@ describe("operator-owned isolated evaluation identity", () => {
     const request = new Request("http://127.0.0.1/api/workspace", { method: "POST", body: "invalid-json" });
     expect((await POST(request)).status).toBe(409);
     expect(request.bodyUsed).toBe(false);
-    expect((await GET()).status).toBe(409);
+    expect((await GET(new Request("http://127.0.0.1/api/workspace"))).status).toBe(409);
   });
   it("returns invalid isolation configuration before health probes and workspace access", async () => {
     configure({ ...environment(), PITCHROOM_RUNTIME: "live" });

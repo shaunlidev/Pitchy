@@ -3,7 +3,8 @@ import { PitchroomError } from "@pitchroom/domain";
 import * as fixtureStore from "../../../lib/fixture-store";
 import { errorEnvelopeSchema, workspaceStateSchema } from "../../../lib/api-contract";
 import { resetFixtureState } from "../../../lib/fixture-store";
-import { GET, POST, workspaceResponse } from "./route";
+import { GET, POST } from "./route";
+import { workspaceResponse } from "../../../lib/runtime-responses";
 
 const request = (body: unknown) => new Request("http://localhost/api/workspace", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
 
@@ -27,18 +28,18 @@ describe("workspace API", () => {
   });
 
   it("reports a provider timeout as 504 and preserves the workspace", async () => {
-    const before = await (await GET()).json();
+    const before = await (await GET(new Request("http://localhost/api/workspace"))).json();
     vi.spyOn(fixtureStore, "generateFixturePositioning").mockImplementation(() => {
       throw new PitchroomError("PROVIDER_TIMEOUT", "The positioning provider timed out.", { stage: "positioning", phase: "response_headers", timeoutMs: 60_000 });
     });
     const response = await POST(request({ action: "generate_positioning", commandId: "timeout-1", expectedPositioning:{positioningId:null,decisionId:null}, expectedRevision: 0 }));
     expect(response.status).toBe(504);
     expect(await response.json()).toMatchObject({ code: "PROVIDER_TIMEOUT", details: { stage: "positioning", phase: "response_headers" } });
-    expect(await (await GET()).json()).toEqual(before);
+    expect(await (await GET(new Request("http://localhost/api/workspace"))).json()).toEqual(before);
   });
 
   it("returns a response-validated initial state with request metadata", async () => {
-    const response = await GET();
+    const response = await GET(new Request("http://localhost/api/workspace"));
     expect(workspaceStateSchema.parse(await response.json()).project.phase).toBe("empty");
     expect(response.headers.get("cache-control")).toBe("no-store");
     expect(response.headers.get("x-request-id")).toBeTruthy();
@@ -57,7 +58,7 @@ describe("workspace API", () => {
     const response = await POST(request({ action: "correct", expectedRevision: -1, text: "" }));
     expect(response.status).toBe(400);
     expect(errorEnvelopeSchema.parse(await response.json()).code).toBe("INVALID_REQUEST");
-    expect(workspaceStateSchema.parse(await (await GET()).json()).project.phase).toBe("empty");
+    expect(workspaceStateSchema.parse(await (await GET(new Request("http://localhost/api/workspace"))).json()).project.phase).toBe("empty");
   });
 
   it("maps stale revisions to a stable conflict response", async () => {

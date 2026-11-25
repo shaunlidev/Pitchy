@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { healthResponse } from "./route";
+import { GET } from "./route";
+import { healthResponse } from "../../../lib/runtime-responses";
 
 const original = { runtime: process.env.PITCHROOM_RUNTIME, key: process.env.OPENAI_API_KEY, model: process.env.OPENAI_MODEL, database: process.env.DATABASE_URL, ack: process.env.PITCHROOM_LIVE_TRANSFER_ACK };
 afterEach(() => {
@@ -21,7 +22,7 @@ describe("health readiness", () => {
 
   it("is ready in isolated fixture mode", async () => {
     process.env.PITCHROOM_RUNTIME = "fixture";
-    const response = await healthResponse();
+    const response = await GET();
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ status: "ready", runtime: "fixture" });
   });
