@@ -8,6 +8,16 @@ Both the controller and status command use `status.load_config`. [policy.json](.
 
 Runtime also owns PIT-72 optional developer routing and supplemental review. Both enable flags remain `false`. The shared loader validates these switches and distinct actor identities; the status view labels admitted optional roles and holds when task routing changes or becomes disabled. This integration does not enable optional roles or additional lanes. The current optional-role protocol is in [ROLE_GUIDE.md](../../tooling/pipeline/ROLE_GUIDE.md#optional-roles-dormant-until-separately-enabled).
 
+The current GitHub locator is `shaunlidev/Pitchy` (repository ID `1433041923`).
+The product, local directories and historical receipts retain their original
+names. GitHub redirects alone do not repair polling: PR mapping compares the
+returned base repository identity with policy. After integration, verify a
+metadata-only round trip before refreshing activation. The publication guard
+still requires the exact private destination; a rename does not authorize
+publishing new source to a public repository. Any public delivery requires its
+own reviewed scope and authorization. Do not bypass the installed guard or
+rewrite historical approvals. Activation never resumes the paused schedule.
+
 ## Read actual state
 
 Run from the canonical engineering checkout:
