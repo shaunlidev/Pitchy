@@ -833,6 +833,7 @@ export const taskAcceptanceSourcePaths = [
     "pitchroom-app/apps/web/lib/persistent-workspace.ts",
     "pitchroom-app/apps/web/lib/story-service.ts",
     "pitchroom-app/apps/web/lib/evaluation-instance.ts",
+    "pitchroom-app/apps/web/lib/runtime-responses.ts",
     "pitchroom-app/apps/web/app/api/workspace/route.ts",
     "pitchroom-app/apps/web/app/api/health/route.ts",
     "pitchroom-app/scripts/clarification-worker.ts",
