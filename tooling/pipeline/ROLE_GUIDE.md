@@ -4,6 +4,8 @@ Current configuration, pause semantics and the single read-only status entry are
 
 Use the absolute canonical `tooling/pipeline/serial.py` from your actual native Multica worktree. Do not execute task copies, change central state/config, call core controller.py directly, mention another Agent, or change issue status yourself. The existing dispatcher tick owns transitions only after the submitting process is terminal. Ordinary local role processes are not an OS authorization boundary.
 
+Read [bounded context and coordination](../../docs/development/WORKFLOW_EFFICIENCY.md) once for this run. New role/compacted contexts must not inherit an unavailable source-read receipt. Submit one complete result and wait for the existing terminal transition; no progress-only re-mentions. Per-new-QA pstack loading, independent checks and all existing gates remain required.
+
 Developer:
 
 1. `serial.py workspace PIT-N --workdir "$PWD"` binds actual issue/run/workspace and copies installed dependencies without installs. Before any change, a rework must preserve every prior public-delivery source path. Missing prerequisites/decisions are holds.
