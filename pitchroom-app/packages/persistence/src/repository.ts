@@ -22,6 +22,16 @@ import {
 import * as schema from "./schema";
 
 export type Database = PostgresJsDatabase<typeof schema>;
+export type MaterialImportReceipt = {
+  commandId: string;
+  sourceId: string;
+  sourceName: string;
+  outcome: "created" | "reused" | "restored" | "replayed";
+};
+
+function materialResult(commandId: string, source: typeof schema.sources.$inferSelect, outcome: MaterialImportReceipt["outcome"]) {
+  return { source, receipt: { commandId, sourceId: source.id, sourceName: source.name, outcome } };
+}
 
 export function bindDatabase(client: ReturnType<typeof postgres>) {
   return { client, db: drizzle(client, { schema }) };
@@ -64,25 +74,21 @@ export class PitchroomRepository implements ToolRepository {
   }
 
   async addMaterial(projectId: string, input: MaterialInput, idempotencyKey: string) {
+    return (await this.addMaterialWithReceipt(projectId, input, idempotencyKey)).source;
+  }
+
+  async addMaterialWithReceipt(projectId: string, input: MaterialInput, idempotencyKey: string) {
     const material = ingestMaterial(projectId, input);
     return this.db.transaction(async (tx) => {
+      const [project] = await tx.execute<{ phase: string }>(sql`select phase from projects where id = ${projectId} for update`);
+      if (!project) throw new PitchroomError("NOT_FOUND", "Project was not found.");
       const receipt = await tx.query.commandReceipts.findFirst({ where: and(eq(schema.commandReceipts.projectId, projectId), eq(schema.commandReceipts.idempotencyKey, idempotencyKey)) });
       if (receipt) {
         if (receipt.commandType !== "add_material" || receipt.requestHash !== material.contentHash) throw new PitchroomError("CONFLICT", "Idempotency key was already used for a different material command.");
         const existing = await tx.query.sources.findFirst({ where: and(eq(schema.sources.projectId, projectId), eq(schema.sources.id, receipt.resourceId)) });
         if (!existing) throw new PitchroomError("PERSISTENCE_ERROR", "Material receipt points to a missing source.");
         if (existing.deletedAt) throw new PitchroomError("CONFLICT", "This material was removed after its original save. Re-add it explicitly with a new command.");
-        return existing;
-      }
-      const [project] = await tx.execute<{ phase: string }>(sql`select phase from projects where id = ${projectId} for update`);
-      if (!project) throw new PitchroomError("NOT_FOUND", "Project was not found.");
-      const concurrentReceipt = await tx.query.commandReceipts.findFirst({ where: and(eq(schema.commandReceipts.projectId, projectId), eq(schema.commandReceipts.idempotencyKey, idempotencyKey)) });
-      if (concurrentReceipt) {
-        if (concurrentReceipt.commandType !== "add_material" || concurrentReceipt.requestHash !== material.contentHash) throw new PitchroomError("CONFLICT", "Idempotency key was already used for a different material command.");
-        const existing = await tx.query.sources.findFirst({ where: and(eq(schema.sources.projectId, projectId), eq(schema.sources.id, concurrentReceipt.resourceId)) });
-        if (!existing) throw new PitchroomError("PERSISTENCE_ERROR", "Material receipt points to a missing source.");
-        if (existing.deletedAt) throw new PitchroomError("CONFLICT", "This material was removed after its original save. Re-add it explicitly with a new command.");
-        return existing;
+        return materialResult(idempotencyKey, existing, "replayed");
       }
       if (project.phase === "reading" || project.phase === "structuring") {
         throw new PitchroomError("INVALID_TRANSITION", `Material cannot be added while the project is ${project.phase}.`);
@@ -96,7 +102,7 @@ export class PitchroomRepository implements ToolRepository {
           await tx.update(schema.projects).set({ phase: "materials_ready", currentUnderstandingId: null, currentPositioningId: null, updatedAt: new Date() }).where(eq(schema.projects.id, projectId));
         }
         await tx.insert(schema.commandReceipts).values({ projectId, idempotencyKey, commandType: "add_material", requestHash: material.contentHash, resourceId: duplicateContent.id });
-        return { ...duplicateContent, deletedAt: null };
+        return materialResult(idempotencyKey, { ...duplicateContent, deletedAt: null }, duplicateContent.deletedAt ? "restored" : "reused");
       }
       const [usage] = await tx.select({ characters: sql<number>`coalesce(sum(length(${schema.sources.content})), 0)` }).from(schema.sources).where(eq(schema.sources.projectId, projectId));
       if (Number(usage?.characters ?? 0) + material.content.length > this.maxProjectCharacters) {
@@ -122,7 +128,7 @@ export class PitchroomRepository implements ToolRepository {
       })));
       await tx.insert(schema.commandReceipts).values({ projectId, idempotencyKey, commandType: "add_material", requestHash: material.contentHash, resourceId: source.id });
       await tx.update(schema.projects).set({ phase: "materials_ready", currentUnderstandingId: null, currentPositioningId: null, updatedAt: new Date() }).where(eq(schema.projects.id, projectId));
-      return source;
+      return materialResult(idempotencyKey, source, "created");
     });
   }
 

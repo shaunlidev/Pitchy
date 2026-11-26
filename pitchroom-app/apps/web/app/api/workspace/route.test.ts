@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { PitchroomError } from "@pitchroom/domain";
 import * as fixtureStore from "../../../lib/fixture-store";
-import { errorEnvelopeSchema, workspaceStateSchema } from "../../../lib/api-contract";
+import { errorEnvelopeSchema, readMaterialImportResponse, workspaceStateSchema } from "../../../lib/api-contract";
 import { resetFixtureState } from "../../../lib/fixture-store";
 import { GET, POST } from "./route";
 import { workspaceResponse } from "../../../lib/runtime-responses";
@@ -43,6 +43,55 @@ describe("workspace API", () => {
     expect(workspaceStateSchema.parse(await response.json()).project.phase).toBe("empty");
     expect(response.headers.get("cache-control")).toBe("no-store");
     expect(response.headers.get("x-request-id")).toBeTruthy();
+  });
+
+  it("returns the saved file identity only on import POSTs and preserves the legacy workspace response", async () => {
+    const a = { action: "add_material", name: "a.md", mediaType: "text/markdown", text: "A synthetic source." };
+    const send = async (body: unknown) => {
+      const response = await POST(request(body));
+      expect(response.status).toBe(200);
+      return response.json();
+    };
+    const first = await send({ ...a, commandId: "one" });
+    const sourceId = first.sources[0].sourceId;
+    expect(first.materialImport).toEqual({ commandId: "one", sourceId, sourceName: "a.md", outcome: "created" });
+    expect(workspaceStateSchema.parse(first)).not.toHaveProperty("materialImport");
+    const reviewed = await send({ action: "run", commandId: "understand" });
+    expect(reviewed).not.toHaveProperty("materialImport");
+    const sameContent = { ...a, name: "b.txt", mediaType: "text/plain" };
+    const reused = await send({ ...sameContent, commandId: "two" });
+    expect(reused.materialImport).toEqual({ commandId: "two", sourceId, sourceName: "a.md", outcome: "reused" });
+    expect(reused.currentVersionId).toBe(reviewed.currentVersionId);
+    expect(reused.sources).toHaveLength(1);
+    const topic = { kind: "theme", index: 0, understandingId: reviewed.currentVersionId };
+    const attach = { ...sameContent, action: "attach_topic_material", topic, commandId: "three" };
+    const attached = await send(attach);
+    expect(attached.materialImport).toEqual({ commandId: "three", sourceId, sourceName: "a.md", outcome: "reused" });
+    expect(attached.topicMaterials).toContainEqual(expect.objectContaining({ ...topic, sourceId }));
+    const unlinked = await send({ action: "unlink_topic_material", topic, sourceId, commandId: "unlink" });
+    expect(unlinked).not.toHaveProperty("materialImport");
+    const replay = await send(attach);
+    expect(replay.materialImport).toEqual({ commandId: "three", sourceId, sourceName: "a.md", outcome: "replayed" });
+    expect(replay.topicMaterials).toEqual([]);
+    const current = await (await GET(new Request("http://localhost/api/workspace"))).json();
+    expect(current).not.toHaveProperty("materialImport");
+    expect(workspaceStateSchema.parse(replay)).toEqual(current);
+    expect(readMaterialImportResponse(replay, "three")).toBeDefined();
+    expect(readMaterialImportResponse(replay, "wrong-command")).toBeUndefined();
+    expect(readMaterialImportResponse({ ...replay, materialImport: { ...replay.materialImport, sourceName: "invented.txt" } }, "three")).toBeUndefined();
+    expect(readMaterialImportResponse(current, "three")).toBeUndefined();
+  });
+
+  it("returns a storage error when the post-commit file receipt cannot be confirmed", async () => {
+    const save = fixtureStore.addFixtureMaterialWithReceipt;
+    vi.spyOn(fixtureStore, "addFixtureMaterialWithReceipt").mockImplementation((file, commandId) => {
+      const result = save(file, commandId);
+      return { ...result, materialImport: { ...result.materialImport, commandId: "another-command" } };
+    });
+    const response = await POST(request({ action: "add_material", name: "source.txt", mediaType: "text/plain", text: "Persisted once.", commandId: "original" }));
+    expect(response.status).toBe(500);
+    expect(await response.json()).toMatchObject({ code: "PERSISTENCE_ERROR" });
+    expect(fixtureStore.readFixtureState().sources).toHaveLength(1);
   });
 
   it("returns a structured retryable response when storage is unavailable", async () => {

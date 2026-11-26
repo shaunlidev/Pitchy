@@ -1,7 +1,7 @@
 import { beforeEach, expect, it } from "vitest";
 import { topicLabel, type TopicRef } from "@pitchroom/domain";
 import { workspaceCommandSchema, workspaceStateSchema } from "./api-contract";
-import { resetFixtureState, addFixtureMaterial, runFixtureAgent, acceptFixture, readFixtureState, answerFixtureQuestion, changeFixtureTopicMaterial, removeFixtureMaterial, generateFixturePositioning, applyFixturePositioning, generateFixtureDeck } from "./fixture-store";
+import { resetFixtureState, addFixtureMaterial, addFixtureMaterialWithReceipt, attachFixtureTopicMaterialWithReceipt, runFixtureAgent, acceptFixture, readFixtureState, answerFixtureQuestion, changeFixtureTopicMaterial, removeFixtureMaterial, generateFixturePositioning, applyFixturePositioning, generateFixtureDeck } from "./fixture-store";
 const material = { name: "client.md", mediaType: "text/markdown", text: "Synthetic client adds a second launch constraint." } as const;
 let topic: TopicRef;
 beforeEach(() => {
@@ -54,6 +54,57 @@ it("replays a command without mutation and rejects command reuse for another req
   const first = attach("same-command"); expect(attach("same-command")).toEqual(first);
   expect(() => changeFixtureTopicMaterial({ action: "attach", topic, material: { ...material, text: "Different" }, commandId: "same-command" })).toThrow("Command already used");
   expect(readFixtureState()).toEqual(first);
+});
+it("reports the stored name across both panels and preserves adopted work on global reuse and replay", () => {
+  acceptFixture(readFixtureState().project.revision);
+  generateFixturePositioning();
+  applyFixturePositioning("original", readFixtureState().project.revision);
+  generateFixtureDeck(readFixtureState().project.revision);
+  const original = { ...material, name: "a.md", text: "Cafe\u0301\r\nsource." };
+  const alias = { name: "b.txt", mediaType: "text/plain" as const, text: "Café\nsource." };
+  const attachment = { action: "attach" as const, commandId: "attach-a", topic, material: original };
+  const first = attachFixtureTopicMaterialWithReceipt(attachment);
+  const saved = first.state.sources.find(source => source.name === "a.md")!;
+  const actual = { sourceId: saved.sourceId, sourceName: "a.md" };
+  expect(first.materialImport).toEqual({ ...actual, commandId: "attach-a", outcome: "created" });
+  expect(addFixtureMaterialWithReceipt(alias, "global-b")).toEqual({ state: first.state, materialImport: { ...actual, commandId: "global-b", outcome: "reused" } });
+  expect(addFixtureMaterialWithReceipt(original, "global-b")).toEqual({ state: first.state, materialImport: { ...actual, commandId: "global-b", outcome: "replayed" } });
+  expect(() => addFixtureMaterialWithReceipt(alias, "attach-a")).toThrow("Command already used");
+  expect(() => attachFixtureTopicMaterialWithReceipt({ ...attachment, commandId: "global-b" })).toThrow("Command already used");
+  expect(() => addFixtureMaterialWithReceipt({ ...alias, text: "Other bytes" }, "global-b")).toThrow("Command already used");
+  expect(readFixtureState()).toEqual(first.state);
+  const distinct = addFixtureMaterialWithReceipt({ ...original, text: "Other bytes" }, "new");
+  expect(distinct.materialImport.outcome).toBe("created");
+  expect(distinct.materialImport.sourceName).toBe("a.md");
+  expect(distinct.materialImport.sourceId).not.toBe(saved.sourceId);
+});
+it("confirms historical attachments without relinking, and restores only on a fresh command", () => {
+  const global = addFixtureMaterialWithReceipt(material, "global");
+  const actual = { sourceId: global.materialImport.sourceId, sourceName: material.name };
+  const original = global.state.sources.find(source => source.sourceId === actual.sourceId)!;
+  const next = runFixtureAgent();
+  const validTopic = { ...topic, understandingId: next.currentVersionId! };
+  const alias = { ...material, name: "renamed.txt" };
+  const attachment = { action: "attach" as const, topic: validTopic, material: alias, commandId: "topic" };
+  expect(attachFixtureTopicMaterialWithReceipt(attachment).materialImport).toEqual({ ...actual, commandId: "topic", outcome: "reused" });
+  const unlinked = changeFixtureTopicMaterial({ action: "unlink", topic: validTopic, sourceId: actual.sourceId, commandId: "unlink" });
+  const historical = { ...actual, commandId: "topic", outcome: "replayed" };
+  expect(attachFixtureTopicMaterialWithReceipt(attachment)).toEqual({ state: unlinked, materialImport: historical });
+  const removed = removeFixtureMaterial(actual.sourceId);
+  expect(() => addFixtureMaterialWithReceipt(alias, "global")).toThrow("removed");
+  expect(attachFixtureTopicMaterialWithReceipt(attachment)).toEqual({ state: removed, materialImport: historical });
+  const restored = addFixtureMaterialWithReceipt(alias, "global-restore");
+  expect(restored.materialImport).toEqual({ ...actual, commandId: "global-restore", outcome: "restored" });
+  expect(restored.state.sources).toContainEqual(original);
+  expect(restored.state.topicMaterials).toEqual([]);
+  removeFixtureMaterial(actual.sourceId);
+  const other = { understandingId: runFixtureAgent().currentVersionId!, kind: "gap" as const, index: 0 };
+  const topicRestore = attachFixtureTopicMaterialWithReceipt({ ...attachment, topic: other, commandId: "topic-restore" });
+  expect(topicRestore.materialImport).toEqual({ ...actual, commandId: "topic-restore", outcome: "restored" });
+  expect(topicRestore.state.sources).toContainEqual(original);
+  expect(topicRestore.state.topicMaterials).toEqual([expect.objectContaining({ ...other, sourceId: actual.sourceId })]);
+  resetFixtureState();
+  expect(addFixtureMaterialWithReceipt(alias, "global").materialImport).toEqual({ sourceId: actual.sourceId, sourceName: alias.name, commandId: "global", outcome: "created" });
 });
 it("rejects missing, cross-version and out of range topics before importing", () => {
   const before = readFixtureState();

@@ -2,16 +2,16 @@ import { workspaceResponse } from "../../../lib/runtime-responses";
 import { evaluationRequestGuard } from "../../../lib/evaluation-instance";
 import {saveFixturePositioningWording} from "../../../lib/fixture-store";
 import {savePersistentPositioningWording} from "../../../lib/persistent-workspace";
-import { changeFixtureTopicMaterial } from "../../../lib/fixture-store";
-import { changePersistentTopicMaterial } from "../../../lib/persistent-workspace";
+import { attachFixtureTopicMaterialWithReceipt, changeFixtureTopicMaterial } from "../../../lib/fixture-store";
+import { attachPersistentTopicMaterialWithReceipt, changePersistentTopicMaterial } from "../../../lib/persistent-workspace";
 import { saveFixtureBrief } from "../../../lib/fixture-store";
 import { savePersistentBrief } from "../../../lib/persistent-workspace";
 import { readRuntimeMode, invalidRuntimeResponse, type RuntimeMode } from "../../../lib/runtime-mode";
 import { NextResponse } from "next/server";
 import { PitchroomError } from "@pitchroom/domain";
-import { proposeFixtureStory, decideFixtureStory, undoFixtureStory, createFixtureStoryDeck, submitFixtureClarification, decideFixtureClarification, acceptFixture, addFixtureMaterial, adjustFixturePositioning, answerFixtureQuestion, applyFixturePositioning, correctFixtureClaim, editFixtureDeckPage, generateFixtureDeck, generateFixturePositioning, keepFixtureUnknown, readFixtureState, removeFixtureMaterial, resetFixtureState, runFixtureAgent, undoFixturePositioning } from "../../../lib/fixture-store";
-import { proposePersistentStory, decidePersistentStory, undoPersistentStory, createPersistentStoryDeck, submitPersistentClarification, decidePersistentClarification, acceptPersistent, addPersistentMaterial, adjustPersistentPositioning, answerPersistentQuestion, applyPersistentPositioning, correctPersistentClaim, editPersistentDeckPage, generatePersistentDeck, generatePersistentPositioning, keepPersistentUnknown, readPersistentState, removePersistentMaterial, runPersistentAgent, undoPersistentPositioning } from "../../../lib/persistent-workspace";
-import { errorEnvelopeSchema, workspaceCommandSchema, workspaceStateSchema } from "../../../lib/api-contract";
+import { proposeFixtureStory, decideFixtureStory, undoFixtureStory, createFixtureStoryDeck, submitFixtureClarification, decideFixtureClarification, acceptFixture, addFixtureMaterialWithReceipt, adjustFixturePositioning, answerFixtureQuestion, applyFixturePositioning, correctFixtureClaim, editFixtureDeckPage, generateFixtureDeck, generateFixturePositioning, keepFixtureUnknown, readFixtureState, removeFixtureMaterial, resetFixtureState, runFixtureAgent, undoFixturePositioning } from "../../../lib/fixture-store";
+import { proposePersistentStory, decidePersistentStory, undoPersistentStory, createPersistentStoryDeck, submitPersistentClarification, decidePersistentClarification, acceptPersistent, addPersistentMaterialWithReceipt, adjustPersistentPositioning, answerPersistentQuestion, applyPersistentPositioning, correctPersistentClaim, editPersistentDeckPage, generatePersistentDeck, generatePersistentPositioning, keepPersistentUnknown, readPersistentState, removePersistentMaterial, runPersistentAgent, undoPersistentPositioning } from "../../../lib/persistent-workspace";
+import { errorEnvelopeSchema, readMaterialImportResponse, workspaceCommandSchema, workspaceStateSchema } from "../../../lib/api-contract";
 export const dynamic = "force-dynamic";
 const headers = (requestId: string, runtime: RuntimeMode) => ({ "cache-control": "no-store", "x-pitchroom-mode": runtime, "x-request-id": requestId });
 export async function GET(request: Request) {
@@ -34,9 +34,19 @@ export async function POST(request: Request) {
     const persistent = runtime !== "fixture";
     const commandId = body.commandId ?? requestId;
     switch (body.action) {
+      case "add_material":
       case "attach_topic_material": {
-        const input = { action: "attach" as const, topic: body.topic, commandId, material: { name: body.name, mediaType: body.mediaType, text: body.text } };
-        state = persistent ? await changePersistentTopicMaterial(input) : changeFixtureTopicMaterial(input); break;
+        const material = { name: body.name, text: body.text, mediaType: body.mediaType };
+        let result;
+        if (body.action === "attach_topic_material") {
+          const input = { action: "attach" as const, topic: body.topic, commandId, material };
+          result = persistent ? await attachPersistentTopicMaterialWithReceipt(input, persistentMode) : attachFixtureTopicMaterialWithReceipt(input);
+        } else {
+          result = persistent ? await addPersistentMaterialWithReceipt({ ...material, idempotencyKey: commandId }, persistentMode) : addFixtureMaterialWithReceipt(material, commandId);
+        }
+        const response = readMaterialImportResponse({ ...result.state, materialImport: result.materialImport }, commandId);
+        if (!response) throw new PitchroomError("PERSISTENCE_ERROR", "The import could not be confirmed. Retry with the same command.");
+        return NextResponse.json(response, { headers: headers(requestId, runtime) });
       }
       case "link_topic_material":
       case "unlink_topic_material": {
@@ -57,7 +67,6 @@ export async function POST(request: Request) {
         state = persistent ? await decidePersistentClarification(decision) : decideFixtureClarification(decision); break;
       }
       case "reset": if (persistent) throw new Error("Reset is disabled for persistent projects."); state = resetFixtureState(); break;
-      case "add_material": state = persistent ? await addPersistentMaterial({ name: body.name, text: body.text, mediaType: body.mediaType, idempotencyKey: commandId }) : addFixtureMaterial({ name: body.name, text: body.text, mediaType: body.mediaType }); break;
       case "remove_material": state = persistent ? await removePersistentMaterial(body.sourceId) : removeFixtureMaterial(body.sourceId); break;
       case "run": state = persistent ? await runPersistentAgent(commandId, persistentMode, request.signal) : runFixtureAgent(); break;
       case "correct": state = persistent ? await correctPersistentClaim(body.text, body.themeIndex, body.claimIndex, body.expectedRevision, commandId) : correctFixtureClaim(body.text, body.themeIndex, body.claimIndex, body.expectedRevision); break;

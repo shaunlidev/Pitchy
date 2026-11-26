@@ -25,7 +25,7 @@ Pitchroom uses English for its interface and newly generated Understanding, Clar
 
 The persistent loop is `Materials -> Clarify -> Positioning -> Deck` for one local project. It accepts pasted text, `.txt`, and `.md` sources. Understanding stops for review and acceptance. An accepted Understanding can receive a new background proposal without replacing the saved version. Apply creates a new review version, which requires acceptance again.
 
-The written brief now has one current version and retained history. Save changed text to create a version; Clear brief edits only the local draft until Save cleared brief removes it from current context. Saving unchanged text is a no-op. Earlier versions can be copied into the editor for review. Changed/cleared briefs invalidate upstream inputs while preserving existing Understanding, Story and Deck versions. Imported materials stay independent, even with the same name or content; legacy sources are not converted based on their filenames.
+The written brief now has one current version and retained history. Save changed text to create a version; Clear brief edits only the local draft until Save cleared brief removes it from current context. Saving unchanged text is a no-op. Earlier versions can be copied into the editor for review. Changed/cleared briefs invalidate upstream inputs while preserving existing Understanding, Story and Deck versions. A written brief and an imported file keep separate histories even when their text or names match. Legacy sources keep their recorded kind.
 
 PIT-20 checkpoint: 450 Vitest cases + 4 Node guards, types/build, and all 5 PostgreSQL suites (29 cases) passed. Isolated Chrome verified same-content file independence, version history, stale-tab 409 and recovery, unsaved clear after refresh, downstream history retention, and cold startup. No real model or deployment. Migration `0011_maintained_brief.sql` was applied only to dedicated QA targets, not the daily or original frozen database. See the [local report](.artifacts/pit20-brief-20261026-01/acceptance-report.json).
 
@@ -39,7 +39,7 @@ Browser Print remains available. PDF fidelity and native assistive-technology va
 
 ## File imports
 
-Both file pickers accept multiple UTF-8 TXT/MD files. Each file saves independently; a failed item leaves successful sources intact and can be retried separately. An unconfirmed save retries the same operation identity. Uploading files preserves an unsaved written brief. Selected files and retry controls live in the current tab; reload keeps saved sources but requires reselecting failed files.
+Both file pickers accept multiple UTF-8 TXT/MD files. Files with the same normalized text reuse one source and its saved name. Files with the same name and different text get separate sources. Each result shows the selected name alongside the saved name when the import is confirmed. A fresh import can restore a removed source. Retrying an unconfirmed save keeps the original command ID. Other files in the batch and an unsaved written brief stay intact. Reload keeps saved sources and requires reselecting failed files.
 
 ## Runtime validation
 

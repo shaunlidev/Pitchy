@@ -49,6 +49,32 @@ it("retains historical text on removal and restores no links on reimport", async
   await repo.addMaterial(project.id, material, "reimport"); expect(await links.list(project.id)).toEqual([]);
   expect(await repo.listSources(project.id)).toHaveLength(2);
 });
+it("confirms historical attachments by resource ID without relinking, and restores only the newly chosen topic", async () => {
+  const { project, topic, version } = await setup();
+  const first = { action: "attach" as const, topic, material, commandId: "first" };
+  const saved = await links.changeWithReceipt(project.id, first);
+  const actual = { sourceId: saved.sourceId, sourceName: "topic.md" };
+  expect(saved).toEqual({ ...actual, outcome: "created", commandId: "first" });
+  expect(saved.sourceId).toBe((await repo.getCommandReceipt(project.id, "first"))!.resourceId);
+  const other = { action: "attach" as const, topic: { ...topic, kind: "gap" as const }, commandId: "other", material: { ...material, name: "different-name.txt" } };
+  expect(await links.changeWithReceipt(project.id, other)).toEqual({ ...actual, outcome: "reused", commandId: "other" });
+  expect(await links.list(project.id)).toHaveLength(2);
+  await links.change(project.id, { action: "unlink", topic: other.topic, sourceId: saved.sourceId, commandId: "unlink" });
+  expect(await links.changeWithReceipt(project.id, other)).toEqual({ ...actual, outcome: "replayed", commandId: "other" });
+  expect(await links.list(project.id)).toEqual([expect.objectContaining({ ...topic, sourceId: saved.sourceId })]);
+  await repo.removeMaterial(project.id, saved.sourceId);
+  expect(await links.changeWithReceipt(project.id, first)).toEqual({ ...actual, outcome: "replayed", commandId: "first" });
+  expect(await links.list(project.id)).toEqual([]);
+  expect(await repo.listSources(project.id)).not.toContainEqual(expect.objectContaining({ id: saved.sourceId }));
+  const run = await repo.createRun(project.id, "new-understanding", "synthetic", "fake");
+  const current = await repo.getProject(project.id);
+  const fresh = await repo.completeRun({ projectId: project.id, runId: run.id, expectedRevision: current!.version, proposal: version.proposal });
+  const newTopic = { ...other.topic, understandingId: fresh.id };
+  expect(await links.changeWithReceipt(project.id, { ...other, topic: newTopic, commandId: "restore" })).toEqual({ ...actual, outcome: "restored", commandId: "restore" });
+  expect(await links.list(project.id)).toEqual([expect.objectContaining({ ...newTopic, sourceId: saved.sourceId })]);
+  expect(await repo.listSources(project.id)).toHaveLength(2);
+});
+
 it("rolls back invalid/cross-project/stale topics, missing sources and conflicting receipts", async () => {
   const { project, topic } = await setup(), other = await setup();
   const before = await repo.listSources(project.id);
